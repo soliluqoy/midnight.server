@@ -40,7 +40,6 @@ Bugs found and fixed by these checks: the engine ignored the API key when passed
 7. **Tool protocol matrix (4.4).** Tool calls worked through llama.cpp's native MiniCPM handling in all runs, but there are no golden tests for template history, duplicate calls, CDATA or streaming fragments.
 8. **Product identity leftovers (Phase 2).** Package scopes remain `@earendil-works/*`; many docs, help text and the built-in update checker still refer to Pi; no versioned midnight config schema or Pi config import.
 9. **Release infrastructure (Phase 6.6, 7).** No Authenticode signing, update/rollback flow, SBOM, clean-VM run, or published release. The CI workflow `.github/workflows/midnight-windows.yml` has **not been run**.
-10. **Nothing is committed.** The imported Pi tree and all work above are untracked in Git.
 
 ## Known test status
 
