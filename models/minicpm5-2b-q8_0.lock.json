@@ -1,0 +1,8 @@
+{
+  "modelId": "openbmb/MiniCPM5-2B",
+  "repository": "openbmb/MiniCPM5-2B-GGUF",
+  "revision": "2079a22f3beaa4e306449978533478fe0522f4b3",
+  "fileName": "MiniCPM5-2B-Q8_0.gguf",
+  "sizeBytes": 2679710688,
+  "sha256": "c5415f8989bf88a8288f1b55a3cc371af53c07b0faa220a63bd7a990cfaba078"
+}

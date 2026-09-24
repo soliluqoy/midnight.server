@@ -1,0 +1,15 @@
+# Windows CPU inference spike (2026-09-25)
+
+> Historical record of the first feasibility probe. It has since been superseded by the integrated engine, `--local` mode and packaging described in [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md); statements below about what is "not yet usable" describe the state at that time.
+
+**Status:** Feasibility evidence only. This does not qualify a bundled application, a tool parser, a secure supervisor, or release packaging.
+
+Hardware: Windows 10 Pro 19045, Intel Core i7-8650U, 15.88 GiB RAM. CPU only; six inference threads, 4,096-token context, one server slot. The test ran in the local development checkout, not a clean VM.
+
+- Downloaded the exact `MiniCPM5-2B-Q8_0.gguf` from the immutable URL in `models/README.md` to ignored `models/cache/`. `node scripts/verify-model.mjs` confirmed 2,679,710,688 bytes and SHA-256 `c5415f8989bf88a8288f1b55a3cc371af53c07b0faa220a63bd7a990cfaba078`. Weights are **not** committed or packaged.
+- Used upstream llama.cpp release `b11166`, commit `a72e04abe0fe9b36e203033ac71bd5f379c35bc5` (a newer *spike candidate*, not the untested plan candidate `cdc06426…`). Downloaded `llama-b11166-bin-win-cpu-x64.zip`, 18,567,816 bytes, and checked the release-published SHA-256 `a9372816f6cff6a6f16ebdc22e9fdcd6da6ab42838bc5c082a0c6ad92633f84a`. Extracted it to ignored `build/llama-qualification/`.
+- `llama-cli --single-turn` loaded the Q8_0 file and returned `ready` in response to a simple prompt. Without `--single-turn`, it stayed interactive; the first attempt timed out. No processes remained afterward.
+- Launched `llama-server` bound to `127.0.0.1` with a random API key, `--no-webui`, `-c 4096`, `-np 1`, `-ngl 0`, `-t 6`. An authenticated `/v1/chat/completions` request containing a JSON-schema `add(a,b)` tool and `tool_choice: required` returned one `add` call with `{ "a": 2, "b": 3 }` and `finish_reason: tool_calls`. A follow-up request including the assistant call and tool result `5` returned `The result is **5**.` with `finish_reason: stop`. The probe did not execute an engine-proposed OS command. Process shutdown used `taskkill /F /T`; this is *not* Windows Job Object ownership.
+- One measured tool request in this run: 232 prompt tokens in 6,929.745 ms, 55 generation tokens in 6,163.704 ms. Follow-up: 17 uncached prompt tokens in 621.194 ms, 26 generation tokens in 2,881.144 ms. These are single samples, not benchmarks or latency targets.
+
+Reproduction requires the exact ignored model file and compatible Windows CPU binary; the ad-hoc probe is in ignored `build/llama-qualification/smoke.mjs` on this machine only. For a release, vendor and qualify a pinned engine source revision, ship notices and dependencies, implement process ownership/authenticated lifecycle and provider integration, and run the complete protocol, authorization, cancellation, streaming, GPU, packaging, and clean-machine matrices in `IMPLEMENTATION_PLAN.md`. Neither this result nor the fail-closed CLI guard means `--local` is usable yet.
