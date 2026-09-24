@@ -1,0 +1,12 @@
+.research/
+node_modules/
+build/
+dist/
+.cache/
+*.gguf
+*.safetensors
+*.part
+.env
+.env.*
+!.env.example
+*.log
