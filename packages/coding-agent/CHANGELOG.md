@@ -30,6 +30,7 @@
 ### Changed
 
 - Rebranded user-facing text from Pi to midnight.server: startup header, system prompt, help text, messages, temporary file names, the `AI_AGENT` marker, and the bundled documentation.
+- Replaced the first-time setup logo with a crescent moon and prefixed the terminal title with `☾`.
 - Restyled the built-in dark and light themes with a midnight palette, and the footer to show the plan/build badge, git branch with changed-file count and ahead/behind, and local-model state.
 - Bare `midnight.server` (no `--local`/`--hybrid`) is now equivalent to `--hybrid`: `delegate_local` and the drift watcher are always available unless `--local` is given. If no provider is configured at all and no `--provider`/`--model`/`--models`/`--api-key` was passed, the session silently starts on the local MiniCPM model instead of showing the "no provider configured" screen; unlike `--local`, this fallback is not offline-locked, so `/login` still works afterward.
 - On Windows, the default shell tool is now `powershell` instead of `bash`, and `!` / `!!` run through PowerShell unless `shellPath` is set, so Git Bash is no longer required.
