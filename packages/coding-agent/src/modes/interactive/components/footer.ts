@@ -3,7 +3,9 @@ import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/p
 import type { AgentSession } from "../../../core/agent-session.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
+import type { GitStatusSummary } from "../../../core/git-status.ts";
 import { addUsageToTotals, createUsageTotals } from "../../../core/usage-totals.ts";
+import { getMidnightStatus } from "../../../midnight/status.ts";
 import { theme } from "../theme/theme.ts";
 
 /**
@@ -44,17 +46,23 @@ export function formatCwdForFooter(cwd: string, home: string | undefined): strin
 }
 
 /**
- * Footer component that shows pwd, token stats, and context usage.
+ * Footer component that shows plan/build mode, pwd, git state, token stats, context usage, and local-model state.
  * Computes token/context stats from session, gets git branch and extension statuses from provider.
  */
 export class FooterComponent implements Component {
 	private autoCompactEnabled = true;
 	private session: AgentSession;
 	private footerData: ReadonlyFooterDataProvider;
+	private gitStatus: { getStatus(): GitStatusSummary | undefined } | undefined;
 
-	constructor(session: AgentSession, footerData: ReadonlyFooterDataProvider) {
+	constructor(
+		session: AgentSession,
+		footerData: ReadonlyFooterDataProvider,
+		gitStatus?: { getStatus(): GitStatusSummary | undefined },
+	) {
 		this.session = session;
 		this.footerData = footerData;
+		this.gitStatus = gitStatus;
 	}
 
 	setSession(session: AgentSession): void {
@@ -113,10 +121,16 @@ export class FooterComponent implements Component {
 		// Replace home directory with ~
 		let pwd = formatCwdForFooter(this.session.sessionManager.getCwd(), process.env.HOME || process.env.USERPROFILE);
 
-		// Add git branch if available
+		// Add git branch and working-tree summary if available
 		const branch = this.footerData.getGitBranch();
 		if (branch) {
-			pwd = `${pwd} (${branch})`;
+			pwd = `${pwd}  ⎇ ${branch}`;
+			const status = this.gitStatus?.getStatus();
+			if (status) {
+				if (status.changedFiles > 0) pwd = `${pwd} ●${status.changedFiles}`;
+				if (status.ahead) pwd = `${pwd} ↑${status.ahead}`;
+				if (status.behind) pwd = `${pwd} ↓${status.behind}`;
+			}
 		}
 
 		// Add session name if set
@@ -226,7 +240,23 @@ export class FooterComponent implements Component {
 		const remainder = statsLine.slice(statsLeft.length); // padding + rightSide
 		const dimRemainder = theme.fg("dim", remainder);
 
-		const pwdLine = truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "..."));
+		const midnight = getMidnightStatus();
+		const badge =
+			midnight.agentMode === "plan"
+				? theme.bold(theme.fg("warning", "PLAN"))
+				: theme.bold(theme.fg("accent", "BUILD"));
+		const pwdLeft = `${badge} ${theme.fg("dim", pwd)}`;
+		const localParts: string[] = [];
+		if (midnight.mode) localParts.push(midnight.mode);
+		if (midnight.engine !== "off") localParts.push(`local ${midnight.engine}`);
+		if (midnight.drift?.lastVerdict && midnight.drift.lastVerdict !== "on_track")
+			localParts.push(theme.fg("warning", midnight.drift.lastVerdict.replace("_", " ")));
+		const pwdRight = localParts.length > 0 ? theme.fg("dim", `☾ ${localParts.join(" · ")}`) : "";
+		const pwdRoom = width - visibleWidth(pwdLeft) - visibleWidth(pwdRight);
+		const pwdLine =
+			pwdRight && pwdRoom >= 2
+				? pwdLeft + " ".repeat(pwdRoom) + pwdRight
+				: truncateToWidth(pwdLeft, width, theme.fg("dim", "..."));
 		const lines = [pwdLine, dimStatsLeft + dimRemainder];
 
 		// Add extension statuses on a single line, sorted by key alphabetically

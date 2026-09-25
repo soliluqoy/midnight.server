@@ -6,6 +6,7 @@ import type { ExtensionAPI, ExtensionFactory } from "../core/extensions/types.ts
 import { convertToLlm } from "../core/messages.ts";
 import type { ChatRequest, ChatResult } from "./engine.ts";
 import { type EngineManager, LocalSetupError } from "./engine-manager.ts";
+import { type DriftWatchState, updateMidnightStatus } from "./status.ts";
 
 /** Minimal engine surface this module needs; mirrors helper.ts's HelperEngine. */
 interface DriftEngine {
@@ -159,6 +160,18 @@ export function createDriftWatchExtension(manager: EngineManager, settings: Drif
 		let checking = false;
 		let unavailable = false;
 		let controller: AbortController | undefined;
+		let lastVerdict: DriftWatchState["lastVerdict"];
+		const publish = () =>
+			updateMidnightStatus({
+				drift: unavailable
+					? undefined
+					: {
+							checking,
+							lastVerdict,
+							turnsUntilCheck: Math.max(0, settings.turnInterval - turnsSinceCheck),
+						},
+			});
+		publish();
 
 		pi.registerMessageRenderer("midnight_drift_watch", (message, { outputPad }, theme) => {
 			const details = message.details as DriftVerdict | undefined;
@@ -185,12 +198,16 @@ export function createDriftWatchExtension(manager: EngineManager, settings: Drif
 			const currentTokens = estimateContextTokens(latestMessages).tokens;
 			const dueByTurns = turnsSinceCheck >= settings.turnInterval;
 			const dueByTokens = currentTokens - tokensAtLastCheck >= settings.tokenInterval;
-			if (!dueByTurns && !dueByTokens) return;
+			if (!dueByTurns && !dueByTokens) {
+				publish();
+				return;
+			}
 			turnsSinceCheck = 0;
 			tokensAtLastCheck = currentTokens;
 
 			const transcript = serializeConversation(convertToLlm(latestMessages));
 			checking = true;
+			publish();
 			controller = new AbortController();
 			const signal = controller.signal;
 			void (async () => {
@@ -198,6 +215,7 @@ export function createDriftWatchExtension(manager: EngineManager, settings: Drif
 					const engine = await manager.get(signal);
 					manager.touch();
 					const verdict = await runDriftCheck(engine, transcript, signal);
+					lastVerdict = verdict?.status ?? lastVerdict;
 					if (!verdict || verdict.status === "on_track") return;
 					if (turnsSinceNudge < settings.cooldownTurns) return;
 					turnsSinceNudge = 0;
@@ -225,6 +243,7 @@ export function createDriftWatchExtension(manager: EngineManager, settings: Drif
 						);
 				} finally {
 					checking = false;
+					publish();
 				}
 			})();
 		});

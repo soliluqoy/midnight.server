@@ -52,7 +52,6 @@ $copies = @(
 	@{ From = "$agent\CHANGELOG.md"; To = "" },
 	@{ From = "$RepoRoot\node_modules\@silvia-odwyer\photon-node\photon_rs_bg.wasm"; To = "" },
 	@{ From = "$agent\src\modes\interactive\theme\*.json"; To = "theme" },
-	@{ From = "$agent\src\modes\interactive\assets\*.png"; To = "assets" },
 	@{ From = "$agent\src\core\export-html\template.*"; To = "export-html" },
 	@{ From = "$agent\src\core\export-html\vendor\*.js"; To = "export-html\vendor" },
 	@{ From = "$RepoRoot\packages\tui\native\win32\prebuilds\win32-$Architecture"; To = "native\win32\prebuilds" }

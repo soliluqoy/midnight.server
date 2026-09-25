@@ -1,20 +1,20 @@
 # Quickstart
 
-This page gets you from install to a useful first pi session.
+This page gets you from install to a useful first midnight.server session.
 
 ## Install
 
-Pi is distributed as an npm package:
+midnight.server is distributed as an npm package:
 
 ```bash
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 ```
 
-`--ignore-scripts` disables dependency lifecycle scripts during install. Pi does not require install scripts for normal npm installs.
+`--ignore-scripts` disables dependency lifecycle scripts during install. midnight.server does not require install scripts for normal npm installs.
 
 ### Uninstall
 
-Use the package manager that installed pi. The curl installer uses npm globally, so curl and npm installs are removed with npm:
+Use the package manager that installed midnight.server. The curl installer uses npm globally, so curl and npm installs are removed with npm:
 
 ```bash
 # curl installer or npm install -g
@@ -30,22 +30,22 @@ yarn global remove @earendil-works/pi-coding-agent
 bun uninstall -g @earendil-works/pi-coding-agent
 ```
 
-Uninstalling pi leaves settings, credentials, sessions, and installed pi packages in `~/.pi/agent/`.
+Uninstalling midnight.server leaves settings, credentials, sessions, and installed midnight.server packages in `~/.midnight.server/agent/`.
 
-Then start pi in the project directory you want it to work on:
+Then start midnight.server in the project directory you want it to work on:
 
 ```bash
 cd /path/to/project
-pi
+midnight.server
 ```
 
 ## Authenticate
 
-Pi can use subscription providers through `/login`, or API-key providers through environment variables or the auth file.
+midnight.server can use subscription providers through `/login`, or API-key providers through environment variables or the auth file.
 
 ### Option 1: subscription login
 
-Start pi and run:
+Start midnight.server and run:
 
 ```text
 /login
@@ -59,33 +59,33 @@ Set an API key before launching pi:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-pi
+midnight.server
 ```
 
-You can also run `/login` and select an API-key provider to store the key in `~/.pi/agent/auth.json`.
+You can also run `/login` and select an API-key provider to store the key in `~/.midnight.server/agent/auth.json`.
 
 See [Providers](providers.md) for all supported providers, environment variables, and cloud-provider setup.
 
 ## First session
 
-Once pi starts, type a request and press Enter:
+Once midnight.server starts, type a request and press Enter:
 
 ```text
 Summarize this repository and tell me how to run its checks.
 ```
 
-By default, pi gives the model four tools:
+By default, midnight.server gives the model four tools:
 
 - `read` - read files
 - `write` - create or overwrite files
 - `edit` - patch files
 - `bash` - run shell commands
 
-Additional built-in read-only tools (`grep`, `find`, `ls`) are available through tool options. Pi runs in your current working directory and can modify files there. Use git or another checkpointing workflow if you want easy rollback.
+Additional built-in read-only tools (`grep`, `find`, `ls`) are available through tool options. midnight.server runs in your current working directory and can modify files there. Use git or another checkpointing workflow if you want easy rollback.
 
-## Give pi project instructions
+## Give midnight.server project instructions
 
-Pi loads context files at startup. Add an `AGENTS.md` file to tell it how to work in a project:
+midnight.server loads context files at startup. Add an `AGENTS.md` file to tell it how to work in a project:
 
 ```markdown
 # Project Instructions
@@ -95,14 +95,14 @@ Pi loads context files at startup. Add an `AGENTS.md` file to tell it how to wor
 - Keep responses concise.
 ```
 
-Pi loads:
+midnight.server loads:
 
-- `~/.pi/agent/AGENTS.md` for global instructions
+- `~/.midnight.server/agent/AGENTS.md` for global instructions
 - `AGENTS.md` or `CLAUDE.md` from parent directories and the current directory
 
-If a directory contains `AGENTS.override.md`, Pi loads it instead of `AGENTS.md` or `CLAUDE.md` from that directory.
+If a directory contains `AGENTS.override.md`, midnight.server loads it instead of `AGENTS.md` or `CLAUDE.md` from that directory.
 
-Restart pi, or run `/reload`, after changing context files.
+Restart midnight.server, or run `/reload`, after changing context files.
 
 ## Common things to try
 
@@ -111,8 +111,8 @@ Restart pi, or run `/reload`, after changing context files.
 Type `@` in the editor to fuzzy-search files, or pass files on the command line:
 
 ```bash
-pi @README.md "Summarize this"
-pi @src/app.ts @src/app.test.ts "Review these together"
+midnight.server @README.md "Summarize this"
+midnight.server @src/app.ts @src/app.test.ts "Review these together"
 ```
 
 Images or text can be pasted with Ctrl+V (Alt+V on Windows); images can also be dragged into supported terminals.
@@ -136,32 +136,32 @@ Use `/model` or Ctrl+L to choose a model for the current session. Press Ctrl+S i
 Sessions are saved automatically:
 
 ```bash
-pi -c                  # Continue most recent session
-pi -r                  # Browse previous sessions
-pi --name "my task"    # Set session display name at startup
-pi --session <path|id> # Open a specific session
+midnight.server -c                  # Continue most recent session
+midnight.server -r                  # Browse previous sessions
+midnight.server --name "my task"    # Set session display name at startup
+midnight.server --session <path|id> # Open a specific session
 ```
 
-Inside pi, use `/resume`, `/new`, `/tree`, `/fork`, and `/clone` to manage sessions.
+Inside midnight.server, use `/resume`, `/new`, `/tree`, `/fork`, and `/clone` to manage sessions.
 
 ### Non-interactive mode
 
 For one-shot prompts:
 
 ```bash
-pi -p "Summarize this codebase"
-cat README.md | pi -p "Summarize this text"
-pi -p @screenshot.png "What's in this image?"
+midnight.server -p "Summarize this codebase"
+cat README.md | midnight.server -p "Summarize this text"
+midnight.server -p @screenshot.png "What's in this image?"
 ```
 
 Use `--mode json` for JSON event output or `--mode rpc` for process integration.
 
 ## Next steps
 
-- [Using Pi](usage.md) - interactive mode, slash commands, sessions, context files, and CLI reference.
+- [Using midnight.server](usage.md) - interactive mode, slash commands, sessions, context files, and CLI reference.
 - [Providers](providers.md) - authentication and model setup.
 - [Settings](settings.md) - global and project configuration.
 - [Keybindings](keybindings.md) - shortcuts and customization.
-- [Pi Packages](packages.md) - install shared extensions, skills, prompts, and themes.
+- [midnight.server Packages](packages.md) - install shared extensions, skills, prompts, and themes.
 
 Platform notes: [Windows](windows.md), [Termux](termux.md), [tmux](tmux.md), [Terminal setup](terminal-setup.md), [Shell aliases](shell-aliases.md).

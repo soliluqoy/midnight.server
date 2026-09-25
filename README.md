@@ -18,6 +18,10 @@ Its headline feature is **[drift watch](#drift-watch)**: while a cloud model doe
 - **Zero-setup first run.** `--local`, the no-provider-configured fallback, and the first `delegate_local`/drift-watch call all download the model automatically if it's missing (and, on Windows x64, the engine too) — resumable, SHA-256 verified, never used unverified.
 - **Process isolation.** The engine runs under a Windows Job Object owned by the CLI, bound to loopback with a random per-session key, and exits with its descendants when the CLI exits, including after a crash.
 - **Diagnostics.** `doctor [--smoke]`, `model status|verify|fetch`, `engine status|fetch` check the install and, with `--smoke`, start the engine and generate a real reply.
+- **Plan and build modes.** Press Tab in an empty editor to switch. Plan mode limits the model to read-only tools (read, grep, find, ls, `delegate_local`) and asks it for a step-by-step plan; build mode restores the full tool set.
+- **Session sidebar.** In fullscreen mode (`/settings` → TUI mode) a sidebar shows the session title, git branch with changed/staged counts and ahead/behind, context usage and cost, the model, the local engine and drift-watch state, and the files changed this session with +/- line counts. It appears automatically on terminals 110+ columns wide; Alt+S toggles it.
+- **Command palette.** Alt+X opens a fuzzy-searchable list of actions and slash commands.
+- **Automatic session titles.** After the first exchange the local model names the session, at no cloud cost, unless you already named it. It is skipped until the local model is installed.
 - **Native Windows.** PowerShell is the default shell tool; no Node.js, Python, WSL, or Git Bash is needed to run it.
 - **Offline packaging.** The model-included archive needs no network at all once downloaded.
 

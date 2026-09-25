@@ -262,7 +262,7 @@ export function verifySystemPrompt(
 	if (!systemPrompt.includes("\n<rules>\n")) {
 		throw new Error(`Pi system prompt lost its rules in the ${options.name} eval variant.`);
 	}
-	const hasDocumentation = systemPrompt.includes("\n<docs>\nPi documentation (read only");
+	const hasDocumentation = systemPrompt.includes(" documentation (read only when the user asks about");
 	if (hasDocumentation !== options.expectedPiDocumentation) {
 		throw new Error(`Pi system prompt does not match the ${options.name} eval variant.`);
 	}

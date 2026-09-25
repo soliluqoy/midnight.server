@@ -1,4 +1,11 @@
-import { type Component, ScrollView, type ScrollViewScrollbar, VStack } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	HStack,
+	ScrollView,
+	type ScrollViewScrollbar,
+	type StackEntryOptions,
+	VStack,
+} from "@earendil-works/pi-tui";
 
 export interface ChatViewportOptions {
 	readonly document: Component;
@@ -11,6 +18,12 @@ export interface ChatViewportOptions {
 	readonly scrollbar?: ScrollViewScrollbar;
 	readonly scrollbarTrackStyle?: (text: string) => string;
 	readonly scrollbarThumbStyle?: (text: string) => string;
+	/** Fixed-width column to the right of the transcript and input dock. */
+	readonly sidebar?: {
+		readonly component: Component;
+		readonly width: number;
+		readonly visible: NonNullable<StackEntryOptions["visible"]>;
+	};
 }
 
 export interface ChatViewport {
@@ -36,11 +49,25 @@ export function createChatViewport(options: ChatViewportOptions): ChatViewport {
 		...(options.widgetsBelow === undefined ? [] : [{ component: options.widgetsBelow, shrink: 1, minSize: 0 }]),
 		{ component: options.footer, shrink: 1, minSize: 0 },
 	]);
+	const main = new VStack([
+		{ component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+		{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
+	]);
+	if (!options.sidebar) return { transcript, root: main };
 	return {
 		transcript,
-		root: new VStack([
-			{ component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
-			{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
-		]),
+		root: new HStack(
+			[
+				{ component: main, basis: 0, grow: 1, shrink: 1, minSize: 20 },
+				{
+					component: options.sidebar.component,
+					basis: options.sidebar.width,
+					grow: 0,
+					shrink: 0,
+					visible: options.sidebar.visible,
+				},
+			],
+			{ gap: 1 },
+		),
 	};
 }

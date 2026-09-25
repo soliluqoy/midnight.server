@@ -4,10 +4,15 @@
 
 ### Breaking Changes
 
+- Renamed all `PI_*` environment variables to `MIDNIGHT_SERVER_*` (for example `PI_OFFLINE` is now `MIDNIGHT_SERVER_OFFLINE`, and the bash tool exports `MIDNIGHT_SERVER_SESSION_ID`, `MIDNIGHT_SERVER_MODEL`, etc.). The old names are no longer read.
 - `user_bash` now fails closed: errors or invalid defined results abort the command without invoking later handlers or executing locally. Return `undefined` to continue propagation; otherwise return `{ operations }` or `{ result }` ([#9068](https://github.com/earendil-works/pi/issues/9068)).
 
 ### Added
 
+- Added plan and build modes. Tab in an empty editor switches; plan mode limits the model to read-only tools (`read`, `grep`, `find`, `ls`, `delegate_local`), adds a planning instruction to the system prompt, and blocks other tool calls, and build mode restores the previous tool set. The mode shows in the header, footer, sidebar and editor border.
+- Added an opencode-style session sidebar in fullscreen mode with the session title, git branch and working-tree status (changed/staged counts, ahead/behind), context usage and cost, the model, local engine and drift-watch state, and files changed this session with line counts. The `sidebar` setting (`auto`, `always`, `hidden`) and `app.sidebar.toggle` (Alt+S) control it.
+- Added a command palette (`app.commandPalette`, Alt+X) listing actions and slash commands with fuzzy search.
+- Added automatic session titles: after the first exchange the local model names an unnamed session, without cloud tokens. Skipped when the local model is not installed.
 - Added `--local`: runs the session on the embedded MiniCPM5-2B Q8_0 through a bundled llama.cpp engine, forces offline startup, and blocks model requests to every other provider for the session.
 - Added `--hybrid` and the `delegate_local` tool: the configured parent model can hand bounded, read-only summarize/classify/inspect/plan/patch tasks to the local helper. Inputs are confined to the workspace, output is schema-validated with line evidence, and patches are returned as unapplied diffs.
 - Added an automatic drift watcher to `--hybrid` mode: MiniCPM periodically judges whether the parent model is still on track and injects a corrective reminder only when it isn't. Checks run in the background (never blocking the agent loop) on a turn-count-or-token-growth cadence with a cooldown between nudges, configurable through `MIDNIGHT_SERVER_DRIFTWATCH*` environment variables and disabled entirely with `MIDNIGHT_SERVER_DRIFTWATCH=0`.
@@ -24,10 +29,12 @@
 
 ### Changed
 
+- Rebranded user-facing text from Pi to midnight.server: startup header, system prompt, help text, messages, temporary file names, the `AI_AGENT` marker, and the bundled documentation.
+- Restyled the built-in dark and light themes with a midnight palette, and the footer to show the plan/build badge, git branch with changed-file count and ahead/behind, and local-model state.
 - Bare `midnight.server` (no `--local`/`--hybrid`) is now equivalent to `--hybrid`: `delegate_local` and the drift watcher are always available unless `--local` is given. If no provider is configured at all and no `--provider`/`--model`/`--models`/`--api-key` was passed, the session silently starts on the local MiniCPM model instead of showing the "no provider configured" screen; unlike `--local`, this fallback is not offline-locked, so `/login` still works afterward.
 - On Windows, the default shell tool is now `powershell` instead of `bash`, and `!` / `!!` run through PowerShell unless `shellPath` is set, so Git Bash is no longer required.
 - Moved compaction, branch summarization, and retry spinners into the editor border alongside the working indicator. Custom editors use the same embedding opt-in for all status spinners.
-- Enabled strict-prefer JSON-schema sampling by default for built-in `read`, `bash`, `powershell`, `edit`, and `write` tools, without requiring `PI_EXPERIMENTAL`. Extensions can re-register tool definitions with `constrainedSampling: false`.
+- Enabled strict-prefer JSON-schema sampling by default for built-in `read`, `bash`, `powershell`, `edit`, and `write` tools, without requiring `MIDNIGHT_SERVER_EXPERIMENTAL`. Extensions can re-register tool definitions with `constrainedSampling: false`.
 - Formatted Bash and PowerShell tool durations of at least one minute as minutes and seconds, with hours when needed ([#9628](https://github.com/earendil-works/pi/issues/9628)).
 
 ### Fixed
@@ -43,6 +50,10 @@
 - Fixed extension tools without parameter schemas to be rejected during registration instead of breaking provider requests ([#9300](https://github.com/earendil-works/pi/issues/9300)).
 - Fixed `before_agent_start` handlers returning `systemPrompt` (and `forceSystemPrompt`) on models with mid-conversation system messages: the forced prompt is now sent as the provider's leading system prompt instead of being appended as a section patch after the original prompt.
 - Fixed loaded llama.cpp models with `enable_thinking` chat templates ignoring Pi's thinking level ([#9528](https://github.com/earendil-works/pi/issues/9528)).
+
+### Removed
+
+- Removed the upstream Pi easter eggs and announcement (`/arminsayshi`, `/dementedelves`, the model-selection animation, and the bundled mascot image).
 
 ## [0.85.1] - 2026-09-05
 

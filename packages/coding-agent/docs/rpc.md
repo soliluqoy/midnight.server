@@ -7,7 +7,7 @@ RPC mode enables headless operation of the coding agent via a JSON protocol over
 ## Starting RPC Mode
 
 ```bash
-pi --mode rpc [options]
+midnight.server --mode rpc [options]
 ```
 
 Common options:
@@ -809,7 +809,7 @@ Response:
 }
 ```
 
-The current session name is available via `get_state` in the `sessionName` field. To set the initial name when starting RPC mode, pass `--name <name>` or `-n <name>` to the `pi --mode rpc` process.
+The current session name is available via `get_state` in the `sessionName` field. To set the initial name when starting RPC mode, pass `--name <name>` or `-n <name>` to the `midnight.server --mode rpc` process.
 
 ### Commands
 
@@ -845,7 +845,7 @@ Each command has:
   - `"prompt"`: Loaded from a prompt template `.md` file
   - `"skill"`: Loaded from a skill directory (name is prefixed with `skill:`)
 - `location`: Where it was loaded from (optional, not present for extensions):
-  - `"user"`: User-level (`~/.pi/agent/`)
+  - `"user"`: User-level (`~/.midnight.server/agent/`)
   - `"project"`: Project-level (`./.pi/agent/`)
   - `"path"`: Explicit path via CLI or settings
 - `path`: Absolute file path to the command source (optional)
@@ -904,7 +904,7 @@ Emitted when one low-level agent run completes. Contains all messages generated 
 
 ### agent_settled
 
-Emitted after the full session-level run settles. At this point Pi will not continue automatically through retry, compaction retry, or queued follow-up messages.
+Emitted after the full session-level run settles. At this point midnight.server will not continue automatically through retry, compaction retry, or queued follow-up messages.
 
 ```json
 {"type": "agent_settled"}

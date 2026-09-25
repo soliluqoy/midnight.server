@@ -4,6 +4,7 @@ import { type EngineSettings, LocalEngine } from "./engine.ts";
 import type { ModelLock } from "./model-integrity.ts";
 import { getLogDir, getMidnightHome } from "./paths.ts";
 import { ENGINE_LOCK, type EngineLock, MODEL_LOCK } from "./pins.ts";
+import { updateMidnightStatus } from "./status.ts";
 import { ensureModelVerified, fetchEngine, fetchModel, findEngineDir, findHost, findModel } from "./store.ts";
 
 export class LocalSetupError extends Error {}
@@ -133,6 +134,7 @@ export class EngineManager {
 		this.touch();
 		if (this.engine?.running) return this.engine;
 		if (!this.starting) {
+			updateMidnightStatus({ engine: "starting" });
 			this.starting = (async () => {
 				this.onStatus?.("Preparing local model...");
 				const assets = await resolveLocalAssets(signal, this.onStatus);
@@ -145,10 +147,16 @@ export class EngineManager {
 					signal,
 				});
 				this.engine = engine;
+				updateMidnightStatus({ engine: "ready" });
 				return engine;
-			})().finally(() => {
-				this.starting = undefined;
-			});
+			})()
+				.catch((error: unknown) => {
+					updateMidnightStatus({ engine: error instanceof LocalSetupError ? "unavailable" : "off" });
+					throw error;
+				})
+				.finally(() => {
+					this.starting = undefined;
+				});
 		}
 		return this.starting;
 	}
@@ -167,10 +175,12 @@ export class EngineManager {
 		const engine = this.engine ?? (await this.starting?.catch(() => undefined));
 		this.engine = undefined;
 		await engine?.stop();
+		if (engine) updateMidnightStatus({ engine: "off" });
 	}
 
 	stopSync(): void {
 		if (this.idleTimer) clearTimeout(this.idleTimer);
+		if (this.engine) updateMidnightStatus({ engine: "off" });
 		this.engine?.stopSync();
 		this.engine = undefined;
 	}

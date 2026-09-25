@@ -26,10 +26,12 @@ describe("SettingsSelectorComponent", () => {
 		const onExitOutputChange = vi.fn();
 		const onScrollbarChange = vi.fn();
 		const onCopyOnSelectChange = vi.fn();
+		const onSidebarChange = vi.fn();
 		const config = {
 			fullscreenExitOutput: "transcript",
 			fullscreenScrollbar: "auto",
 			fullscreenCopyOnSelect: true,
+			sidebar: "auto",
 			warnings: {},
 			defaultModel: "not set",
 			availableDefaultModels: [],
@@ -41,6 +43,7 @@ describe("SettingsSelectorComponent", () => {
 			onFullscreenExitOutputChange: onExitOutputChange,
 			onFullscreenScrollbarChange: onScrollbarChange,
 			onFullscreenCopyOnSelectChange: onCopyOnSelectChange,
+			onSidebarChange,
 		} as unknown as SettingsCallbacks;
 
 		const cycle = (label: string, count: number) => {
@@ -55,6 +58,8 @@ describe("SettingsSelectorComponent", () => {
 		expect(onScrollbarChange.mock.calls.flat()).toEqual(["always", "hidden", "auto"]);
 		cycle("Fullscreen copy on select", 2);
 		expect(onCopyOnSelectChange.mock.calls.flat()).toEqual([false, true]);
+		cycle("Sidebar", 3);
+		expect(onSidebarChange.mock.calls.flat()).toEqual(["always", "hidden", "auto"]);
 	});
 
 	it("keeps the configured fixed theme marked while browsing", () => {

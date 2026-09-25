@@ -388,7 +388,7 @@ export function findNodePackageDir(startDir: string): string {
 
 export function getPackageDir(): string {
 	// Allow override via environment variable (useful for Nix/Guix where store paths tokenize poorly)
-	const envDir = process.env.PI_PACKAGE_DIR;
+	const envDir = process.env.MIDNIGHT_SERVER_PACKAGE_DIR;
 	if (envDir) {
 		return normalizePath(envDir);
 	}
@@ -456,26 +456,6 @@ export function getChangelogPath(): string {
 	return resolve(join(getPackageDir(), "CHANGELOG.md"));
 }
 
-/**
- * Get path to built-in interactive assets directory.
- * - For Bun binary: assets/ next to executable
- * - For Node.js (dist/): dist/modes/interactive/assets/
- * - For tsx (src/): src/modes/interactive/assets/
- */
-export function getInteractiveAssetsDir(): string {
-	if (isBunBinary) {
-		return join(getPackageDir(), "assets");
-	}
-	const packageDir = getPackageDir();
-	const srcOrDist = existsSync(join(packageDir, "src")) ? "src" : "dist";
-	return join(packageDir, srcOrDist, "modes", "interactive", "assets");
-}
-
-/** Get path to a bundled interactive asset */
-export function getBundledInteractiveAssetPath(name: string): string {
-	return join(getInteractiveAssetsDir(), name);
-}
-
 // =============================================================================
 // App Config (from package.json piConfig)
 // =============================================================================
@@ -516,7 +496,7 @@ const DEFAULT_SHARE_VIEWER_URL = "https://pi.dev/session/";
 
 /** Get the share viewer URL for a gist ID. */
 export function getShareViewerUrl(gistId: string): string {
-	const baseUrl = process.env.PI_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
+	const baseUrl = process.env.MIDNIGHT_SERVER_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
 	return `${baseUrl}#${gistId}`;
 }
 

@@ -175,21 +175,21 @@ function resolveSpawnContext(
 	ctx: ExtensionContext | undefined,
 ): BashSpawnContext {
 	const env = { ...getShellEnv() };
-	delete env.PI_SESSION_ID;
-	delete env.PI_SESSION_FILE;
-	delete env.PI_PROVIDER;
-	delete env.PI_MODEL;
-	delete env.PI_REASONING_LEVEL;
+	delete env.MIDNIGHT_SERVER_SESSION_ID;
+	delete env.MIDNIGHT_SERVER_SESSION_FILE;
+	delete env.MIDNIGHT_SERVER_PROVIDER;
+	delete env.MIDNIGHT_SERVER_MODEL;
+	delete env.MIDNIGHT_SERVER_REASONING_LEVEL;
 	if (exposeSessionEnvironment && ctx) {
 		const model = ctx.model;
-		env.PI_SESSION_ID = ctx.sessionManager.getSessionId();
+		env.MIDNIGHT_SERVER_SESSION_ID = ctx.sessionManager.getSessionId();
 		const sessionFile = ctx.sessionManager.getSessionFile();
-		if (sessionFile) env.PI_SESSION_FILE = sessionFile;
+		if (sessionFile) env.MIDNIGHT_SERVER_SESSION_FILE = sessionFile;
 		if (model) {
-			env.PI_PROVIDER = model.provider;
-			env.PI_MODEL = model.id;
+			env.MIDNIGHT_SERVER_PROVIDER = model.provider;
+			env.MIDNIGHT_SERVER_MODEL = model.id;
 		}
-		if (ctx.thinkingLevel) env.PI_REASONING_LEVEL = ctx.thinkingLevel;
+		if (ctx.thinkingLevel) env.MIDNIGHT_SERVER_REASONING_LEVEL = ctx.thinkingLevel;
 	}
 	const baseContext: BashSpawnContext = { command, cwd, env };
 	return spawnHook ? spawnHook(baseContext) : baseContext;
@@ -387,7 +387,7 @@ const bashToolConfig: ShellToolConfig = {
 	prompt: "$",
 	promptSnippet: bashToolSystemPromptContribution.snippet,
 	promptGuidelines: bashToolSystemPromptContribution.guidelines,
-	tempFilePrefix: "pi-bash",
+	tempFilePrefix: "midnight-server-bash",
 };
 
 export function createBashToolDefinition(

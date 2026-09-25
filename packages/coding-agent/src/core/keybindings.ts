@@ -29,6 +29,9 @@ export interface AppKeybindings {
 	"app.message.followUp": true;
 	"app.message.dequeue": true;
 	"app.clipboard.pasteImage": true;
+	"app.agentMode.toggle": true;
+	"app.sidebar.toggle": true;
+	"app.commandPalette": true;
 	"app.session.new": true;
 	"app.session.tree": true;
 	"app.session.fork": true;
@@ -143,6 +146,12 @@ export const KEYBINDINGS = {
 		defaultKeys: windowsKeybindings ? "alt+v" : "ctrl+v",
 		description: "Paste image from clipboard (text fallback)",
 	},
+	"app.agentMode.toggle": {
+		defaultKeys: "tab",
+		description: "Switch between plan and build mode (empty editor)",
+	},
+	"app.sidebar.toggle": { defaultKeys: "alt+s", description: "Toggle sidebar (fullscreen mode)" },
+	"app.commandPalette": { defaultKeys: "alt+x", description: "Open command palette" },
 	"app.session.new": { defaultKeys: [], description: "Start a new session" },
 	"app.session.tree": { defaultKeys: [], description: "Open session tree" },
 	"app.session.fork": { defaultKeys: [], description: "Fork current session" },

@@ -1,12 +1,12 @@
 # Keybindings
 
-All keyboard shortcuts can be customized via `~/.pi/agent/keybindings.json`. Each action can be bound to one or more keys.
+All keyboard shortcuts can be customized via `~/.midnight.server/agent/keybindings.json`. Each action can be bound to one or more keys.
 
-The config file uses the same namespaced keybinding ids that pi uses internally and that extension authors use in `keyHint()` and injected `keybindings` managers.
+The config file uses the same namespaced keybinding ids that midnight.server uses internally and that extension authors use in `keyHint()` and injected `keybindings` managers.
 
 Older configs using pre-namespaced ids such as `cursorUp` or `expandTools` are migrated automatically to the namespaced ids on startup.
 
-After editing `keybindings.json`, run `/reload` in pi to apply the changes without restarting the session.
+After editing `keybindings.json`, run `/reload` in midnight.server to apply the changes without restarting the session.
 
 ## Key Format
 
@@ -128,6 +128,9 @@ This routing remains configurable through the ordinary action bindings. For exam
 | `app.suspend` | `ctrl+z` (none on Windows) | Suspend to background |
 | `app.editor.external` | `ctrl+g` | Open in external editor (`externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere) |
 | `app.clipboard.pasteImage` | `ctrl+v` (`alt+v` on Windows and WSL) | Paste image or text from clipboard |
+| `app.agentMode.toggle` | `tab` | Switch between plan mode (read-only tools) and build mode. Only when the editor is empty and no autocomplete is open; otherwise Tab completes as usual |
+| `app.commandPalette` | `alt+x` | Open the command palette |
+| `app.sidebar.toggle` | `alt+s` | Show or hide the session sidebar (fullscreen mode) |
 
 ### Sessions
 
@@ -195,7 +198,7 @@ Used inside the scoped models selector (opened via `/scoped-models`).
 
 ## Custom Configuration
 
-Create `~/.pi/agent/keybindings.json`:
+Create `~/.midnight.server/agent/keybindings.json`:
 
 ```json
 {
@@ -207,7 +210,7 @@ Create `~/.pi/agent/keybindings.json`:
 
 Each action can have a single key or an array of keys. User config overrides defaults.
 
-On native Windows, `app.suspend` has no default binding because Windows terminals do not support Unix job control. If you bind it manually, pi shows a status message instead of suspending. In WSL, the normal Linux `ctrl+z`/`fg` behavior still applies.
+On native Windows, `app.suspend` has no default binding because Windows terminals do not support Unix job control. If you bind it manually, midnight.server shows a status message instead of suspending. In WSL, the normal Linux `ctrl+z`/`fg` behavior still applies.
 
 ### Emacs Example
 

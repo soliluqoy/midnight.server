@@ -4,6 +4,8 @@ import { createDriftWatchExtension, resolveDriftWatchSettings } from "./drift-wa
 import { EngineManager, LocalSetupError } from "./engine-manager.ts";
 import { createDelegateExtension, createLocalProviderExtension } from "./extension.ts";
 import { LOCAL_MODEL_ID, LOCAL_PROVIDER_ID } from "./pins.ts";
+import { createSessionTitleExtension } from "./session-title.ts";
+import { updateMidnightStatus } from "./status.ts";
 
 export class LocalInferenceUnavailableError extends Error {}
 
@@ -27,8 +29,13 @@ export function parseMidnightMode(args: string[]): { mode: MidnightMode; rest: s
 	return { mode: local ? "local" : hybrid ? "hybrid" : "default", rest };
 }
 
+function sessionTitleExtension(manager: EngineManager): InlineExtension {
+	return { name: "midnight-session-title", factory: createSessionTitleExtension(manager), hidden: true };
+}
+
 function hybridExtensions(manager: EngineManager): InlineExtension[] {
 	return [
+		sessionTitleExtension(manager),
 		{ name: "midnight-delegate", factory: createDelegateExtension(manager), hidden: true },
 		{
 			name: "midnight-drift-watch",
@@ -69,6 +76,7 @@ export async function prepareLocalRuntime(
 			if (error instanceof LocalSetupError) throw new LocalInferenceUnavailableError(error.message);
 			throw error;
 		}
+		updateMidnightStatus({ mode: "local" });
 		return {
 			mode,
 			args: [
@@ -87,6 +95,7 @@ export async function prepareLocalRuntime(
 					factory: createLocalProviderExtension(engine, { localOnly: true }),
 					hidden: true,
 				},
+				sessionTitleExtension(manager),
 			],
 			stop: () => manager.stop(),
 		};
@@ -114,8 +123,10 @@ export async function prepareLocalRuntime(
 			// This fallback is implicit; nobody asked for --local, so don't hard-fail the CLI
 			// the way an explicit --local does. Fall through to ordinary hybrid behavior and
 			// let main()'s usual "no provider configured" onboarding handle it.
+			updateMidnightStatus({ mode: "hybrid" });
 			return { mode, args: rest, extensionFactories: hybridExtensions(manager), stop: () => manager.stop() };
 		}
+		updateMidnightStatus({ mode: "fallback" });
 		return {
 			mode,
 			args: [
@@ -133,11 +144,13 @@ export async function prepareLocalRuntime(
 					factory: createLocalProviderExtension(engine, { localOnly: false }),
 					hidden: true,
 				},
+				sessionTitleExtension(manager),
 			],
 			stop: () => manager.stop(),
 		};
 	}
 
 	const manager = options.manager ?? new EngineManager({ onStatus: options.onStatus });
+	updateMidnightStatus({ mode: "hybrid" });
 	return { mode, args: rest, extensionFactories: hybridExtensions(manager), stop: () => manager.stop() };
 }

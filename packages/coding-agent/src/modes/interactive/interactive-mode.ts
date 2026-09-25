@@ -81,6 +81,7 @@ import type {
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
+import { GitStatusTracker } from "../../core/git-status.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
@@ -102,6 +103,7 @@ import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
+import { getMidnightStatus, onMidnightStatusChange, updateMidnightStatus } from "../../midnight/status.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -113,17 +115,15 @@ import { loadAllHighlightLanguages } from "../../utils/syntax-highlight.ts";
 import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
 import { createChatViewport } from "./chat-viewport.ts";
-import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
+import { CommandPaletteComponent, type PaletteEntry } from "./components/command-palette.ts";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
 import { CustomEntryComponent } from "./components/custom-entry.ts";
 import { CustomMessageComponent } from "./components/custom-message.ts";
-import { DaxnutsComponent } from "./components/daxnuts.ts";
 import { DynamicBorder } from "./components/dynamic-border.ts";
-import { EarendilAnnouncementComponent } from "./components/earendil-announcement.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
@@ -140,6 +140,14 @@ import {
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
+import {
+	describeDrift,
+	describeEngine,
+	describeSessionMode,
+	SIDEBAR_MIN_TERMINAL_WIDTH,
+	SIDEBAR_WIDTH,
+	SidebarComponent,
+} from "./components/sidebar.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
 import {
 	BranchSummaryStatusIndicator,
@@ -386,6 +394,11 @@ export class InteractiveMode {
 	private documentContainer: Container;
 	private transcriptScrollView: TuiLayouts.ScrollView | undefined;
 	private fullscreenLayoutRoot: Component | undefined;
+	private gitStatusTracker: GitStatusTracker;
+	private sidebar: SidebarComponent;
+	/** Session-only sidebar override from the toggle key; undefined follows the `sidebar` setting. */
+	private sidebarOverride: boolean | undefined;
+	private unsubscribeMidnightStatus: (() => void) | undefined;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
 	private defaultEditor: CustomEditor;
@@ -569,7 +582,15 @@ export class InteractiveMode {
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
-		this.footer = new FooterComponent(this.session, this.footerDataProvider);
+		this.gitStatusTracker = new GitStatusTracker(this.sessionManager.getCwd());
+		this.footer = new FooterComponent(this.session, this.footerDataProvider, this.gitStatusTracker);
+		this.sidebar = new SidebarComponent({
+			session: () => this.session,
+			footerData: this.footerDataProvider,
+			gitStatus: this.gitStatusTracker,
+			getHeight: () => this.ui.terminal.rows,
+			agentModeKey: () => keyText("app.agentMode.toggle") || undefined,
+		});
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerContainer = new Container();
 		this.footerContainer.addChild(this.footer);
@@ -889,6 +910,11 @@ export class InteractiveMode {
 			scrollbar: this.settingsManager.getFullscreenScrollbar(),
 			scrollbarTrackStyle: (text) => theme.fg("scrollbarTrack", text),
 			scrollbarThumbStyle: (text) => theme.fg("scrollbarThumb", text),
+			sidebar: {
+				component: this.sidebar,
+				width: SIDEBAR_WIDTH,
+				visible: (layoutViewport) => this.isSidebarVisible(layoutViewport.width),
+			},
 		});
 		this.transcriptScrollView = viewport.transcript;
 		this.fullscreenLayoutRoot = viewport.root;
@@ -915,7 +941,15 @@ export class InteractiveMode {
 
 		// Add header with keybindings from config (unless silenced)
 		if (this.options.verbose || !this.settingsManager.getQuietStartup()) {
-			const logo = theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}`);
+			const logo = () => {
+				const status = getMidnightStatus();
+				const badge =
+					status.agentMode === "plan"
+						? theme.bold(theme.fg("warning", "PLAN"))
+						: theme.bold(theme.fg("success", "BUILD"));
+				const mode = describeSessionMode(status.mode);
+				return `${theme.fg("accent", "☾ ")}${theme.bold(theme.fg("accent", APP_NAME))}${theme.fg("dim", ` v${this.version}`)}  ${badge}${mode ? theme.fg("dim", ` · ${mode}`) : ""}`;
+			};
 
 			// Build startup instructions using keybinding hint helpers
 			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
@@ -940,12 +974,17 @@ export class InteractiveMode {
 				hint("app.message.dequeue", "to edit all queued messages"),
 				hint("app.clipboard.pasteImage", "to paste image (with text fallback)"),
 				rawKeyHint("drop files", "to attach"),
+				keyHint("app.agentMode.toggle", "to switch plan/build (empty editor)"),
+				hint("app.commandPalette", "for the command palette"),
+				hint("app.sidebar.toggle", "to toggle the sidebar (fullscreen)"),
 			].join("\n");
 			const compactInstructions = [
 				hint("app.interrupt", "interrupt"),
 				rawKeyHint(`${keyText("app.clear")}/${keyText("app.exit")}`, "clear/exit"),
 				rawKeyHint("/", "commands"),
 				rawKeyHint("!", "bash"),
+				hint("app.agentMode.toggle", "plan/build"),
+				hint("app.commandPalette", "palette"),
 				hint("app.tools.expand", "more"),
 			].join(theme.fg("muted", " · "));
 			const compactOnboarding = theme.fg(
@@ -954,11 +993,11 @@ export class InteractiveMode {
 			);
 			const onboarding = theme.fg(
 				"dim",
-				`Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`,
+				`${APP_NAME} can explain its own features and look up its docs. Ask it how to use or extend ${APP_NAME}.`,
 			);
 			this.builtInHeader = new ExpandableText(
-				() => `${logo}\n${compactInstructions}\n${compactOnboarding}\n\n${onboarding}`,
-				() => `${logo}\n${expandedInstructions}\n\n${onboarding}`,
+				() => `${logo()}\n${compactInstructions}\n${compactOnboarding}\n\n${onboarding}`,
+				() => `${logo()}\n${expandedInstructions}\n\n${onboarding}`,
 				this.getStartupExpansionState(),
 				1,
 				0,
@@ -1004,6 +1043,13 @@ export class InteractiveMode {
 
 		// Set up git branch watcher (uses provider instead of footer)
 		this.footerDataProvider.onBranchChange(() => {
+			void this.gitStatusTracker.refresh();
+			this.ui.requestRender();
+		});
+		this.gitStatusTracker.onChange(() => this.ui.requestRender());
+		void this.gitStatusTracker.refresh();
+		this.unsubscribeMidnightStatus = onMidnightStatusChange(() => {
+			this.ui.invalidate();
 			this.ui.requestRender();
 		});
 
@@ -1039,7 +1085,7 @@ export class InteractiveMode {
 	async run(): Promise<void> {
 		await this.init();
 
-		if (!process.env.PI_OFFLINE) {
+		if (!process.env.MIDNIGHT_SERVER_OFFLINE) {
 			const controller = new AbortController();
 			const timeout = setTimeout(() => controller.abort(), 15_000);
 			void refreshModelCatalogs(this.session.modelRuntime, controller.signal)
@@ -1146,7 +1192,7 @@ export class InteractiveMode {
 	}
 
 	private async checkForPackageUpdates(): Promise<string[]> {
-		if (process.env.PI_OFFLINE) {
+		if (process.env.MIDNIGHT_SERVER_OFFLINE) {
 			return [];
 		}
 
@@ -1204,7 +1250,7 @@ export class InteractiveMode {
 		}
 
 		if (extendedKeysFormat === "xterm") {
-			return "tmux extended-keys-format is xterm. Pi works best with csi-u. Add `set -g extended-keys-format csi-u` to ~/.tmux.conf and restart tmux.";
+			return `tmux extended-keys-format is xterm. ${APP_NAME} works best with csi-u. Add \`set -g extended-keys-format csi-u\` to ~/.tmux.conf and restart tmux.`;
 		}
 
 		return undefined;
@@ -1242,7 +1288,7 @@ export class InteractiveMode {
 	}
 
 	private reportInstallTelemetry(version: string): void {
-		if (process.env.PI_OFFLINE) {
+		if (process.env.MIDNIGHT_SERVER_OFFLINE) {
 			return;
 		}
 
@@ -1951,6 +1997,7 @@ export class InteractiveMode {
 		this.footer.setSession(this.session);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
+		this.gitStatusTracker.setCwd(this.sessionManager.getCwd());
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 		this.outputPad = this.settingsManager.getOutputPad();
 		this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
@@ -2851,6 +2898,121 @@ export class InteractiveMode {
 	// Key Handlers
 	// =========================================================================
 
+	private isSidebarVisible(terminalWidth: number): boolean {
+		if (this.sidebarOverride !== undefined) return this.sidebarOverride;
+		const mode = this.settingsManager.getSidebarMode();
+		return mode === "always" || (mode === "auto" && terminalWidth >= SIDEBAR_MIN_TERMINAL_WIDTH);
+	}
+
+	private toggleSidebar(): void {
+		if (this.ui.mode !== "fullscreen") {
+			this.showStatus("The sidebar is available in fullscreen mode (/settings → TUI mode)");
+			return;
+		}
+		this.sidebarOverride = !this.isSidebarVisible(this.ui.terminal.columns);
+		this.ui.requestRender();
+	}
+
+	private toggleAgentMode(): void {
+		const next = getMidnightStatus().agentMode === "plan" ? "build" : "plan";
+		updateMidnightStatus({ agentMode: next });
+		this.updateEditorBorderColor();
+		this.showStatus(
+			next === "plan"
+				? "Plan mode: read-only tools; the model proposes a plan (applies from your next message)"
+				: "Build mode: all tools enabled (applies from your next message)",
+		);
+	}
+
+	private getCommandPaletteEntries(): PaletteEntry[] {
+		const status = getMidnightStatus();
+		const withKey = (description: string, keybinding: Parameters<typeof keyText>[0]) => {
+			const key = keyText(keybinding);
+			return key ? `${description} (${key})` : description;
+		};
+		const entries: PaletteEntry[] = [
+			{
+				id: "action:agent-mode",
+				label: status.agentMode === "plan" ? "Switch to build mode" : "Switch to plan mode",
+				description: withKey("Plan mode is read-only", "app.agentMode.toggle"),
+				keywords: "plan build mode read-only",
+			},
+			{
+				id: "action:sidebar",
+				label: "Toggle sidebar",
+				description: withKey("Fullscreen mode only", "app.sidebar.toggle"),
+				keywords: "sidebar panel",
+			},
+			{
+				id: "action:model",
+				label: "Select model",
+				description: withKey("Choose the model for this session", "app.model.select"),
+				keywords: "model provider",
+			},
+			{
+				id: "action:local-status",
+				label: "Local model status",
+				description: `engine ${describeEngine(status.engine)} · drift ${describeDrift(status)}`,
+				keywords: "minicpm engine drift local",
+			},
+		];
+		const builtinNames = new Set(BUILTIN_SLASH_COMMANDS.map((command) => command.name));
+		for (const command of BUILTIN_SLASH_COMMANDS) {
+			entries.push({
+				id: command.argumentHint ? `insert:/${command.name} ` : `run:/${command.name}`,
+				label: `/${command.name}`,
+				description: command.description,
+			});
+		}
+		for (const template of this.session.promptTemplates) {
+			entries.push({
+				id: `insert:/${template.name} `,
+				label: `/${template.name}`,
+				description: template.description,
+			});
+		}
+		for (const command of this.session.extensionRunner.getRegisteredCommands()) {
+			if (builtinNames.has(command.name)) continue;
+			entries.push({
+				id: `insert:/${command.invocationName} `,
+				label: `/${command.invocationName}`,
+				description: command.description,
+			});
+		}
+		return entries;
+	}
+
+	private showCommandPalette(): void {
+		this.showSelector((done) => {
+			const palette = new CommandPaletteComponent(
+				this.getCommandPaletteEntries(),
+				(id) => {
+					done();
+					this.runCommandPaletteEntry(id);
+				},
+				() => {
+					done();
+					this.ui.requestRender();
+				},
+			);
+			return { component: palette, focus: palette };
+		});
+	}
+
+	private runCommandPaletteEntry(id: string): void {
+		if (id === "action:agent-mode") this.toggleAgentMode();
+		else if (id === "action:sidebar") this.toggleSidebar();
+		else if (id === "action:model") this.showModelSelector();
+		else if (id === "action:local-status") {
+			const status = getMidnightStatus();
+			this.showStatus(
+				`Local model: engine ${describeEngine(status.engine)}, drift watch ${describeDrift(status)}${status.mode ? `, session ${describeSessionMode(status.mode)}` : ""}`,
+			);
+		} else if (id.startsWith("run:")) void this.defaultEditor.onSubmit?.(id.slice("run:".length));
+		else if (id.startsWith("insert:")) this.editor.setText(id.slice("insert:".length));
+		this.ui.requestRender();
+	}
+
 	private setupKeyHandlers(): void {
 		// Set up handlers on defaultEditor - they use this.editor for text access
 		// so they work correctly regardless of which editor is active
@@ -2906,6 +3068,9 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
 		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
 		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
+		this.defaultEditor.onAction("app.agentMode.toggle", () => this.toggleAgentMode());
+		this.defaultEditor.onAction("app.sidebar.toggle", () => this.toggleSidebar());
+		this.defaultEditor.onAction("app.commandPalette", () => this.showCommandPalette());
 
 		this.defaultEditor.onChange = (text: string) => {
 			const wasBashMode = this.isBashMode;
@@ -2942,7 +3107,7 @@ export class InteractiveMode {
 			if (image) {
 				const tmpDir = os.tmpdir();
 				const ext = extensionForImageMimeType(image.mimeType) ?? "png";
-				const fileName = `pi-clipboard-${crypto.randomUUID()}.${ext}`;
+				const fileName = `midnight-server-clipboard-${crypto.randomUUID()}.${ext}`;
 				const filePath = path.join(tmpDir, fileName);
 				fs.writeFileSync(filePath, Buffer.from(image.bytes));
 
@@ -3083,16 +3248,6 @@ export class InteractiveMode {
 			}
 			if (text === "/debug") {
 				this.handleDebugCommand();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/arminsayshi") {
-				this.handleArminSaysHi();
-				this.editor.setText("");
-				return;
-			}
-			if (text === "/dementedelves") {
-				this.handleDementedDelves();
 				this.editor.setText("");
 				return;
 			}
@@ -3380,6 +3535,7 @@ export class InteractiveMode {
 					this.streamingMessage = undefined;
 				}
 				this.pendingTools.clear();
+				void this.gitStatusTracker.refresh();
 
 				this.ui.requestRender();
 				break;
@@ -3919,7 +4075,7 @@ export class InteractiveMode {
 			new Text(
 				theme.fg(
 					"warning",
-					`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. Use /trust to save a trust decision, then restart pi.`,
+					`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. Use /trust to save a trust decision, then restart ${APP_NAME}.`,
 				),
 				1,
 				0,
@@ -4188,6 +4344,8 @@ export class InteractiveMode {
 	private updateEditorBorderColor(): void {
 		if (this.isBashMode) {
 			this.editor.borderColor = theme.getBashModeBorderColor();
+		} else if (getMidnightStatus().agentMode === "plan") {
+			this.editor.borderColor = (text: string) => theme.fg("warning", text);
 		} else {
 			const level = this.session.thinkingLevel || "off";
 			this.editor.borderColor = theme.getThinkingBorderColor(level);
@@ -4618,6 +4776,7 @@ export class InteractiveMode {
 					tuiMode: this.ui.mode,
 					fullscreenExitOutput: this.settingsManager.getFullscreenExitOutput(),
 					fullscreenScrollbar: this.settingsManager.getFullscreenScrollbar(),
+					sidebar: this.settingsManager.getSidebarMode(),
 					fullscreenCopyOnSelect: this.settingsManager.getFullscreenCopyOnSelect(),
 					warnings: this.settingsManager.getWarnings(),
 				},
@@ -4791,6 +4950,11 @@ export class InteractiveMode {
 						this.settingsManager.setFullscreenScrollbar(mode);
 						this.applyFullscreenScrollbarSetting();
 					},
+					onSidebarChange: (mode) => {
+						this.settingsManager.setSidebarMode(mode);
+						this.sidebarOverride = undefined;
+						this.ui.requestRender();
+					},
 					onFullscreenCopyOnSelectChange: (enabled) => {
 						this.settingsManager.setFullscreenCopyOnSelect(enabled);
 						if (this.renderer instanceof TuiAltScreen) this.renderer.setCopyOnSelect(enabled);
@@ -4871,7 +5035,6 @@ export class InteractiveMode {
 				this.updateEditorBorderColor();
 				this.showStatus(`Model: ${model.id}`);
 				void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
-				this.checkDaxnutsEasterEgg(model);
 			} catch (error) {
 				this.showError(error instanceof Error ? error.message : String(error));
 			}
@@ -5017,7 +5180,6 @@ export class InteractiveMode {
 					done();
 					this.showStatus(persist ? `Default model: ${model.provider}/${model.id}` : `Model: ${model.id}`);
 					void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
-					this.checkDaxnutsEasterEgg(model);
 				} catch (error) {
 					done();
 					this.showError(error instanceof Error ? error.message : String(error));
@@ -5753,7 +5915,6 @@ export class InteractiveMode {
 			if (selectedModel) {
 				this.showStatus(`${actionLabel}. Selected ${selectedModel.id}. Credentials saved to ${getAuthPath()}`);
 				void this.maybeWarnAboutAnthropicSubscriptionAuth(selectedModel);
-				this.checkDaxnutsEasterEgg(selectedModel);
 			} else {
 				this.showStatus(`${actionLabel}. Credentials saved to ${getAuthPath()}`);
 				if (selectionError) {
@@ -6499,30 +6660,6 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	private handleArminSaysHi(): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new ArminComponent(this.ui));
-		this.ui.requestRender();
-	}
-
-	private handleDementedDelves(): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new EarendilAnnouncementComponent());
-		this.ui.requestRender();
-	}
-
-	private handleDaxnuts(): void {
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new DaxnutsComponent(this.ui));
-		this.ui.requestRender();
-	}
-
-	private checkDaxnutsEasterEgg(model: { provider: string; id: string }): void {
-		if (model.provider === "opencode" && model.id.toLowerCase().includes("kimi-k2.5")) {
-			this.handleDaxnuts();
-		}
-	}
-
 	private async handleBashCommand(command: string, excludeFromContext = false): Promise<void> {
 		const extensionRunner = this.session.extensionRunner;
 
@@ -6636,6 +6773,8 @@ export class InteractiveMode {
 		this.clearExtensionTerminalInputListeners();
 		this.footer.dispose();
 		this.footerDataProvider.dispose();
+		this.gitStatusTracker.dispose();
+		this.unsubscribeMidnightStatus?.();
 		if (this.unsubscribe) {
 			this.unsubscribe();
 		}

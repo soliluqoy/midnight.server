@@ -48,6 +48,7 @@ export interface RetrySettings {
 
 export type TuiMode = RendererTuiMode;
 export type FullscreenExitOutput = "transcript" | "resume-hint";
+export type SidebarMode = "auto" | "always" | "hidden";
 
 export interface TerminalSettings {
 	showImages?: boolean; // default: true (only relevant if terminal supports images)
@@ -155,6 +156,7 @@ export interface Settings {
 	fullscreenExitOutput?: FullscreenExitOutput; // default: "transcript"; no effect in regular TUI mode
 	fullscreenScrollbar?: ScrollViewScrollbar; // default: "auto"; no effect in regular TUI mode
 	fullscreenCopyOnSelect?: boolean; // default: true; no effect in regular TUI mode
+	sidebar?: SidebarMode; // default: "auto" (shown when the terminal is wide enough); no effect in regular TUI mode
 }
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {
@@ -1220,7 +1222,7 @@ export class SettingsManager {
 		if (this.settings.terminal?.clearOnShrink !== undefined) {
 			return this.settings.terminal.clearOnShrink;
 		}
-		return process.env.PI_CLEAR_ON_SHRINK === "1";
+		return process.env.MIDNIGHT_SERVER_CLEAR_ON_SHRINK === "1";
 	}
 
 	setClearOnShrink(enabled: boolean): void {
@@ -1283,6 +1285,17 @@ export class SettingsManager {
 	setFullscreenCopyOnSelect(enabled: boolean): void {
 		this.globalSettings.fullscreenCopyOnSelect = enabled;
 		this.markModified("fullscreenCopyOnSelect");
+		this.save();
+	}
+
+	getSidebarMode(): SidebarMode {
+		const mode = this.settings.sidebar;
+		return mode === "always" || mode === "hidden" ? mode : "auto";
+	}
+
+	setSidebarMode(mode: SidebarMode): void {
+		this.globalSettings.sidebar = mode;
+		this.markModified("sidebar");
 		this.save();
 	}
 
@@ -1350,7 +1363,7 @@ export class SettingsManager {
 	}
 
 	getShowHardwareCursor(): boolean {
-		return this.settings.showHardwareCursor ?? process.env.PI_HARDWARE_CURSOR === "1";
+		return this.settings.showHardwareCursor ?? process.env.MIDNIGHT_SERVER_HARDWARE_CURSOR === "1";
 	}
 
 	setShowHardwareCursor(enabled: boolean): void {

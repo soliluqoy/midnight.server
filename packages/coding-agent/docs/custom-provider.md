@@ -30,7 +30,7 @@ See these complete provider examples:
 
 ## Quick Reference
 
-Extensions can register either a complete pi-ai `Provider` or use the legacy provider-config form. Prefer a complete provider when custom authentication, filtering, refresh, or streaming behavior is required. Pi composes `models.json` overrides above registered native providers.
+Extensions can register either a complete pi-ai `Provider` or use the legacy provider-config form. Prefer a complete provider when custom authentication, filtering, refresh, or streaming behavior is required. midnight.server composes `models.json` overrides above registered native providers.
 
 ```typescript
 import { createProvider, openAICompletionsApi } from "@earendil-works/pi-ai";
@@ -88,7 +88,7 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
-The extension factory can also be `async`. For dynamic model discovery, fetch and register models in the factory instead of `session_start`. pi waits for the factory before startup continues, so the provider is available during interactive startup and to `pi --list-models`.
+The extension factory can also be `async`. For dynamic model discovery, fetch and register models in the factory instead of `session_start`. midnight.server waits for the factory before startup continues, so the provider is available during interactive startup and to `midnight.server --list-models`.
 
 ## Override Existing Provider
 
@@ -382,7 +382,7 @@ interface OAuthLoginCallbacks {
 
 ### OAuthCredentials
 
-Credentials are persisted in `~/.pi/agent/auth.json`:
+Credentials are persisted in `~/.midnight.server/agent/auth.json`:
 
 ```typescript
 interface OAuthCredentials {
@@ -572,14 +572,14 @@ calculateCost(model, output.usage);
 
 ### Context Overflow Errors
 
-When a request exceeds the model's context window, pi can recover automatically by compacting the conversation and retrying. This recovery only kicks in if pi recognizes the failure as an overflow.
+When a request exceeds the model's context window, midnight.server can recover automatically by compacting the conversation and retrying. This recovery only kicks in if midnight.server recognizes the failure as an overflow.
 
 Detection runs on the finalized assistant message:
 
 - `stopReason === "error"`
-- `errorMessage` matches one of pi's known overflow patterns (see [`packages/ai/src/utils/overflow.ts`](https://github.com/earendil-works/pi/blob/main/packages/ai/src/utils/overflow.ts))
+- `errorMessage` matches one of midnight.server's known overflow patterns (see [`packages/ai/src/utils/overflow.ts`](https://github.com/earendil-works/pi/blob/main/packages/ai/src/utils/overflow.ts))
 
-If your provider returns overflow errors with a message pi does not recognize, normalize the error from the same extension that registers the provider. Use a `message_end` handler to rewrite the assistant message so its `errorMessage` starts with a phrase pi recognizes. The generic fallback `context_length_exceeded` is the safest choice.
+If your provider returns overflow errors with a message midnight.server does not recognize, normalize the error from the same extension that registers the provider. Use a `message_end` handler to rewrite the assistant message so its `errorMessage` starts with a phrase midnight.server recognizes. The generic fallback `context_length_exceeded` is the safest choice.
 
 ```typescript
 const MY_PROVIDER_OVERFLOW_PATTERN = /your provider's overflow phrase/i;
@@ -611,7 +611,7 @@ export default function (pi: ExtensionAPI) {
 }
 ```
 
-`message_end` runs before pi tracks the assistant message for auto-compaction, so the rewritten `errorMessage` is what pi checks. With this in place, pi will:
+`message_end` runs before midnight.server tracks the assistant message for auto-compaction, so the rewritten `errorMessage` is what midnight.server checks. With this in place, midnight.server will:
 
 1. Detect the overflow from `errorMessage`.
 2. Drop the failed assistant message from live context.
@@ -621,7 +621,7 @@ export default function (pi: ExtensionAPI) {
 Guard the rewrite carefully:
 
 - Scope it to your provider (`message.provider` and `ctx.model?.provider`) so unrelated errors from other providers are untouched.
-- Match a provider-specific pattern, not pi's generic overflow patterns. Rewriting rate-limit or throttling errors (`rate limit`, `too many requests`) would falsely trigger compaction instead of pi's normal retry-with-backoff path.
+- Match a provider-specific pattern, not midnight.server's generic overflow patterns. Rewriting rate-limit or throttling errors (`rate limit`, `too many requests`) would falsely trigger compaction instead of midnight.server's normal retry-with-backoff path.
 - Skip when `errorMessage` already includes `context_length_exceeded` so the handler is idempotent.
 
 ### Registration

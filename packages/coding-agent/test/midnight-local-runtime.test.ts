@@ -78,6 +78,7 @@ describe("mode selection", () => {
 		expect(runtime.mode).toBe("default");
 		expect(runtime.args).toEqual(args);
 		expect(runtime.extensionFactories.map((factory) => factory.name)).toEqual([
+			"midnight-session-title",
 			"midnight-delegate",
 			"midnight-drift-watch",
 		]);
@@ -101,7 +102,10 @@ describe("mode selection", () => {
 			"hello",
 		]);
 		expect(runtime.args).not.toContain("--offline");
-		expect(runtime.extensionFactories.map((factory) => factory.name)).toEqual(["midnight-local"]);
+		expect(runtime.extensionFactories.map((factory) => factory.name)).toEqual([
+			"midnight-local",
+			"midnight-session-title",
+		]);
 		await runtime.stop();
 		expect(stops).toHaveLength(1);
 	});
@@ -110,6 +114,7 @@ describe("mode selection", () => {
 		const runtime = await prepareLocalRuntime(["task"], { modelRuntime: await configuredModelRuntime() });
 		expect(runtime.args).toEqual(["task"]);
 		expect(runtime.extensionFactories.map((factory) => factory.name)).toEqual([
+			"midnight-session-title",
 			"midnight-delegate",
 			"midnight-drift-watch",
 		]);
@@ -122,7 +127,10 @@ describe("mode selection", () => {
 			modelRuntime: await unconfiguredModelRuntime(),
 		});
 		expect(runtime.mode).toBe("hybrid");
-		expect(runtime.extensionFactories.map((factory) => factory.name)).toEqual(["midnight-local"]);
+		expect(runtime.extensionFactories.map((factory) => factory.name)).toEqual([
+			"midnight-local",
+			"midnight-session-title",
+		]);
 	});
 
 	it("falls through to ordinary hybrid behavior, without throwing, when the local model isn't installed", async () => {
@@ -133,6 +141,7 @@ describe("mode selection", () => {
 		});
 		expect(runtime.args).toEqual(["task"]);
 		expect(runtime.extensionFactories.map((factory) => factory.name)).toEqual([
+			"midnight-session-title",
 			"midnight-delegate",
 			"midnight-drift-watch",
 		]);
@@ -169,7 +178,10 @@ describe("mode selection", () => {
 			"-p",
 			"hello",
 		]);
-		expect(runtime.extensionFactories).toHaveLength(1);
+		expect(runtime.extensionFactories.map((factory) => factory.name)).toEqual([
+			"midnight-local",
+			"midnight-session-title",
+		]);
 		await runtime.stop();
 		expect(stops).toHaveLength(1);
 	});
@@ -189,6 +201,7 @@ describe("mode selection", () => {
 		});
 		expect(runtime.args).toEqual(["task"]);
 		expect(runtime.extensionFactories.map((factory) => factory.name)).toEqual([
+			"midnight-session-title",
 			"midnight-delegate",
 			"midnight-drift-watch",
 		]);
