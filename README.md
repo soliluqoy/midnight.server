@@ -4,6 +4,21 @@ A native Windows coding CLI and terminal UI built from a modified [Pi](https://g
 
 **Status: pre-release.** Local mode, hybrid delegation, the Windows build and the offline package work and were verified on one Windows 10 laptop (CPU only). The quality evaluation, GPU backends, signing, update path and clean-VM qualification are not done. See [implementation status](docs/IMPLEMENTATION_STATUS.md).
 
+## Features
+
+- **Local model.** MiniCPM5-2B Q8_0 runs entirely on your machine through a bundled, SHA-256-pinned llama.cpp engine. No account, network, or GPU required.
+- **Hybrid delegation.** Your configured provider stays in charge and gets a `delegate_local` tool to hand small, bounded, read-only jobs to the local model, so it doesn't spend cloud tokens on cheap lookups.
+- **Drift watch.** In hybrid mode, the local model periodically judges whether the parent model is still working the stated goal and injects a one- or two-sentence reminder only when it has drifted or gone off task. Runs in the background on a turn-count-or-token-growth cadence with a cooldown between nudges; never blocks the agent loop.
+- **Direct helper command.** `midnight.server helper <summarize|classify|inspect|plan|patch> "question" file...` runs one task locally, with no provider configured at all.
+- **Workspace-confined, read-only.** The helper only reads files it is explicitly given, resolved and confined to the workspace (symlinks, junctions, `..`, other drives and UNC paths all rejected). It has no shell tool and cannot write.
+- **Read-only git context.** The helper can run `status`, `diff`, `log`, `show`, or `blame` itself, with a fixed argv (never a shell) and byte-capped output, to answer questions about history without any write access.
+- **Patch proposals, never applied.** `patch` tasks return an exact-match, evidence-backed unified diff for you to review; the helper never writes to disk.
+- **Verified, resumable downloads.** Model and engine downloads resume, are pinned by SHA-256, and are never used unverified.
+- **Process isolation.** The engine runs under a Windows Job Object owned by the CLI, bound to loopback with a random per-session key, and exits with its descendants when the CLI exits, including after a crash.
+- **Diagnostics.** `doctor [--smoke]`, `model status|verify|fetch`, `engine status|fetch` check the install and, with `--smoke`, start the engine and generate a real reply.
+- **Native Windows.** PowerShell is the default shell tool; no Node.js, Python, WSL, or Git Bash is needed to run it.
+- **Offline packaging.** The model-included archive needs no network at all once downloaded.
+
 ## What it does
 
 | Mode | Command | Behavior |
@@ -15,6 +30,16 @@ A native Windows coding CLI and terminal UI built from a modified [Pi](https://g
 The helper (`delegate_local`, `helper`) reads only the workspace files it is given. It has no shell or tools, and it returns a schema-checked result with line evidence. `patch` tasks return a unified diff that is **not applied**. It can also run one read-only git operation itself (`status`, `diff`, `log`, `show`, `blame`) with a fixed argv, never a shell — never anything that mutates the repository.
 
 The engine is the pinned llama.cpp `b11166` CPU build. It runs as a child process under a Windows Job Object owned by the CLI, bound to `127.0.0.1` and protected by a random per-session key. It exits when the CLI exits, including after a crash.
+
+## Best way to use it
+
+- **Default (hybrid) for daily coding.** Just run `midnight.server`. Your configured provider leads and automatically gets `delegate_local` and the drift watcher — there is nothing to opt into.
+- **`--local` when you want zero network calls**: offline, air-gapped, or reviewing code you don't want leaving the machine. It's a 2B model, so expect it to be slower and weaker than a cloud model on multi-step work.
+- **`helper` for one-off questions** when a full session is overkill: `midnight.server helper inspect "why does this throw?" src/foo.ts`. No provider needed, and faster than starting an agent loop.
+- **Keep helper inputs small.** It answers best under roughly 6 KB of source per call; a 12 KB file was measured to return a wrong answer instead of escalating (see [implementation status](docs/IMPLEMENTATION_STATUS.md)). Point it at the specific file or function rather than the whole repo.
+- **Treat `patch` output as a proposal.** It's an unapplied diff built from exact-match text edits — read it before applying it yourself; the 2B model can be wrong (see [measurements](docs/benchmarks/cpu-i7-8650u.md)).
+- **Tune the drift watcher if it's too noisy or too quiet.** `MIDNIGHT_SERVER_DRIFTWATCH_TURNS`/`_TOKENS` control how often it checks, `_COOLDOWN` controls how often it may speak up, and `MIDNIGHT_SERVER_DRIFTWATCH=0` turns it off.
+- **Run `doctor --smoke` after install** to confirm the model, engine, and process host all work end to end before relying on it mid-task.
 
 ## Install
 
