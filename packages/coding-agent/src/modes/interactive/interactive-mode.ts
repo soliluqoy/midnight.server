@@ -94,6 +94,7 @@ import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
+import { collectSessionFileChanges } from "../../core/session-file-changes.ts";
 import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
 import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
@@ -103,6 +104,7 @@ import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
+import { readWorkspaceSnapshot } from "../../core/workspace-files.ts";
 import { getMidnightStatus, onMidnightStatusChange, updateMidnightStatus } from "../../midnight/status.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
@@ -127,6 +129,8 @@ import { DynamicBorder } from "./components/dynamic-border.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
+import { EXPLORER_MIN_TERMINAL_WIDTH, EXPLORER_WIDTH, FileExplorerComponent } from "./components/file-explorer.ts";
+import { FilePreviewComponent, loadFilePreview } from "./components/file-preview.ts";
 import { FooterComponent, formatTokens } from "./components/footer.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
@@ -398,6 +402,11 @@ export class InteractiveMode {
 	private sidebar: SidebarComponent;
 	/** Session-only sidebar override from the toggle key; undefined follows the `sidebar` setting. */
 	private sidebarOverride: boolean | undefined;
+	private explorer: FileExplorerComponent;
+	/** Session-only explorer override from the toggle key; undefined follows the `explorer` setting. */
+	private explorerOverride: boolean | undefined;
+	/** Increments per workspace read so a slow, older read never replaces a newer one. */
+	private explorerGeneration = 0;
 	private unsubscribeMidnightStatus: (() => void) | undefined;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
@@ -595,6 +604,24 @@ export class InteractiveMode {
 			gitStatus: this.gitStatusTracker,
 			getHeight: () => this.ui.terminal.rows,
 			agentModeKey: () => keyText("app.agentMode.toggle") || undefined,
+		});
+		this.explorer = new FileExplorerComponent({
+			rootName: () => path.basename(this.sessionManager.getCwd()) || this.sessionManager.getCwd(),
+			sessionChanges: () =>
+				new Set(
+					collectSessionFileChanges(this.sessionManager.getEntries(), this.sessionManager.getCwd()).map(
+						(change) => change.path,
+					),
+				),
+			getHeight: () => this.ui.terminal.rows,
+			onOpen: (filePath) => this.insertFileReference(filePath),
+			onPreview: (filePath) => this.showFilePreview(filePath),
+			onExit: () => this.focusEditorFromExplorer(),
+			onToggle: () => this.toggleExplorer(),
+			onPassthrough: (data) => {
+				this.focusEditorFromExplorer();
+				this.editor.handleInput?.(data);
+			},
 		});
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerContainer = new Container();
@@ -920,6 +947,11 @@ export class InteractiveMode {
 				width: SIDEBAR_WIDTH,
 				visible: (layoutViewport) => this.isSidebarVisible(layoutViewport.width),
 			},
+			explorer: {
+				component: this.explorer,
+				width: EXPLORER_WIDTH,
+				visible: (layoutViewport) => this.isExplorerVisible(layoutViewport.width),
+			},
 		});
 		this.transcriptScrollView = viewport.transcript;
 		this.fullscreenLayoutRoot = viewport.root;
@@ -982,6 +1014,7 @@ export class InteractiveMode {
 				keyHint("app.agentMode.toggle", "to switch plan/build (empty editor)"),
 				hint("app.commandPalette", "for the command palette"),
 				hint("app.sidebar.toggle", "to toggle the sidebar (fullscreen)"),
+				hint("app.explorer.toggle", "to browse files (fullscreen)"),
 			].join("\n");
 			const compactInstructions = [
 				hint("app.interrupt", "interrupt"),
@@ -1049,8 +1082,10 @@ export class InteractiveMode {
 		// Set up git branch watcher (uses provider instead of footer)
 		this.footerDataProvider.onBranchChange(() => {
 			void this.gitStatusTracker.refresh();
+			this.refreshExplorer();
 			this.ui.requestRender();
 		});
+		this.refreshExplorer();
 		this.gitStatusTracker.onChange(() => this.ui.requestRender());
 		void this.gitStatusTracker.refresh();
 		this.unsubscribeMidnightStatus = onMidnightStatusChange(() => {
@@ -2003,6 +2038,7 @@ export class InteractiveMode {
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
 		this.gitStatusTracker.setCwd(this.sessionManager.getCwd());
+		this.refreshExplorer();
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 		this.outputPad = this.settingsManager.getOutputPad();
 		this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
@@ -2918,6 +2954,73 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	private isExplorerVisible(terminalWidth: number): boolean {
+		if (this.explorerOverride !== undefined) return this.explorerOverride;
+		const mode = this.settingsManager.getExplorerMode();
+		return mode === "always" || (mode === "auto" && terminalWidth >= EXPLORER_MIN_TERMINAL_WIDTH);
+	}
+
+	/** Hidden: show and focus. Visible without focus: focus. Focused: hide and return to the prompt. */
+	private toggleExplorer(): void {
+		if (this.ui.mode !== "fullscreen") {
+			this.showStatus("The file explorer is available in fullscreen mode (/settings → TUI mode)");
+			return;
+		}
+		if (this.explorer.focused) {
+			this.explorerOverride = false;
+			this.focusEditorFromExplorer();
+			return;
+		}
+		if (!this.isExplorerVisible(this.ui.terminal.columns)) {
+			this.explorerOverride = true;
+			this.refreshExplorer();
+		}
+		this.ui.setFocus(this.explorer);
+		this.ui.requestRender();
+	}
+
+	private focusEditorFromExplorer(): void {
+		this.ui.setFocus(this.editor);
+		this.ui.requestRender();
+	}
+
+	/** Re-read the workspace tree and git marks, only while the explorer can be seen. */
+	private refreshExplorer(): void {
+		if (this.ui.mode !== "fullscreen" || !this.isExplorerVisible(this.ui.terminal.columns)) return;
+		const generation = ++this.explorerGeneration;
+		void readWorkspaceSnapshot(this.sessionManager.getCwd()).then((snapshot) => {
+			if (generation !== this.explorerGeneration) return;
+			this.explorer.setSnapshot(snapshot);
+			this.ui.requestRender();
+		});
+	}
+
+	/** Add `@path` to the prompt, the same form the `@` autocomplete produces, and focus the prompt. */
+	private insertFileReference(filePath: string): void {
+		const reference = filePath.includes(" ") ? `@"${filePath}"` : `@${filePath}`;
+		const text = this.editor.getText();
+		const separator = text.length > 0 && !/\s$/.test(text) ? " " : "";
+		this.editor.insertTextAtCursor?.(`${separator}${reference} `);
+		this.focusEditorFromExplorer();
+	}
+
+	private showFilePreview(filePath: string): void {
+		const content = loadFilePreview(path.join(this.sessionManager.getCwd(), filePath));
+		let handle: OverlayHandle | undefined;
+		const preview = new FilePreviewComponent({
+			path: filePath,
+			content,
+			getHeight: () => Math.max(5, Math.floor(this.ui.terminal.rows * 0.8)),
+			onClose: () => handle?.hide(),
+			onInsert: () => {
+				handle?.hide();
+				this.insertFileReference(filePath);
+			},
+		});
+		handle = this.ui.showOverlay(preview, { width: "80%", minWidth: 40, anchor: "center" });
+		this.ui.requestRender();
+	}
+
 	private toggleAgentMode(): void {
 		const next = getMidnightStatus().agentMode === "plan" ? "build" : "plan";
 		updateMidnightStatus({ agentMode: next });
@@ -2947,6 +3050,12 @@ export class InteractiveMode {
 				label: "Toggle sidebar",
 				description: withKey("Fullscreen mode only", "app.sidebar.toggle"),
 				keywords: "sidebar panel",
+			},
+			{
+				id: "action:explorer",
+				label: "Browse files",
+				description: withKey("File explorer, fullscreen mode only", "app.explorer.toggle"),
+				keywords: "explorer files tree browse",
 			},
 			{
 				id: "action:model",
@@ -3007,6 +3116,7 @@ export class InteractiveMode {
 	private runCommandPaletteEntry(id: string): void {
 		if (id === "action:agent-mode") this.toggleAgentMode();
 		else if (id === "action:sidebar") this.toggleSidebar();
+		else if (id === "action:explorer") this.toggleExplorer();
 		else if (id === "action:model") this.showModelSelector();
 		else if (id === "action:local-status") {
 			const status = getMidnightStatus();
@@ -3075,6 +3185,7 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
 		this.defaultEditor.onAction("app.agentMode.toggle", () => this.toggleAgentMode());
 		this.defaultEditor.onAction("app.sidebar.toggle", () => this.toggleSidebar());
+		this.defaultEditor.onAction("app.explorer.toggle", () => this.toggleExplorer());
 		this.defaultEditor.onAction("app.commandPalette", () => this.showCommandPalette());
 
 		this.defaultEditor.onChange = (text: string) => {
@@ -3541,6 +3652,7 @@ export class InteractiveMode {
 				}
 				this.pendingTools.clear();
 				void this.gitStatusTracker.refresh();
+				this.refreshExplorer();
 
 				this.ui.requestRender();
 				break;
@@ -4770,6 +4882,7 @@ export class InteractiveMode {
 					fullscreenExitOutput: this.settingsManager.getFullscreenExitOutput(),
 					fullscreenScrollbar: this.settingsManager.getFullscreenScrollbar(),
 					sidebar: this.settingsManager.getSidebarMode(),
+					explorer: this.settingsManager.getExplorerMode(),
 					fullscreenCopyOnSelect: this.settingsManager.getFullscreenCopyOnSelect(),
 					warnings: this.settingsManager.getWarnings(),
 				},
@@ -4946,6 +5059,12 @@ export class InteractiveMode {
 					onSidebarChange: (mode) => {
 						this.settingsManager.setSidebarMode(mode);
 						this.sidebarOverride = undefined;
+						this.ui.requestRender();
+					},
+					onExplorerChange: (mode) => {
+						this.settingsManager.setExplorerMode(mode);
+						this.explorerOverride = undefined;
+						this.refreshExplorer();
 						this.ui.requestRender();
 					},
 					onFullscreenCopyOnSelectChange: (enabled) => {

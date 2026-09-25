@@ -131,6 +131,10 @@ This routing remains configurable through the ordinary action bindings. For exam
 | `app.agentMode.toggle` | `tab` | Switch between plan mode (read-only tools) and build mode. Only when the editor is empty and no autocomplete is open; otherwise Tab completes as usual |
 | `app.commandPalette` | `alt+x` | Open the command palette |
 | `app.sidebar.toggle` | `alt+s` | Show or hide the session sidebar (fullscreen mode) |
+| `app.explorer.toggle` | `alt+e` | Show and focus the file explorer; when it already has focus, hide it (fullscreen mode) |
+| `app.explorer.expand` | `right` | File explorer: expand a folder, or preview a file |
+| `app.explorer.collapse` | `left` | File explorer: collapse a folder, or go to its parent |
+| `app.explorer.preview` | `space` | File explorer: preview the selected file |
 
 ### Sessions
 

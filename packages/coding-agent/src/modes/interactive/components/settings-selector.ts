@@ -86,6 +86,7 @@ export interface SettingsConfig {
 	fullscreenExitOutput: FullscreenExitOutput;
 	fullscreenScrollbar: ScrollViewScrollbar;
 	sidebar: SidebarMode;
+	explorer: SidebarMode;
 	fullscreenCopyOnSelect: boolean;
 	warnings: WarningSettings;
 }
@@ -124,6 +125,7 @@ export interface SettingsCallbacks {
 	onFullscreenExitOutputChange: (output: FullscreenExitOutput) => void;
 	onFullscreenScrollbarChange: (mode: ScrollViewScrollbar) => void;
 	onSidebarChange: (mode: SidebarMode) => void;
+	onExplorerChange: (mode: SidebarMode) => void;
 	onFullscreenCopyOnSelectChange: (enabled: boolean) => void;
 	onWarningsChange: (warnings: WarningSettings) => void;
 	onCancel: () => void;
@@ -706,6 +708,14 @@ export class SettingsSelectorComponent extends Container {
 				values: ["auto", "always", "hidden"],
 			},
 			{
+				id: "explorer",
+				label: "File explorer",
+				description:
+					"File explorer in fullscreen mode: auto shows it only when the terminal is at least 150 columns wide",
+				currentValue: config.explorer,
+				values: ["auto", "always", "hidden"],
+			},
+			{
 				id: "fullscreen-copy-on-select",
 				label: "Fullscreen copy on select",
 				description: "Automatically copy selected text in fullscreen mode; disable to copy selections with Ctrl+X",
@@ -935,6 +945,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "sidebar":
 						callbacks.onSidebarChange(newValue as SidebarMode);
+						break;
+					case "explorer":
+						callbacks.onExplorerChange(newValue as SidebarMode);
 						break;
 					case "fullscreen-copy-on-select":
 						callbacks.onFullscreenCopyOnSelectChange(newValue === "true");

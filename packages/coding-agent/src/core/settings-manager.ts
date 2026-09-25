@@ -157,6 +157,7 @@ export interface Settings {
 	fullscreenScrollbar?: ScrollViewScrollbar; // default: "auto"; no effect in regular TUI mode
 	fullscreenCopyOnSelect?: boolean; // default: true; no effect in regular TUI mode
 	sidebar?: SidebarMode; // default: "auto" (shown when the terminal is wide enough); no effect in regular TUI mode
+	explorer?: SidebarMode; // default: "auto" (shown only on very wide terminals); no effect in regular TUI mode
 }
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {
@@ -1296,6 +1297,17 @@ export class SettingsManager {
 	setSidebarMode(mode: SidebarMode): void {
 		this.globalSettings.sidebar = mode;
 		this.markModified("sidebar");
+		this.save();
+	}
+
+	getExplorerMode(): SidebarMode {
+		const mode = this.settings.explorer;
+		return mode === "always" || mode === "hidden" ? mode : "auto";
+	}
+
+	setExplorerMode(mode: SidebarMode): void {
+		this.globalSettings.explorer = mode;
+		this.markModified("explorer");
 		this.save();
 	}
 

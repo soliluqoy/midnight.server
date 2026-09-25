@@ -71,6 +71,7 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `fullscreenScrollbar` | string | `"auto"` | Fullscreen transcript scrollbar: `"auto"` shows it temporarily while scrolling or while the pointer is over its rightmost-column track, `"always"` reserves that column and keeps it visible, and `"hidden"` hides it. Has no effect in regular TUI mode |
 | `fullscreenCopyOnSelect` | boolean | `true` | Automatically copy selected text in fullscreen mode. When disabled, selections stay highlighted and `Ctrl+X` copies the active selection |
 | `sidebar` | string | `"auto"` | Session sidebar in fullscreen mode (branch, git status, context, model, local model, modified files): `"auto"` shows it when the terminal is at least 110 columns wide, `"always"` keeps it visible, `"hidden"` hides it. `app.sidebar.toggle` overrides it for the current session. Has no effect in regular TUI mode |
+| `explorer` | string | `"auto"` | File explorer on the left in fullscreen mode: `"auto"` shows it when the terminal is at least 150 columns wide, `"always"` keeps it visible, `"hidden"` hides it. `app.explorer.toggle` overrides it for the current session. Has no effect in regular TUI mode |
 
 For VS Code, include `--wait` so midnight.server resumes after the editor exits:
 

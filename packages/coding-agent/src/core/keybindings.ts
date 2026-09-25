@@ -31,6 +31,10 @@ export interface AppKeybindings {
 	"app.clipboard.pasteImage": true;
 	"app.agentMode.toggle": true;
 	"app.sidebar.toggle": true;
+	"app.explorer.toggle": true;
+	"app.explorer.expand": true;
+	"app.explorer.collapse": true;
+	"app.explorer.preview": true;
 	"app.commandPalette": true;
 	"app.session.new": true;
 	"app.session.tree": true;
@@ -151,6 +155,16 @@ export const KEYBINDINGS = {
 		description: "Switch between plan and build mode (empty editor)",
 	},
 	"app.sidebar.toggle": { defaultKeys: "alt+s", description: "Toggle sidebar (fullscreen mode)" },
+	"app.explorer.toggle": {
+		defaultKeys: "alt+e",
+		description: "Show and focus the file explorer, or hide it when focused (fullscreen mode)",
+	},
+	"app.explorer.expand": { defaultKeys: "right", description: "Expand a folder in the file explorer" },
+	"app.explorer.collapse": {
+		defaultKeys: "left",
+		description: "Collapse a folder or go to its parent in the file explorer",
+	},
+	"app.explorer.preview": { defaultKeys: "space", description: "Preview the selected file in the file explorer" },
 	"app.commandPalette": { defaultKeys: "alt+x", description: "Open command palette" },
 	"app.session.new": { defaultKeys: [], description: "Start a new session" },
 	"app.session.tree": { defaultKeys: [], description: "Open session tree" },

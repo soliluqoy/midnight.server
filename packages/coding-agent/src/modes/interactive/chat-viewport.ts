@@ -3,6 +3,7 @@ import {
 	HStack,
 	ScrollView,
 	type ScrollViewScrollbar,
+	type StackEntry,
 	type StackEntryOptions,
 	VStack,
 } from "@earendil-works/pi-tui";
@@ -19,11 +20,19 @@ export interface ChatViewportOptions {
 	readonly scrollbarTrackStyle?: (text: string) => string;
 	readonly scrollbarThumbStyle?: (text: string) => string;
 	/** Fixed-width column to the right of the transcript and input dock. */
-	readonly sidebar?: {
-		readonly component: Component;
-		readonly width: number;
-		readonly visible: NonNullable<StackEntryOptions["visible"]>;
-	};
+	readonly sidebar?: ChatViewportColumn;
+	/** Fixed-width column to the left of the transcript and input dock. */
+	readonly explorer?: ChatViewportColumn;
+}
+
+export interface ChatViewportColumn {
+	readonly component: Component;
+	readonly width: number;
+	readonly visible: NonNullable<StackEntryOptions["visible"]>;
+}
+
+function columnEntry(column: ChatViewportColumn): StackEntry {
+	return { component: column.component, basis: column.width, grow: 0, shrink: 0, visible: column.visible };
 }
 
 export interface ChatViewport {
@@ -53,19 +62,14 @@ export function createChatViewport(options: ChatViewportOptions): ChatViewport {
 		{ component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
 		{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
 	]);
-	if (!options.sidebar) return { transcript, root: main };
+	if (!options.sidebar && !options.explorer) return { transcript, root: main };
 	return {
 		transcript,
 		root: new HStack(
 			[
+				...(options.explorer === undefined ? [] : [columnEntry(options.explorer)]),
 				{ component: main, basis: 0, grow: 1, shrink: 1, minSize: 20 },
-				{
-					component: options.sidebar.component,
-					basis: options.sidebar.width,
-					grow: 0,
-					shrink: 0,
-					visible: options.sidebar.visible,
-				},
+				...(options.sidebar === undefined ? [] : [columnEntry(options.sidebar)]),
 			],
 			{ gap: 1 },
 		),
