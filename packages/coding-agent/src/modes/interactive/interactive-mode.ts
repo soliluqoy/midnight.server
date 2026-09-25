@@ -998,7 +998,7 @@ export class InteractiveMode {
 			);
 			const onboarding = theme.fg(
 				"dim",
-				`${APP_NAME} can explain its own features and look up its docs. Ask it how to use or extend ${APP_NAME}.`,
+				`Built on pi (pi.dev). Ask ${APP_NAME} how to use or extend it; it reads its own docs to answer.`,
 			);
 			this.builtInHeader = new ExpandableText(
 				() => `${logo()}\n${compactInstructions}\n${compactOnboarding}\n\n${onboarding}`,

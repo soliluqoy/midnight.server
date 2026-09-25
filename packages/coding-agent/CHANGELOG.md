@@ -32,6 +32,7 @@
 
 ### Changed
 
+- The startup header credits pi: "Built on pi (pi.dev). Ask midnight.server how to use or extend it; it reads its own docs to answer."
 - `MIDNIGHT_SERVER_GPU_LAYERS` now defaults to the selected backend (0 on the CPU, every layer on a GPU), and the engine inherits `PATH` after its own directory so system-wide vendor runtimes load. An engine that exits during startup reports the end of its log in the error.
 - Rebranded user-facing text from Pi to midnight.server: startup header, system prompt, help text, messages, temporary file names, the `AI_AGENT` marker, and the bundled documentation.
 - Replaced the first-time setup logo with a crescent moon and prefixed the terminal title with `☾`.
