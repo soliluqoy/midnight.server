@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	checkForNewMidnightRelease,
 	checkForNewPiVersion,
 	comparePackageVersions,
 	formatVersionCheckError,
 	getLatestPiRelease,
 	getLatestPiVersion,
 	isNewerPackageVersion,
+	parseGitHubReleases,
 } from "../src/utils/version-check.ts";
 import { allowNetwork } from "./test-network-env.ts";
 
@@ -127,5 +129,55 @@ describe("version checks", () => {
 
 		await expect(getLatestPiVersion("1.2.3")).resolves.toBe("1.2.4");
 		expect(fetchMock).toHaveBeenCalledOnce();
+	});
+});
+
+describe("midnight.server release checks", () => {
+	const release = (tag: string, extra: Record<string, unknown> = {}) => ({
+		tag_name: tag,
+		html_url: `https://github.com/soliluqoy/midnight.server/releases/tag/${tag}`,
+		...extra,
+	});
+
+	it("picks the newest non-draft semver release, including pre-releases", () => {
+		expect(
+			parseGitHubReleases([
+				release("v0.1.0"),
+				release("v0.3.0", { draft: true }),
+				release("v0.2.0-beta.1", { prerelease: true }),
+				release("nightly"),
+			]),
+		).toEqual({
+			version: "0.2.0-beta.1",
+			url: "https://github.com/soliluqoy/midnight.server/releases/tag/v0.2.0-beta.1",
+		});
+		expect(parseGitHubReleases({ message: "Not Found" })).toBeUndefined();
+		expect(parseGitHubReleases([])).toBeUndefined();
+	});
+
+	it("reports only newer releases from the GitHub releases api", async () => {
+		const fetchMock = vi.fn(async () => Response.json([release("v0.2.0")]));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(checkForNewMidnightRelease("0.2.0")).resolves.toBeUndefined();
+		await expect(checkForNewMidnightRelease("0.1.0")).resolves.toEqual({
+			version: "0.2.0",
+			url: "https://github.com/soliluqoy/midnight.server/releases/tag/v0.2.0",
+		});
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://api.github.com/repos/soliluqoy/midnight.server/releases?per_page=10",
+			expect.anything(),
+		);
+	});
+
+	it("never throws and skips the request when version checks are disabled", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("fetch failed")));
+		await expect(checkForNewMidnightRelease("0.1.0")).resolves.toBeUndefined();
+
+		process.env.MIDNIGHT_SERVER_SKIP_VERSION_CHECK = "1";
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		await expect(checkForNewMidnightRelease("0.1.0")).resolves.toBeUndefined();
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });

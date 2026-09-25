@@ -107,3 +107,49 @@ export async function checkForNewPiVersion(currentVersion: string): Promise<Late
 		return undefined;
 	}
 }
+
+const MIDNIGHT_RELEASES_URL = "https://api.github.com/repos/soliluqoy/midnight.server/releases?per_page=10";
+
+export interface MidnightRelease {
+	version: string;
+	/** Release page to download from and read the notes. */
+	url: string;
+}
+
+/**
+ * Newest published release from a GitHub `/releases` response. Drafts and tags that
+ * are not semver (after an optional leading `v`) are skipped. Pre-releases count:
+ * `/releases/latest` would hide them, and midnight.server is pre-release for now.
+ */
+export function parseGitHubReleases(data: unknown): MidnightRelease | undefined {
+	if (!Array.isArray(data)) return undefined;
+	let newest: MidnightRelease | undefined;
+	for (const entry of data) {
+		if (typeof entry !== "object" || entry === null) continue;
+		const release = entry as { tag_name?: unknown; html_url?: unknown; draft?: unknown };
+		if (release.draft === true || typeof release.tag_name !== "string" || typeof release.html_url !== "string") {
+			continue;
+		}
+		const version = valid(release.tag_name.trim().replace(/^v/, ""));
+		if (!version) continue;
+		if (!newest || compare(version, newest.version) > 0) newest = { version, url: release.html_url };
+	}
+	return newest;
+}
+
+/** Startup update check against midnight.server's GitHub releases. Never throws. */
+export async function checkForNewMidnightRelease(currentVersion: string): Promise<MidnightRelease | undefined> {
+	if (process.env.MIDNIGHT_SERVER_SKIP_VERSION_CHECK || process.env.MIDNIGHT_SERVER_OFFLINE) return undefined;
+	try {
+		const response = await fetchWithRetry(
+			MIDNIGHT_RELEASES_URL,
+			{ headers: { "User-Agent": getPiUserAgent(currentVersion), accept: "application/vnd.github+json" } },
+			{ maxRetries: 0, timeoutMs: DEFAULT_VERSION_CHECK_TIMEOUT_MS },
+		);
+		if (!response.ok) return undefined;
+		const latest = parseGitHubReleases(await response.json());
+		return latest && isNewerPackageVersion(latest.version, currentVersion) ? latest : undefined;
+	} catch {
+		return undefined;
+	}
+}
