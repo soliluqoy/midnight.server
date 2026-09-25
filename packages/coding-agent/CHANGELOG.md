@@ -39,6 +39,8 @@
 
 ### Fixed
 
+- Fixed `--version`, `--help`, `--export`, `--list-models` and package/auth subcommands starting (and on a fresh install downloading) the local model when no provider is configured.
+- Fixed the startup update notice comparing against upstream Pi releases; it now checks midnight.server GitHub releases and links to the release page.
 - Fixed dotted environment variable names for the midnight.server config and session directories, and directed binary update instructions to the product repository.
 - Fixed mid-run threshold compaction silently skipping oversized trailing tool results ([#9740](https://github.com/earendil-works/pi/issues/9740)).
 - Fixed signal-terminated local shell commands being reported as successful with partial output ([#9577](https://github.com/earendil-works/pi/issues/9577) by [@BrendanJMurphy](https://github.com/BrendanJMurphy)).

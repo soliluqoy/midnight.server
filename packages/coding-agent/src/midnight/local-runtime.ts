@@ -18,6 +18,15 @@ export interface LocalRuntime {
 	stop(): Promise<void>;
 }
 
+/** Flags and subcommands that print something and exit without running a session. */
+const NON_SESSION_FLAGS = ["--help", "-h", "--version", "-v", "--export"];
+const NON_SESSION_COMMANDS = ["install", "remove", "uninstall", "update", "list", "config", "auth"];
+
+/** True for invocations that never start a session, so they must not start or download the local engine. */
+export function isNonSessionInvocation(args: string[]): boolean {
+	return NON_SESSION_COMMANDS.includes(args[0] ?? "") || args.some((arg) => NON_SESSION_FLAGS.includes(arg));
+}
+
 /** Flags that would pick a model other than the local one. */
 const MODEL_SELECTION_FLAGS = ["--provider", "--model", "--models", "--api-key"];
 
@@ -59,6 +68,9 @@ export async function prepareLocalRuntime(
 	options: { manager?: EngineManager; onStatus?: (message: string) => void; modelRuntime?: ModelRuntime } = {},
 ): Promise<LocalRuntime> {
 	const { mode, rest } = parseMidnightMode(args);
+	if (isNonSessionInvocation(rest)) {
+		return { mode, args: rest, extensionFactories: [], stop: async () => {} };
+	}
 
 	if (mode === "local") {
 		const conflict = rest.find((arg) => MODEL_SELECTION_FLAGS.includes(arg));
@@ -103,7 +115,8 @@ export async function prepareLocalRuntime(
 
 	// mode is "default" or "hybrid": try a silent, switchable local fallback only when the
 	// caller made no explicit provider/model choice and nothing else is configured.
-	const explicitChoice = rest.some((arg) => MODEL_SELECTION_FLAGS.includes(arg));
+	// --list-models only reports configured providers; it must not trigger the local fallback.
+	const explicitChoice = rest.some((arg) => MODEL_SELECTION_FLAGS.includes(arg) || arg === "--list-models");
 	let fallbackToLocal = false;
 	if (!explicitChoice) {
 		const modelRuntime =

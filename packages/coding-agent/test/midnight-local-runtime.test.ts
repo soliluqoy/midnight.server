@@ -73,7 +73,7 @@ function fakeManagerThatCannotSetUp(): { manager: EngineManager; stops: number[]
 
 describe("mode selection", () => {
 	it("respects an explicit model choice: no fallback, hybrid extensions still added", async () => {
-		const args = ["--help", "--model", "openai/gpt-4o"];
+		const args = ["-p", "hello", "--model", "openai/gpt-4o"];
 		const runtime = await prepareLocalRuntime(args, { modelRuntime: await unconfiguredModelRuntime() });
 		expect(runtime.mode).toBe("default");
 		expect(runtime.args).toEqual(args);
@@ -108,6 +108,27 @@ describe("mode selection", () => {
 		]);
 		await runtime.stop();
 		expect(stops).toHaveLength(1);
+	});
+
+	it("never starts or downloads the engine for version, help, subcommands, or model listing", async () => {
+		let starts = 0;
+		const manager = {
+			get: async () => {
+				starts++;
+				throw new Error("engine must not start");
+			},
+			stop: async () => {},
+		} as unknown as EngineManager;
+		for (const args of [["--version"], ["-h"], ["--local", "--help"], ["update", "--self"], ["auth", "status"]]) {
+			const runtime = await prepareLocalRuntime(args, { manager, modelRuntime: await unconfiguredModelRuntime() });
+			expect(runtime.extensionFactories).toEqual([]);
+		}
+		const listing = await prepareLocalRuntime(["--list-models"], {
+			manager,
+			modelRuntime: await unconfiguredModelRuntime(),
+		});
+		expect(listing.args).toEqual(["--list-models"]);
+		expect(starts).toBe(0);
 	});
 
 	it("does not fall back when a provider is already configured", async () => {
