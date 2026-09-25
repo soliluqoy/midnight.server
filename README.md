@@ -2,13 +2,15 @@
 
 A native Windows coding CLI and terminal UI built from a modified [Pi](https://github.com/soliluqoy/pi), with the MiniCPM5-2B Q8_0 model running on the same machine as a local model and helper.
 
+Its headline feature is **[drift watch](#drift-watch)**: while a cloud model does the work, the local model keeps checking, at no token cost, that it is still doing what you asked. When it isn't, the local model steps in with a short reminder.
+
 **Status: pre-release.** Local mode, hybrid delegation, the Windows build and the offline package work and were verified on one Windows 10 laptop (CPU only). The quality evaluation, GPU backends, signing, update path and clean-VM qualification are not done. See [implementation status](docs/IMPLEMENTATION_STATUS.md).
 
 ## Features
 
+- **Drift watch.** The local model keeps an eye on your cloud model during long sessions. It catches the model dropping a constraint you set, reversing an earlier decision, or wandering off task, and adds a one- or two-sentence correction. It runs in the background, is on by default, and uses no cloud tokens. [How it works](#drift-watch).
 - **Local model.** MiniCPM5-2B Q8_0 runs entirely on your machine through a bundled, SHA-256-pinned llama.cpp engine. No account, network, or GPU required.
 - **Hybrid delegation.** Your configured provider stays in charge and gets a `delegate_local` tool to hand small, bounded, read-only jobs to the local model, so it doesn't spend cloud tokens on cheap lookups.
-- **Drift watch.** In hybrid mode, the local model periodically judges whether the parent model is still working the stated goal and injects a one- or two-sentence reminder only when it has drifted or gone off task. Runs in the background on a turn-count-or-token-growth cadence with a cooldown between nudges; never blocks the agent loop.
 - **Direct helper command.** `midnight.server helper <summarize|classify|inspect|plan|patch> "question" file...` runs one task locally, with no provider configured at all.
 - **Workspace-confined, read-only.** The helper only reads files it is explicitly given, resolved and confined to the workspace (symlinks, junctions, `..`, other drives and UNC paths all rejected). It has no shell tool and cannot write.
 - **Read-only git context.** The helper can run `status`, `diff`, `log`, `show`, or `blame` itself, with a fixed argv (never a shell) and byte-capped output, to answer questions about history without any write access.
@@ -31,6 +33,45 @@ The helper (`delegate_local`, `helper`) reads only the workspace files it is giv
 
 The engine is the pinned llama.cpp `b11166` CPU build. It runs as a child process under a Windows Job Object owned by the CLI, bound to `127.0.0.1` and protected by a random per-session key. It exits when the CLI exits, including after a crash.
 
+## Drift watch
+
+**Problem.** In a long agent session, context piles up and the model tends to lose the thread. It drops a constraint you gave early on, reverses a decision it already made, or starts a side quest without saying so. You usually notice several turns later, after the tokens are spent and the diff has grown.
+
+**Example (illustrative).** You ask for a fix to the failing date-parsing test, with *"don't change the public API"*. Eight turns later the model has changed `parseDate`'s exported signature and is reworking the logger. Drift watch runs its check, decides the model is `drifting`, and adds this to the session:
+
+```
+[local focus check: drifting] The task said not to change the public API, but parseDate's exported signature was changed.
+```
+
+The cloud model receives this reminder with your next prompt and can correct course before it goes further.
+
+**How it works.**
+
+1. **When it runs.** It checks after every 6 assistant turns, or sooner if the context has grown by 4,000 tokens since the last check.
+2. **What it reads.** A read-only copy of the conversation with the middle cut out. It keeps the start (about 1.5 KB, where your goal and constraints usually are) and the most recent activity (about 8.5 KB).
+3. **What it decides.** MiniCPM, running with no tools, returns a schema-checked verdict: `on_track`, `drifting` (a constraint or earlier decision was dropped), or `off_task` (unrelated work). If it returns invalid JSON, it gets one retry.
+4. **What it does.** Nothing when the model is `on_track`. Otherwise it adds a short reminder naming the goal or constraint being missed. After a nudge it stays quiet for at least 4 turns, so it can't nag.
+
+**What it costs.**
+
+- **No cloud tokens for the check.** The check runs on the local model; the only thing added to the cloud model's context is the short reminder, and only when it fires.
+- **It never blocks you.** On a CPU laptop a check takes about 10-30 s, so it runs in the background and your session keeps going while it thinks.
+- **Zero setup.** The first check downloads the local model if it isn't installed yet.
+- **It stays out of the way when it can't run.** If the local model can't be set up, drift watch turns itself off for the rest of the session instead of showing errors.
+
+**When it's active.** It runs in default/hybrid mode, where a cloud model leads. It is off in `--local` sessions and when the session has fallen back to the local model, because there is no separate model to watch.
+
+**Tuning.**
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `MIDNIGHT_SERVER_DRIFTWATCH` | `1` | `0` turns it off (`delegate_local` is unaffected) |
+| `MIDNIGHT_SERVER_DRIFTWATCH_TURNS` | `6` | Check after this many assistant turns |
+| `MIDNIGHT_SERVER_DRIFTWATCH_TOKENS` | `4000` | Also check after this much context growth |
+| `MIDNIGHT_SERVER_DRIFTWATCH_COOLDOWN` | `4` | Minimum turns between two nudges |
+
+Lower the turn and token values to check more often, for example on long autonomous runs. Raise them if the checks slow your machine down. The 2B model judges drift with a limited view, so treat a nudge as a prompt to look, not a verdict.
+
 ## Best way to use it
 
 - **Default (hybrid) for daily coding.** Just run `midnight.server`. Your configured provider leads and automatically gets `delegate_local` and the drift watcher — there is nothing to opt into.
@@ -39,7 +80,7 @@ The engine is the pinned llama.cpp `b11166` CPU build. It runs as a child proces
 - **`helper` for one-off questions** when a full session is overkill: `midnight.server helper inspect "why does this throw?" src/foo.ts`. No provider needed, and faster than starting an agent loop.
 - **Keep helper inputs small.** It answers best under roughly 6 KB of source per call; a 12 KB file was measured to return a wrong answer instead of escalating (see [implementation status](docs/IMPLEMENTATION_STATUS.md)). Point it at the specific file or function rather than the whole repo.
 - **Treat `patch` output as a proposal.** It's an unapplied diff built from exact-match text edits — read it before applying it yourself; the 2B model can be wrong (see [measurements](docs/benchmarks/cpu-i7-8650u.md)).
-- **Tune the drift watcher if it's too noisy or too quiet.** `MIDNIGHT_SERVER_DRIFTWATCH_TURNS`/`_TOKENS` control how often it checks, `_COOLDOWN` controls how often it may speak up, and `MIDNIGHT_SERVER_DRIFTWATCH=0` turns it off.
+- **Leave drift watch on for long sessions.** Long sessions are where it pays off. When a nudge appears, check the constraint it names before you continue. If it fires too often or too rarely, see [tuning](#drift-watch).
 - **Run `doctor --smoke` after install** to confirm the model, engine, and process host all work end to end before relying on it mid-task.
 
 ## Install
