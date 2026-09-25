@@ -8,7 +8,12 @@ import { collectSessionFileChanges, countPatchLines } from "../src/core/session-
 import type { SessionEntry } from "../src/core/session-manager.ts";
 import agentModeExtension, { PLAN_MODE_TOOLS } from "../src/extensions/agent-mode.ts";
 import { cleanSessionTitle, generateSessionTitle } from "../src/midnight/session-title.ts";
-import { getMidnightStatus, updateMidnightStatus } from "../src/midnight/status.ts";
+import {
+	getMidnightStatus,
+	onMidnightStatusChange,
+	reportMidnightActivity,
+	updateMidnightStatus,
+} from "../src/midnight/status.ts";
 import { FooterComponent } from "../src/modes/interactive/components/footer.ts";
 import { describeDrift, describeGitStatus, SidebarComponent } from "../src/modes/interactive/components/sidebar.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
@@ -292,5 +297,40 @@ describe("sidebar and footer", () => {
 		expect(first).toContain("⎇ feature/sidebar ●3 ↑1");
 		expect(first).toContain("☾ hybrid · local ready");
 		for (const line of footer.render(40)) expect(visibleWidth(line)).toBeLessThanOrEqual(40);
+	});
+
+	it("drops to one line with the model when the sidebar is visible", () => {
+		updateMidnightStatus({ mode: "hybrid", engine: "ready" });
+		const footer = new FooterComponent(createSession(), createFooterData(), gitStatus, () => true);
+		const lines = footer.render(240).map(stripAnsi);
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toContain("⎇ feature/sidebar");
+		expect(lines[0]).toContain("claude-sonnet-5 • high");
+		expect(lines[0]).not.toContain("☾");
+	});
+
+	it("routes engine progress into the status while a UI is subscribed instead of writing to stderr", () => {
+		const writes: string[] = [];
+		const write = process.stderr.write;
+		process.stderr.write = ((chunk: string) => {
+			writes.push(chunk);
+			return true;
+		}) as typeof process.stderr.write;
+		const unsubscribe = onMidnightStatusChange(() => {});
+		try {
+			updateMidnightStatus({ mode: "hybrid", engine: "starting" });
+			reportMidnightActivity("Starting local engine...");
+			expect(writes).toEqual([]);
+			expect(getMidnightStatus().activity).toBe("Starting local engine...");
+			const footer = new FooterComponent(createSession(), createFooterData(), gitStatus);
+			expect(stripAnsi(footer.render(240)[0]!)).toContain("☾ hybrid · Starting local engine...");
+			unsubscribe();
+			reportMidnightActivity("Preparing local model...");
+			expect(writes).toEqual(["Preparing local model...\n"]);
+		} finally {
+			unsubscribe();
+			process.stderr.write = write;
+			updateMidnightStatus({ activity: undefined });
+		}
 	});
 });

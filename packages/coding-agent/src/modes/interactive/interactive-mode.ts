@@ -583,7 +583,12 @@ export class InteractiveMode {
 		this.editorContainer.addChild(this.editor as Component);
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
 		this.gitStatusTracker = new GitStatusTracker(this.sessionManager.getCwd());
-		this.footer = new FooterComponent(this.session, this.footerDataProvider, this.gitStatusTracker);
+		this.footer = new FooterComponent(
+			this.session,
+			this.footerDataProvider,
+			this.gitStatusTracker,
+			() => this.ui.mode === "fullscreen" && this.isSidebarVisible(this.ui.terminal.columns),
+		);
 		this.sidebar = new SidebarComponent({
 			session: () => this.session,
 			footerData: this.footerDataProvider,

@@ -29,6 +29,8 @@ export interface MidnightStatus {
 	/** Undefined when drift watch is disabled or not active in this mode. */
 	drift?: DriftWatchState;
 	agentMode: AgentMode;
+	/** Latest local-engine progress message while it starts or downloads; cleared once it settles. */
+	activity?: string;
 }
 
 let status: MidnightStatus = { engine: "off", agentMode: "build" };
@@ -41,6 +43,19 @@ export function getMidnightStatus(): Readonly<MidnightStatus> {
 export function updateMidnightStatus(patch: Partial<MidnightStatus>): void {
 	status = { ...status, ...patch };
 	for (const listener of listeners) listener();
+}
+
+/**
+ * Report local-engine progress. While a UI is subscribed it owns the terminal, and a raw
+ * write would shift its screen and leave stale lines, so the message goes into the status
+ * for the UI to show. Without a UI (print mode, startup before the TUI) it goes to stderr.
+ */
+export function reportMidnightActivity(message: string): void {
+	if (listeners.size === 0) {
+		process.stderr.write(`${message}\n`);
+		return;
+	}
+	updateMidnightStatus({ activity: message });
 }
 
 /** Returns an unsubscribe function. */

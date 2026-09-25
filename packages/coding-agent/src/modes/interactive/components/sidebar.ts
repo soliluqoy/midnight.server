@@ -140,6 +140,7 @@ export class SidebarComponent implements Component {
 
 		heading("Local");
 		line(`${theme.fg("muted", "engine")} ${theme.fg("text", describeEngine(status.engine))}`);
+		if (status.engine === "starting" && status.activity) line(theme.fg("dim", status.activity));
 		const driftColor = status.drift?.lastVerdict && status.drift.lastVerdict !== "on_track" ? "warning" : "text";
 		line(`${theme.fg("muted", "drift")}  ${theme.fg(driftColor, describeDrift(status))}`);
 

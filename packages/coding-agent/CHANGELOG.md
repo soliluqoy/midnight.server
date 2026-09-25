@@ -40,9 +40,11 @@
 - Moved compaction, branch summarization, and retry spinners into the editor border alongside the working indicator. Custom editors use the same embedding opt-in for all status spinners.
 - Enabled strict-prefer JSON-schema sampling by default for built-in `read`, `bash`, `powershell`, `edit`, and `write` tools, without requiring `MIDNIGHT_SERVER_EXPERIMENTAL`. Extensions can re-register tool definitions with `constrainedSampling: false`.
 - Formatted Bash and PowerShell tool durations of at least one minute as minutes and seconds, with hours when needed ([#9628](https://github.com/earendil-works/pi/issues/9628)).
+- Fullscreen is now the default TUI mode, so the session sidebar shows on terminals at least 110 columns wide. Set `tuiMode` to `"regular"` (or pass `--tui-mode regular`) for the inline layout. While the sidebar is visible the footer shrinks to one line with the mode badge, path, branch and model.
 
 ### Fixed
 
+- Fixed a duplicated footer line (and a stray "Starting local engine..." line) when the local engine started during an interactive session: engine progress was written straight to stderr underneath the TUI. It now shows in the footer and sidebar.
 - Fixed `--version`, `--help`, `--export`, `--list-models` and package/auth subcommands starting (and on a fresh install downloading) the local model when no provider is configured.
 - Fixed the startup update notice comparing against upstream Pi releases; it now checks midnight.server GitHub releases and links to the release page.
 - Fixed dotted environment variable names for the midnight.server config and session directories, and directed binary update instructions to the product repository.

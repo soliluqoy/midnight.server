@@ -54,15 +54,19 @@ export class FooterComponent implements Component {
 	private session: AgentSession;
 	private footerData: ReadonlyFooterDataProvider;
 	private gitStatus: { getStatus(): GitStatusSummary | undefined } | undefined;
+	/** True while the sidebar shows usage and local-model state; the footer then drops to one line. */
+	private compact: () => boolean;
 
 	constructor(
 		session: AgentSession,
 		footerData: ReadonlyFooterDataProvider,
 		gitStatus?: { getStatus(): GitStatusSummary | undefined },
+		compact: () => boolean = () => false,
 	) {
 		this.session = session;
 		this.footerData = footerData;
 		this.gitStatus = gitStatus;
+		this.compact = compact;
 	}
 
 	setSession(session: AgentSession): void {
@@ -246,18 +250,25 @@ export class FooterComponent implements Component {
 				? theme.bold(theme.fg("warning", "PLAN"))
 				: theme.bold(theme.fg("accent", "BUILD"));
 		const pwdLeft = `${badge} ${theme.fg("dim", pwd)}`;
-		const localParts: string[] = [];
-		if (midnight.mode) localParts.push(midnight.mode);
-		if (midnight.engine !== "off") localParts.push(`local ${midnight.engine}`);
-		if (midnight.drift?.lastVerdict && midnight.drift.lastVerdict !== "on_track")
-			localParts.push(theme.fg("warning", midnight.drift.lastVerdict.replace("_", " ")));
-		const pwdRight = localParts.length > 0 ? theme.fg("dim", `☾ ${localParts.join(" · ")}`) : "";
+		const compact = this.compact();
+		let pwdRight: string;
+		if (compact) {
+			pwdRight = theme.fg("dim", rightSideWithoutProvider);
+		} else {
+			const localParts: string[] = [];
+			if (midnight.mode) localParts.push(midnight.mode);
+			if (midnight.engine === "starting" && midnight.activity) localParts.push(midnight.activity);
+			else if (midnight.engine !== "off") localParts.push(`local ${midnight.engine}`);
+			if (midnight.drift?.lastVerdict && midnight.drift.lastVerdict !== "on_track")
+				localParts.push(theme.fg("warning", midnight.drift.lastVerdict.replace("_", " ")));
+			pwdRight = localParts.length > 0 ? theme.fg("dim", `☾ ${localParts.join(" · ")}`) : "";
+		}
 		const pwdRoom = width - visibleWidth(pwdLeft) - visibleWidth(pwdRight);
 		const pwdLine =
 			pwdRight && pwdRoom >= 2
 				? pwdLeft + " ".repeat(pwdRoom) + pwdRight
 				: truncateToWidth(pwdLeft, width, theme.fg("dim", "..."));
-		const lines = [pwdLine, dimStatsLeft + dimRemainder];
+		const lines = compact ? [pwdLine] : [pwdLine, dimStatsLeft + dimRemainder];
 
 		// Add extension statuses on a single line, sorted by key alphabetically
 		const extensionStatuses = this.footerData.getExtensionStatuses();

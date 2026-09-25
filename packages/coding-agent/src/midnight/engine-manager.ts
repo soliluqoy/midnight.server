@@ -301,11 +301,14 @@ export class EngineManager {
 					onStatus: this.onStatus,
 				});
 				this.engine = engine;
-				updateMidnightStatus({ engine: "ready" });
+				updateMidnightStatus({ engine: "ready", activity: undefined });
 				return engine;
 			})()
 				.catch((error: unknown) => {
-					updateMidnightStatus({ engine: error instanceof LocalSetupError ? "unavailable" : "off" });
+					updateMidnightStatus({
+						engine: error instanceof LocalSetupError ? "unavailable" : "off",
+						activity: undefined,
+					});
 					throw error;
 				})
 				.finally(() => {
