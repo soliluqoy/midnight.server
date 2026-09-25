@@ -1,14 +1,19 @@
 import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { createAssistantMessageEventStream, InMemoryModelsStore } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { createInteractiveShellOperations } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
+import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
+import type { ProviderConfigInput } from "../src/core/provider-composer.ts";
 import { getDefaultActiveToolNames } from "../src/core/tools/index.ts";
 import type { LocalEngine } from "../src/midnight/engine.ts";
 import type { EngineManager } from "../src/midnight/engine-manager.ts";
 import { LocalSetupError } from "../src/midnight/engine-manager.ts";
+import { createLocalProviderExtension } from "../src/midnight/extension.ts";
 import {
 	LocalInferenceUnavailableError,
 	parseMidnightMode,
@@ -78,6 +83,7 @@ describe("mode selection", () => {
 		expect(runtime.mode).toBe("default");
 		expect(runtime.args).toEqual(args);
 		expect(runtime.extensionFactories.map((factory) => factory.name)).toEqual([
+			"midnight-local",
 			"midnight-session-title",
 			"midnight-delegate",
 			"midnight-drift-watch",
@@ -135,6 +141,7 @@ describe("mode selection", () => {
 		const runtime = await prepareLocalRuntime(["task"], { modelRuntime: await configuredModelRuntime() });
 		expect(runtime.args).toEqual(["task"]);
 		expect(runtime.extensionFactories.map((factory) => factory.name)).toEqual([
+			"midnight-local",
 			"midnight-session-title",
 			"midnight-delegate",
 			"midnight-drift-watch",
@@ -162,6 +169,7 @@ describe("mode selection", () => {
 		});
 		expect(runtime.args).toEqual(["task"]);
 		expect(runtime.extensionFactories.map((factory) => factory.name)).toEqual([
+			"midnight-local",
 			"midnight-session-title",
 			"midnight-delegate",
 			"midnight-drift-watch",
@@ -222,11 +230,55 @@ describe("mode selection", () => {
 		});
 		expect(runtime.args).toEqual(["task"]);
 		expect(runtime.extensionFactories.map((factory) => factory.name)).toEqual([
+			"midnight-local",
 			"midnight-session-title",
 			"midnight-delegate",
 			"midnight-drift-watch",
 		]);
 		expect(started).toBe(false);
+	});
+});
+
+describe("local provider", () => {
+	it("starts the engine on the first request and sends to its current URL and key", async () => {
+		const requests: { url?: string; authorization?: string }[] = [];
+		const server = createServer((request, response) => {
+			requests.push({ url: request.url, authorization: request.headers.authorization });
+			const chunk = (delta: object, finish: string | null) =>
+				`data: ${JSON.stringify({ id: "x", object: "chat.completion.chunk", created: 0, model: "m", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			response.end(`${chunk({ role: "assistant", content: "hi" }, null)}${chunk({}, "stop")}data: [DONE]\n\n`);
+		});
+		await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+		try {
+			const address = server.address() as AddressInfo;
+			let starts = 0;
+			const manager = {
+				get: async () => {
+					starts++;
+					return { baseUrl: `http://127.0.0.1:${address.port}`, apiKey: "engine-key" } as LocalEngine;
+				},
+			} as unknown as EngineManager;
+			const runtime = await unconfiguredModelRuntime();
+			const pi = {
+				registerProvider: (id: string, config: ProviderConfigInput) => runtime.registerProvider(id, config),
+				on: () => {},
+			} as unknown as ExtensionAPI;
+			createLocalProviderExtension(manager, { localOnly: false, contextSize: 4096 })(pi);
+
+			const model = runtime.getModel(LOCAL_PROVIDER_ID, LOCAL_MODEL_ID);
+			expect(model?.contextWindow).toBe(4096);
+			expect(starts).toBe(0);
+			const reply = await runtime.completeSimple(model!, {
+				messages: [{ role: "user", content: "hello", timestamp: 0 }],
+			});
+			expect(reply.errorMessage).toBeUndefined();
+			expect(reply.content).toEqual([{ type: "text", text: "hi" }]);
+			expect(starts).toBe(1);
+			expect(requests).toEqual([{ url: "/v1/chat/completions", authorization: "Bearer engine-key" }]);
+		} finally {
+			server.close();
+		}
 	});
 });
 

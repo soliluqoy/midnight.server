@@ -63,13 +63,15 @@ function positiveIntegerEnv(name: string): number | undefined {
 /** Offload every layer. llama.cpp caps this at the model's layer count. */
 export const ALL_GPU_LAYERS = 999;
 
+export const DEFAULT_CONTEXT_SIZE = 8192;
+
 /**
  * Defaults tuned for a small interactive helper; see IMPLEMENTATION_PLAN.md section 7.
  * `defaultGpuLayers` comes from the selected backend; the environment still wins over it.
  */
 export function resolveEngineSettings(overrides: Partial<EngineSettings> = {}, defaultGpuLayers = 0): EngineSettings {
 	return {
-		contextSize: overrides.contextSize ?? positiveIntegerEnv("MIDNIGHT_SERVER_CONTEXT") ?? 8192,
+		contextSize: overrides.contextSize ?? positiveIntegerEnv("MIDNIGHT_SERVER_CONTEXT") ?? DEFAULT_CONTEXT_SIZE,
 		threads:
 			overrides.threads ??
 			positiveIntegerEnv("MIDNIGHT_SERVER_THREADS") ??

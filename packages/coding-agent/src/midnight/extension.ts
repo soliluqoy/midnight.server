@@ -1,7 +1,8 @@
 import { join } from "node:path";
+import { lazyStream } from "@earendil-works/pi-ai";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 import { type Static, Type } from "typebox";
 import type { ExtensionAPI, ExtensionFactory } from "../core/extensions/types.ts";
-import type { LocalEngine } from "./engine.ts";
 import type { EngineManager } from "./engine-manager.ts";
 import {
 	createHelperTask,
@@ -15,17 +16,32 @@ import { getMidnightHome } from "./paths.ts";
 import { LOCAL_MODEL_ID, LOCAL_PROVIDER_ID } from "./pins.ts";
 
 /**
- * Register the running engine as the `midnight` provider and restrict every
- * model request in the session to it. The restriction lives in the model
+ * Register the engine as the `midnight` provider. Each request gets the engine
+ * from the manager, which starts it on first use and again after an idle stop,
+ * and sends to that engine's current URL and key. With `localOnly`, every model
+ * request in the session is restricted to it. The restriction lives in the model
  * runtime, so selecting another model later fails instead of sending data out.
  */
-export function createLocalProviderExtension(engine: LocalEngine, options: { localOnly: boolean }): ExtensionFactory {
+export function createLocalProviderExtension(
+	manager: EngineManager,
+	options: { localOnly: boolean; contextSize: number },
+): ExtensionFactory {
+	const completions = openAICompletionsApi();
 	return (pi: ExtensionAPI) => {
 		pi.registerProvider(LOCAL_PROVIDER_ID, {
 			name: "midnight.server local",
-			baseUrl: `${engine.baseUrl}/v1`,
-			apiKey: engine.apiKey,
+			// Placeholders: streamSimple replaces both with the running engine's values.
+			baseUrl: "http://127.0.0.1/v1",
+			apiKey: "local",
 			api: "openai-completions",
+			streamSimple: (model, context, streamOptions) =>
+				lazyStream(model, async () => {
+					const engine = await manager.get(streamOptions?.signal);
+					return completions.streamSimple({ ...model, baseUrl: `${engine.baseUrl}/v1` }, context, {
+						...streamOptions,
+						apiKey: engine.apiKey,
+					});
+				}),
 			models: [
 				{
 					id: LOCAL_MODEL_ID,
@@ -34,8 +50,8 @@ export function createLocalProviderExtension(engine: LocalEngine, options: { loc
 					thinkingLevelMap: { off: "off", minimal: null, low: null, medium: "medium", high: null, xhigh: null },
 					input: ["text"],
 					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: engine.settings.contextSize,
-					maxTokens: Math.floor(engine.settings.contextSize / 2),
+					contextWindow: options.contextSize,
+					maxTokens: Math.floor(options.contextSize / 2),
 					compat: {
 						supportsStore: false,
 						supportsDeveloperRole: false,

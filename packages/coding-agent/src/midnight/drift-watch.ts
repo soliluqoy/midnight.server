@@ -6,6 +6,7 @@ import type { ExtensionAPI, ExtensionFactory } from "../core/extensions/types.ts
 import { convertToLlm } from "../core/messages.ts";
 import type { ChatRequest, ChatResult } from "./engine.ts";
 import { type EngineManager, LocalSetupError } from "./engine-manager.ts";
+import { LOCAL_PROVIDER_ID } from "./pins.ts";
 import { type DriftWatchState, updateMidnightStatus } from "./status.ts";
 
 /** Minimal engine surface this module needs; mirrors helper.ts's HelperEngine. */
@@ -192,7 +193,8 @@ export function createDriftWatchExtension(manager: EngineManager, settings: Drif
 		});
 
 		pi.on("turn_end", (_event, ctx) => {
-			if (unavailable || checking) return;
+			// The local model selected with /model is the parent; there is no separate model to watch.
+			if (unavailable || checking || ctx.model?.provider === LOCAL_PROVIDER_ID) return;
 			turnsSinceCheck++;
 			turnsSinceNudge++;
 			const currentTokens = estimateContextTokens(latestMessages).tokens;

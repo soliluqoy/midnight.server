@@ -40,7 +40,7 @@ The first local run downloads the 2.5 GiB model and picks the fastest engine for
 
 | Mode | Command | Behavior |
 | --- | --- | --- |
-| Default / Hybrid | `midnight.server` (same as `midnight.server --hybrid`) | Your configured provider leads. It gets a `delegate_local` tool that hands small read-only jobs to the local model, which starts on first use. MiniCPM also runs a background drift check every few turns and nudges the parent model if it has lost track of the goal. If no provider is configured at all, the session silently starts on the local model instead — not offline-locked, so `/login` still works afterward. |
+| Default / Hybrid | `midnight.server` (same as `midnight.server --hybrid`) | Your configured provider leads. It gets a `delegate_local` tool that hands small read-only jobs to the local model, which starts on first use. You can also switch the session to the local model with `/model` (it is listed as "MiniCPM5-2B Q8_0 (local)") and back to your provider the same way. MiniCPM also runs a background drift check every few turns and nudges the parent model if it has lost track of the goal. If no provider is configured at all, the session silently starts on the local model instead — not offline-locked, so `/login` still works afterward. |
 | Local | `midnight.server --local` | Runs the whole session on the embedded MiniCPM5-2B Q8_0, downloading it and the engine automatically on first run if not already installed. Starts offline and **blocks every model request to any other provider** for the session. |
 | Direct helper | `midnight.server helper inspect "question" file.ts` | Runs one helper task locally, no provider needed. |
 
@@ -74,7 +74,7 @@ The cloud model receives this reminder with your next prompt and can correct cou
 - **Zero setup.** The first check downloads the local model if it isn't installed yet.
 - **It stays out of the way when it can't run.** If the local model can't be set up, drift watch turns itself off for the rest of the session instead of showing errors.
 
-**When it's active.** It runs in default/hybrid mode, where a cloud model leads. It is off in `--local` sessions and when the session has fallen back to the local model, because there is no separate model to watch.
+**When it's active.** It runs in default/hybrid mode, where a cloud model leads. It is off in `--local` sessions when the session has fallen back to the local model, and while you have switched to the local model with `/model`, because there is no separate model to watch.
 
 **Tuning.**
 

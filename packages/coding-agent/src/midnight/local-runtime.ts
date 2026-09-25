@@ -1,6 +1,7 @@
 import type { InlineExtension } from "../core/extensions/types.ts";
 import { ModelRuntime } from "../core/model-runtime.ts";
 import { createDriftWatchExtension, resolveDriftWatchSettings } from "./drift-watch.ts";
+import { DEFAULT_CONTEXT_SIZE, resolveEngineSettings } from "./engine.ts";
 import { EngineManager, LocalSetupError } from "./engine-manager.ts";
 import { createDelegateExtension, createLocalProviderExtension } from "./extension.ts";
 import { LOCAL_MODEL_ID, LOCAL_PROVIDER_ID } from "./pins.ts";
@@ -42,8 +43,30 @@ function sessionTitleExtension(manager: EngineManager): InlineExtension {
 	return { name: "midnight-session-title", factory: createSessionTitleExtension(manager), hidden: true };
 }
 
+function localProviderExtension(manager: EngineManager, localOnly: boolean, contextSize: number): InlineExtension {
+	return {
+		name: "midnight-local",
+		factory: createLocalProviderExtension(manager, { localOnly, contextSize }),
+		hidden: true,
+	};
+}
+
+/**
+ * The context window the engine will start with. An invalid MIDNIGHT_SERVER_CONTEXT
+ * fails when the engine starts; the cloud-led session itself must still start.
+ */
+function plannedContextSize(): number {
+	try {
+		return resolveEngineSettings().contextSize;
+	} catch {
+		return DEFAULT_CONTEXT_SIZE;
+	}
+}
+
+/** The local model stays selectable with /model; the engine starts when it is first used. */
 function hybridExtensions(manager: EngineManager): InlineExtension[] {
 	return [
+		localProviderExtension(manager, false, plannedContextSize()),
 		sessionTitleExtension(manager),
 		{ name: "midnight-delegate", factory: createDelegateExtension(manager), hidden: true },
 		{
@@ -102,11 +125,7 @@ export async function prepareLocalRuntime(
 				...rest,
 			],
 			extensionFactories: [
-				{
-					name: "midnight-local",
-					factory: createLocalProviderExtension(engine, { localOnly: true }),
-					hidden: true,
-				},
+				localProviderExtension(manager, true, engine.settings.contextSize),
 				sessionTitleExtension(manager),
 			],
 			stop: () => manager.stop(),
@@ -152,11 +171,7 @@ export async function prepareLocalRuntime(
 				...rest,
 			],
 			extensionFactories: [
-				{
-					name: "midnight-local",
-					factory: createLocalProviderExtension(engine, { localOnly: false }),
-					hidden: true,
-				},
+				localProviderExtension(manager, false, engine.settings.contextSize),
 				sessionTitleExtension(manager),
 			],
 			stop: () => manager.stop(),
