@@ -1,688 +1,240 @@
 # midnight.server
 
-midnight.server is a terminal coding harness for Windows with a local MiniCPM model built in. Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt Templates](#prompt-templates), and [Themes](#themes). Bundle them as [midnight.server Packages](#midnightserver-packages) and share them via npm or git.
+A native Windows coding CLI and terminal UI built from a modified [Pi](https://github.com/soliluqoy/pi), with the MiniCPM5-2B Q8_0 model running on the same machine as a local model and helper.
 
-midnight.server runs in four modes: interactive, print or JSON, RPC for process integration, and an SDK for embedding in your own apps.
+Its headline feature is **[drift watch](#drift-watch)**: while a cloud model does the work, the local model keeps checking, at no token cost, that it is still doing what you asked. When it isn't, the local model steps in with a short reminder.
 
-## Table of Contents
+**Status: pre-release.** Local mode, hybrid delegation, automatic GPU/CPU engine selection, the Windows build and the offline package work and were verified on one Windows 10 laptop (CPU and Intel integrated GPU) and on Linux under WSL. Released binaries are Windows x64 only. The quality evaluation, the CUDA/ROCm/SYCL/OpenVINO/Metal backends on real hardware, Linux and macOS releases, signing and clean-VM qualification are not done. See [implementation status](docs/IMPLEMENTATION_STATUS.md).
 
-- [Quick Start](#quick-start)
-- [Providers & Models](#providers--models)
-- [Interactive Mode](#interactive-mode)
-  - [Editor](#editor)
-  - [Commands](#commands)
-  - [Keyboard Shortcuts](#keyboard-shortcuts)
-  - [Message Queue](#message-queue)
-- [Sessions](#sessions)
-  - [Branching](#branching)
-  - [Compaction](#compaction)
-- [Settings](#settings)
-- [Context Files](#context-files)
-- [Customization](#customization)
-  - [Prompt Templates](#prompt-templates)
-  - [Skills](#skills)
-  - [Extensions](#extensions)
-  - [Themes](#themes)
-  - [midnight.server Packages](#midnightserver-packages)
-- [Programmatic Usage](#programmatic-usage)
-- [Philosophy](#philosophy)
-- [CLI Reference](#cli-reference)
+## Quick start
 
----
-
-## Quick Start
-
-```bash
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+```powershell
+irm https://raw.githubusercontent.com/soliluqoy/midnight.server/main/scripts/get.ps1 | iex
+midnight.server doctor --smoke    # optional: downloads the model and checks everything works
+midnight.server                   # start a session
 ```
 
-`--ignore-scripts` disables dependency lifecycle scripts during install. midnight.server does not require install scripts for normal npm installs.
+The first local run downloads the 2.5 GiB model and picks the fastest engine for your hardware; after that it starts in seconds. See [Install](#install) for other options.
 
-Installer alternative:
+## Features
 
-```bash
-curl -fsSL https://pi.dev/install.sh | sh
+- **Drift watch.** The local model keeps an eye on your cloud model during long sessions. It catches the model dropping a constraint you set, reversing an earlier decision, or wandering off task, and adds a one- or two-sentence correction. It runs in the background, is on by default, and uses no cloud tokens. [How it works](#drift-watch).
+- **Local model.** MiniCPM5-2B Q8_0 runs entirely on your machine through a SHA-256-pinned llama.cpp engine. No account or network required after the first download.
+- **GPU when it helps.** Every official llama.cpp build (CPU, Vulkan, CUDA, ROCm, SYCL, OpenVINO, Metal, ...) is pinned. On first start midnight.server runs the model on your GPU and CPU and keeps whichever is faster; no GPU is needed. [Details](#gpu-and-backends).
+- **Hybrid delegation.** Your configured provider stays in charge and gets a `delegate_local` tool to hand small, bounded, read-only jobs to the local model, so it doesn't spend cloud tokens on cheap lookups.
+- **Direct helper command.** `midnight.server helper <summarize|classify|inspect|plan|patch> "question" file...` runs one task locally, with no provider configured at all.
+- **Workspace-confined, read-only.** The helper only reads files it is explicitly given, resolved and confined to the workspace (symlinks, junctions, `..`, other drives and UNC paths all rejected). It has no shell tool and cannot write.
+- **Read-only git context.** The helper can run `status`, `diff`, `log`, `show`, or `blame` itself, with a fixed argv (never a shell) and byte-capped output, to answer questions about history without any write access.
+- **Patch proposals, never applied.** `patch` tasks return an exact-match, evidence-backed unified diff for you to review; the helper never writes to disk.
+- **Zero-setup first run.** `--local`, the no-provider-configured fallback, and the first `delegate_local`/drift-watch call all download the model and engine automatically if they're missing — resumable, SHA-256 verified, never used unverified.
+- **Process isolation.** The engine runs under a Windows Job Object owned by the CLI, bound to loopback with a random per-session key, and exits with its descendants when the CLI exits, including after a crash.
+- **Diagnostics.** `doctor [--smoke]`, `model status|verify|fetch`, `engine status|fetch|use|probe` check the install, show and change the engine backend, and, with `--smoke`, start the engine and generate a real reply.
+- **Plan and build modes.** Press Tab in an empty editor to switch. Plan mode limits the model to read-only tools (read, grep, find, ls, `delegate_local`) and asks it for a step-by-step plan; build mode restores the full tool set.
+- **Session sidebar.** In fullscreen mode (`/settings` → TUI mode) a sidebar shows the session title, git branch with changed/staged counts and ahead/behind, context usage and cost, the model, the local engine and drift-watch state, and the files changed this session with +/- line counts. It appears automatically on terminals 110+ columns wide; Alt+S toggles it.
+- **File explorer.** Alt+E opens a file tree on the left (fullscreen mode) with git status marks. Enter adds `@path` to the prompt, Space previews the file, Escape goes back. Typing anything else goes straight to the prompt. It shows on its own only on terminals 150+ columns wide.
+- **Command palette.** Alt+X opens a fuzzy-searchable list of actions and slash commands.
+- **Automatic session titles.** After the first exchange the local model names the session, at no cloud cost, unless you already named it. It is skipped until the local model is installed.
+- **Native Windows.** PowerShell is the default shell tool; no Node.js, Python, WSL, or Git Bash is needed to run it.
+- **Offline packaging.** The model-included archive needs no network at all once downloaded.
+
+## What it does
+
+| Mode | Command | Behavior |
+| --- | --- | --- |
+| Default / Hybrid | `midnight.server` (same as `midnight.server --hybrid`) | Your configured provider leads. It gets a `delegate_local` tool that hands small read-only jobs to the local model, which starts on first use. You can also switch the session to the local model with `/model` (it is listed as "MiniCPM5-2B Q8_0 (local)") and back to your provider the same way. MiniCPM also runs a background drift check every few turns and nudges the parent model if it has lost track of the goal. If no provider is configured at all, the session silently starts on the local model instead — not offline-locked, so `/login` still works afterward. |
+| Local | `midnight.server --local` | Runs the whole session on the embedded MiniCPM5-2B Q8_0, downloading it and the engine automatically on first run if not already installed. Starts offline and **blocks every model request to any other provider** for the session. |
+| Direct helper | `midnight.server helper inspect "question" file.ts` | Runs one helper task locally, no provider needed. |
+
+The helper (`delegate_local`, `helper`) reads only the workspace files it is given. It has no shell or tools, and it returns a schema-checked result with line evidence. `patch` tasks return a unified diff that is **not applied**. It can also run one read-only git operation itself (`status`, `diff`, `log`, `show`, `blame`) with a fixed argv, never a shell — never anything that mutates the repository.
+
+The engine is llama.cpp `b11166`: the CPU build ships in the release, and a GPU build is downloaded when it is faster on your machine ([GPU and backends](#gpu-and-backends)). It runs as a child process under a Windows Job Object owned by the CLI, bound to `127.0.0.1` and protected by a random per-session key. It exits when the CLI exits, including after a crash.
+
+## Drift watch
+
+**Problem.** In a long agent session, context piles up and the model tends to lose the thread. It drops a constraint you gave early on, reverses a decision it already made, or starts a side quest without saying so. You usually notice several turns later, after the tokens are spent and the diff has grown.
+
+**Example (illustrative).** You ask for a fix to the failing date-parsing test, with *"don't change the public API"*. Eight turns later the model has changed `parseDate`'s exported signature and is reworking the logger. Drift watch runs its check, decides the model is `drifting`, and adds this to the session:
+
+```
+[check: drifting] The task said not to change the public API, but parseDate's exported signature was changed.
 ```
 
-Authenticate with an API key:
+The cloud model receives this reminder with your next prompt and can correct course before it goes further.
 
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-midnight.server
+**How it works.**
+
+1. **When it runs.** It checks after every 6 assistant turns, or sooner if the context has grown by 4,000 tokens since the last check.
+2. **What it reads.** A read-only copy of the conversation with the middle cut out. It keeps the start (about 1.5 KB, where your goal and constraints usually are) and the most recent activity (about 8.5 KB).
+3. **What it decides.** MiniCPM, running with no tools, returns a schema-checked verdict: `on_track`, `drifting` (a constraint or earlier decision was dropped), or `off_task` (unrelated work). If it returns invalid JSON, it gets one retry.
+4. **What it does.** Nothing when the model is `on_track`. Otherwise it adds a short reminder naming the goal or constraint being missed. After a nudge it stays quiet for at least 4 turns, so it can't nag.
+
+**What it costs.**
+
+- **No cloud tokens for the check.** The check runs on the local model; the only thing added to the cloud model's context is the short reminder, and only when it fires.
+- **It never blocks you.** On a CPU laptop a check takes about 10-30 s, so it runs in the background and your session keeps going while it thinks.
+- **Zero setup.** The first check downloads the local model if it isn't installed yet.
+- **It stays out of the way when it can't run.** If the local model can't be set up, drift watch turns itself off for the rest of the session instead of showing errors.
+
+**When it's active.** It runs in default/hybrid mode, where a cloud model leads. It is off in `--local` sessions when the session has fallen back to the local model, and while you have switched to the local model with `/model`, because there is no separate model to watch.
+
+**Tuning.**
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `MIDNIGHT_SERVER_DRIFTWATCH` | `1` | `0` turns it off (`delegate_local` is unaffected) |
+| `MIDNIGHT_SERVER_DRIFTWATCH_TURNS` | `6` | Check after this many assistant turns |
+| `MIDNIGHT_SERVER_DRIFTWATCH_TOKENS` | `4000` | Also check after this much context growth |
+| `MIDNIGHT_SERVER_DRIFTWATCH_COOLDOWN` | `4` | Minimum turns between two nudges |
+
+Lower the turn and token values to check more often, for example on long autonomous runs. Raise them if the checks slow your machine down. The 2B model judges drift with a limited view, so treat a nudge as a prompt to look, not a verdict.
+
+## Best way to use it
+
+- **Default (hybrid) for daily coding.** Just run `midnight.server`. Your configured provider leads and automatically gets `delegate_local` and the drift watcher — there is nothing to opt into.
+- **`--local` when you want zero network calls**: offline, air-gapped, or reviewing code you don't want leaving the machine. It's a 2B model, so expect it to be slower and weaker than a cloud model on multi-step work.
+- **First run needs one network trip.** If the model (2.5 GiB) isn't installed yet, the first `--local` run, first no-provider session, or first `delegate_local`/helper call downloads and verifies it automatically — expect that one run to take a while. Run `midnight.server model fetch` ahead of time if you want to do that download on your own schedule, or on a fully offline machine, use the `-offline.zip` release, which already includes the model.
+- **`helper` for one-off questions** when a full session is overkill: `midnight.server helper inspect "why does this throw?" src/foo.ts`. No provider needed, and faster than starting an agent loop.
+- **Keep helper inputs small.** It answers best under roughly 6 KB of source per call; a 12 KB file was measured to return a wrong answer instead of escalating (see [implementation status](docs/IMPLEMENTATION_STATUS.md)). Point it at the specific file or function rather than the whole repo.
+- **Treat `patch` output as a proposal.** It's an unapplied diff built from exact-match text edits — read it before applying it yourself; the 2B model can be wrong (see [measurements](docs/benchmarks/cpu-i7-8650u.md)).
+- **Leave drift watch on for long sessions.** Long sessions are where it pays off. When a nudge appears, check the constraint it names before you continue. If it fires too often or too rarely, see [tuning](#drift-watch).
+- **Run `doctor --smoke` after install** to confirm the model, engine, and process host all work end to end before relying on it mid-task.
+
+## Install
+
+In PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/soliluqoy/midnight.server/main/scripts/get.ps1 | iex
 ```
 
-Or use your existing subscription:
+This downloads the newest release, verifies it against `SHA256SUMS`, installs it to `%LOCALAPPDATA%\Programs\midnight.server` and adds it to your PATH, so `midnight.server` works right away. Run it again to upgrade. Set `MIDNIGHT_SERVER_VERSION` to a release tag to install a specific version.
 
-```bash
-midnight.server
-/login  # Then select provider
+Release archives (built by `scripts\package.ps1`):
+
+- `midnight.server-windows-x64.zip` (~58 MiB): app and engine. The model (2.5 GiB) downloads automatically the first time it's needed — resumable, SHA-256 verified — or pre-fetch it with `midnight.server model fetch`.
+- `midnight.server-windows-x64-offline.zip` (~2.6 GiB): includes the model and needs no network. GitHub limits release assets to under 2 GiB, so it is also published as `.001`/`.002` parts. Run `join-offline.ps1` in the download folder to reassemble and verify it.
+
+Requirements: Windows 10 or 11, x64, 16 GiB RAM recommended (8 GiB works with less headroom), about 3 GiB of disk for the model and engine. A GPU is optional. Node.js, Python, WSL and Git Bash are not required.
+
+```powershell
+midnight.server doctor            # check installation
+midnight.server doctor --smoke    # also start the engine and generate a reply
+midnight.server --local           # interactive, fully local
 ```
 
-Then just talk to midnight.server. By default, midnight.server gives the model four tools: `read`, `write`, `edit`, and `bash`. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [midnight.server packages](#midnightserver-packages).
+**Manual install.** Download `midnight.server-windows-x64.zip` from [Releases](https://github.com/soliluqoy/midnight.server/releases), check it against `SHA256SUMS` with `(Get-FileHash .\midnight.server-windows-x64.zip).Hash`, extract it anywhere and run `midnight.server.exe` from that folder (add the folder to PATH to run it from anywhere).
 
-**Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
+**Upgrade.** Run the install command again. Your settings, sessions, model and engines are kept.
 
----
+**Where things live.**
 
-## Providers & Models
+| Path | Contents |
+| --- | --- |
+| `%LOCALAPPDATA%\Programs\midnight.server` | The app and bundled CPU engine (replaced on upgrade) |
+| `%LOCALAPPDATA%\midnight.server` | Model, downloaded GPU engines, saved backend choice, engine logs (`MIDNIGHT_SERVER_HOME`) |
+| `~\.midnight.server\agent` | Settings, sessions and provider credentials (`MIDNIGHT_SERVER_CODING_AGENT_DIR`) |
 
-For each built-in provider, midnight.server maintains a list of tool-capable models. Configured provider catalogs refresh automatically; run `midnight.server update --models` to force an immediate refresh. Authenticate via subscription (`/login`) or API key, then select any model from that provider via `/model` (or Ctrl+L). Press Ctrl+S in the model picker to save the highlighted model as the startup default.
+**Uninstall.**
 
-**Subscriptions:**
-- Anthropic Claude Pro/Max
-- OpenAI ChatGPT Plus/Pro (Codex)
-- GitHub Copilot
-
-**API keys:**
-- Anthropic
-- Ant Ling
-- OpenAI
-- Azure OpenAI
-- DeepSeek
-- NVIDIA NIM
-- Google Gemini
-- Google Vertex
-- Amazon Bedrock
-- Mistral
-- Groq
-- Cerebras
-- Cloudflare AI Gateway
-- Cloudflare Workers AI
-- xAI
-- OpenRouter
-- Vercel AI Gateway
-- ZAI Coding Plan (Global)
-- ZAI Coding Plan (China)
-- OpenCode Zen
-- OpenCode Go
-- Hugging Face
-- Fireworks
-- Together AI
-- Baseten
-- Kimi For Coding
-- MiniMax
-- Xiaomi MiMo
-- Xiaomi MiMo Token Plan (China)
-- Xiaomi MiMo Token Plan (Amsterdam)
-- Xiaomi MiMo Token Plan (Singapore)
-
-midnight.server also supports the llama.cpp router server. Configure it with `/login llama.cpp`, manage downloads and loaded models with `/llama`, then select a loaded model with `/model`. See [docs/llama-cpp.md](docs/llama-cpp.md) for setup and usage.
-
-See [docs/providers.md](docs/providers.md) for other provider setup instructions.
-
-**Custom providers & models:** Add providers via `~/.midnight.server/agent/models.json` if they speak a supported API (OpenAI, Anthropic, Google). For custom APIs or OAuth, use extensions. See [docs/models.md](docs/models.md) and [docs/custom-provider.md](docs/custom-provider.md).
-
----
-
-## Interactive Mode
-
-<p align="center"><img src="docs/images/interactive-mode.png" alt="Interactive Mode" width="600"></p>
-
-The interface from top to bottom:
-
-- **Startup header** - Shows shortcuts (`/hotkeys` for all), loaded AGENTS.md files, prompt templates, skills, and extensions
-- **Messages** - Your messages, assistant responses, tool calls and results, notifications, errors, and extension UI
-- **Editor** - Where you type; border color indicates thinking level and the border shows the streaming working indicator
-- **Footer** - Working directory, session name, total token/cache usage (`↑` input, `↓` output, `R` cache read, `W` cache write, `CH` latest cache hit rate), cost, context usage, current model. Totals include assistant responses, usage reported by tools, and summary generation.
-
-The editor can be temporarily replaced by other UI, like built-in `/settings` or custom UI from extensions (e.g., a Q&A tool that lets the user answer model questions in a structured format). [Extensions](#extensions) can also replace the editor, add widgets above/below it, a status line, custom footer, or overlays.
-
-### Editor
-
-| Feature | How |
-|---------|-----|
-| File reference | Type `@` to fuzzy-search project files |
-| Path completion | Tab to complete paths |
-| Multi-line | Shift+Enter (or Ctrl+Enter on Windows Terminal) |
-| External editor | Ctrl+G opens `externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere |
-| Clipboard | Ctrl+V to paste an image or text (Alt+V on Windows), or drag images onto terminal |
-| Bash commands | `!command` runs and sends output to LLM, `!!command` runs without sending |
-
-Standard editing keybindings for delete word, undo, etc. See [docs/keybindings.md](docs/keybindings.md).
-
-### Commands
-
-Type `/` in the editor to trigger commands. [Extensions](#extensions) can register custom commands, [skills](#skills) are available as `/skill:name`, and [prompt templates](#prompt-templates) expand via `/templatename`.
-
-| Command | Description |
-|---------|-------------|
-| `/login`, `/logout` | Manage provider credentials |
-| [`/llama`](docs/llama-cpp.md) | Download, load, and unload llama.cpp router models |
-| `/model` | Switch models; Ctrl+S in the picker saves the startup default |
-| `/thinking` | Switch thinking level; Ctrl+S in the picker saves the startup default |
-| `/scoped-models` | Enable/disable models for Ctrl+P cycling |
-| `/settings` | Theme, message delivery, transport, and other preferences |
-| `/resume` | Pick from previous sessions |
-| `/new` | Start a new session |
-| `/name <name>` | Set session display name |
-| `/session` | Show session info (file, ID, messages, tokens, cost) |
-| `/tree` | Jump to any point in the session and continue from there |
-| `/trust` | Save project trust decision for future sessions (restart required) |
-| `/fork` | Create a new session from a previous user message |
-| `/clone` | Duplicate the current active branch into a new session |
-| `/compact [prompt]` | Manually compact context, optional custom instructions |
-| `/copy` | Copy last assistant message to clipboard |
-| `/export [file]` | Export session to HTML or JSONL file |
-| `/import <file>` | Import and resume a session from a JSONL file |
-| `/share` | Upload as private GitHub gist with shareable HTML link |
-| `/reload` | Reload keybindings, extensions, skills, prompts, themes, and context files |
-| `/hotkeys` | Show all keyboard shortcuts |
-| `/changelog` | Display version history |
-| `/quit` | Quit midnight.server |
-
-### Keyboard Shortcuts
-
-See `/hotkeys` for the full list. Customize via `~/.midnight.server/agent/keybindings.json`. See [docs/keybindings.md](docs/keybindings.md).
-
-**Commonly used:**
-
-| Key | Action |
-|-----|--------|
-| Ctrl+C | Clear editor |
-| Ctrl+C twice | Quit |
-| Escape | Cancel/abort |
-| Escape twice | Open `/tree` |
-| Ctrl+L | Open model selector |
-| Ctrl+P / Shift+Ctrl+P | Cycle scoped models forward/backward |
-| Shift+Tab | Cycle thinking level |
-| Ctrl+O | Collapse/expand tool output |
-| Ctrl+T | Collapse/expand thinking blocks |
-| Ctrl+X | Copy the last assistant message; with fullscreen copy-on-select disabled, copy the active text selection |
-
-### Message Queue
-
-Submit messages while the agent is working:
-
-- **Enter** queues a *steering* message, delivered after the current assistant turn finishes executing its tool calls
-- **Alt+Enter** queues a *follow-up* message, delivered only after the agent finishes all work
-- **Escape** aborts and restores queued messages to editor
-- **Alt+Up** retrieves queued messages back to editor
-
-On Windows Terminal, `Alt+Enter` is fullscreen by default. Remap it in [docs/terminal-setup.md](docs/terminal-setup.md) so midnight.server can receive the follow-up shortcut.
-
-Configure delivery in [settings](docs/settings.md): `steeringMode` and `followUpMode` can be `"one-at-a-time"` (default, waits for response) or `"all"` (delivers all queued at once). `transport` selects provider transport preference (`"sse"`, `"websocket"`, or `"auto"`) for providers that support multiple transports.
-
----
-
-## Sessions
-
-Sessions are stored as JSONL files with a tree structure. Each entry has an `id` and `parentId`, enabling in-place branching without creating new files. See [docs/session-format.md](docs/session-format.md) for file format.
-
-### Management
-
-Sessions auto-save to `~/.midnight.server/agent/sessions/` organized by working directory.
-
-```bash
-midnight.server -c                  # Continue most recent session
-midnight.server -r                  # Browse and select from past sessions
-midnight.server --no-session        # Ephemeral mode (don't save)
-midnight.server --name "my task"    # Set session display name at startup
-midnight.server --session <path|id> # Use specific session file or ID
-midnight.server --fork <path|id>    # Fork specific session file or ID into a new session
+```powershell
+$app = Join-Path $env:LOCALAPPDATA "Programs\midnight.server"
+Remove-Item -Recurse -Force $app
+[Environment]::SetEnvironmentVariable("Path", (([Environment]::GetEnvironmentVariable("Path", "User") -split ";") -ne $app -join ";"), "User")
+Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "midnight.server")   # model and engines (~3 GiB)
+Remove-Item -Recurse -Force "$HOME\.midnight.server"                         # settings, sessions, credentials
 ```
 
-Use `/session` in interactive mode to see the current session ID before reusing it with `--session <id>` or `--fork <id>`.
+## Performance (Intel i7-8650U laptop, CPU only)
 
-### Branching
+On the CPU, prompt processing is ~25-35 tokens/s and generation ~8-9 tokens/s. Its integrated UHD 620 GPU was slower (~22 and ~4 tokens/s), so automatic selection keeps the CPU there; a discrete GPU is typically several times faster than either. A one-tool `--local` task took 77-95 s. A helper question over a short file took 13 s. See [measurements](docs/benchmarks/cpu-i7-8650u.md). The 2B model can be wrong, so check its evidence before acting on it.
 
-**`/tree`** - Navigate the session tree in-place. Select any previous point, continue from there, and switch between branches. All history preserved in a single file. Selecting a point while the model is responding cancels that response. Navigation cannot proceed while compaction or another tree navigation is still running; wait for it to finish and retry.
+## Configuration
 
-<p align="center"><img src="docs/images/tree-view.png" alt="Tree View" width="600"></p>
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MIDNIGHT_SERVER_HOME` | `%LOCALAPPDATA%\midnight.server` | Downloaded model/engine, verification cache, logs, helper patch artifacts |
+| `MIDNIGHT_SERVER_MODEL` | bundled or downloaded file | Use a specific GGUF path. It must still match the pinned SHA-256. |
+| `MIDNIGHT_SERVER_BACKEND` | `auto` | Engine backend: `auto`, or one from `engine status` (`cpu`, `vulkan`, `cuda`, `cuda-13`, `rocm`, `sycl`, `openvino`, `metal`, ...). See [GPU and backends](#gpu-and-backends) |
+| `MIDNIGHT_SERVER_ENGINE_DIR` | bundled or downloaded engine | Use your own llama.cpp build directory (every layer is offloaded; a CPU-only build ignores that) |
+| `MIDNIGHT_SERVER_CONTEXT` | `8192` | Engine context size in tokens |
+| `MIDNIGHT_SERVER_THREADS` | logical cores - 2 (max 8) | Generation threads (prompt processing uses all cores) |
+| `MIDNIGHT_SERVER_GPU_LAYERS` | from the backend (`0` on CPU, all on GPU) | Layers to offload to the GPU |
+| `MIDNIGHT_SERVER_IDLE_MS` | `900000` | Stop the hybrid-mode engine after this idle time |
+| `MIDNIGHT_SERVER_CODING_AGENT_DIR` | `~\.midnight.server\agent` | Pi settings, sessions, credentials |
+| `MIDNIGHT_SERVER_DRIFTWATCH` | `1` | Set to `0` to disable the hybrid-mode drift watcher (the `delegate_local` tool is unaffected) |
+| `MIDNIGHT_SERVER_DRIFTWATCH_TURNS` | `6` | Run a drift check after this many assistant turns since the last one |
+| `MIDNIGHT_SERVER_DRIFTWATCH_TOKENS` | `4000` | Also run a drift check once context has grown by this many tokens since the last one |
+| `MIDNIGHT_SERVER_DRIFTWATCH_COOLDOWN` | `4` | Turns to wait after a nudge before another one can fire |
 
-- Search by typing, fold/unfold and jump between branches with Ctrl+←/Ctrl+→ or Alt+←/Alt+→, page with ←/→
-- Filter modes (Ctrl+O): default → no-tools → user-only → labeled-only → all
-- Press Ctrl+X to copy the selected message
-- Press Shift+L to label entries as bookmarks and Shift+T to toggle label timestamps
+## GPU and backends
 
-**`/fork`** - Create a new session file from a previous user message on the active branch. Opens a selector, copies the active path up to that point, and places the selected prompt in the editor for modification.
+midnight.server pins every official llama.cpp build for the engine release it uses (Windows, Linux and macOS; x64 and ARM64) by SHA-256, and downloads the one it needs on first start.
 
-**`/clone`** - Duplicate the current active branch into a new session file at the current position. The new session keeps the full active-path history and opens with an empty editor.
+With the default `auto` backend, the first engine start (about two minutes, once) does this:
 
-**`--fork <path|id>`** - Fork an existing session file or partial session UUID directly from the CLI. This copies the full source session into a new session file in the current project.
+1. On Apple Silicon it tries Metal; on Windows and Linux it downloads the Vulkan build (~30 MiB), which works with NVIDIA, AMD and Intel GPUs, and lists the GPUs it can use.
+2. If a GPU has enough memory for the model, it runs the model on the GPU and on the CPU and estimates the time for a typical helper task (2,000 prompt tokens, 300 generated) on each.
+3. It keeps the GPU only if it is at least 10% faster. Integrated GPUs are often slower than the CPU at generating text: on an i7-8650U the UHD 620 took ~167 s against ~96 s on the CPU.
 
-### Compaction
+The result is saved. If a GPU chosen this way later fails to start, the session falls back to the CPU and saves that instead. A backend that fails to start or to generate is never chosen.
 
-Long sessions can exhaust context windows. Compaction summarizes older messages while keeping recent ones.
+CUDA, ROCm, SYCL, OpenVINO and others are not tried automatically, because they are large (up to ~730 MiB with the CUDA runtime) or need vendor runtimes installed. Choose one explicitly:
 
-**Manual:** `/compact` or `/compact <custom instructions>`
-
-**Automatic:** Enabled by default. Triggers on context overflow (recovers and retries) or when approaching the limit (proactive). Configure via `/settings` or `settings.json`.
-
-Compaction is lossy. The full history remains in the JSONL file; use `/tree` to revisit. Customize compaction behavior via [extensions](#extensions). See [docs/compaction.md](docs/compaction.md) for internals.
-
----
-
-## Settings
-
-Use `/settings` to modify common options, or edit JSON files directly:
-
-| Location | Scope |
-|----------|-------|
-| `~/.midnight.server/agent/settings.json` | Global (all projects) |
-| `.midnight.server/settings.json` | Project (overrides global) |
-
-See [docs/settings.md](docs/settings.md) for all options.
-
-### Project Trust
-
-On interactive startup, midnight.server asks before trusting a project folder that contains project-local settings, resources, or project `.agents/skills` and has no saved decision for the folder or a parent folder in `~/.midnight.server/agent/trust.json`. Trusting a project allows midnight.server to load `.midnight.server/settings.json` and `.midnight.server` resources, install missing project packages, and execute project extensions.
-
-Before the trust decision, midnight.server loads only context files, user/global extensions, and CLI `-e` extensions so they can handle the `project_trust` event. Project-local extensions, project package-managed extensions, and project settings are loaded only after the project is trusted. This split also applies when switching to a session from a different cwd whose trust has not been resolved in the current process.
-
-Non-interactive modes (`-p`, `--mode json`, and `--mode rpc`) do not show a trust prompt. Without an applicable saved trust decision, they use `defaultProjectTrust` from global settings: `ask` (default) and `never` ignore those project resources, while `always` trusts them. Pass `--approve`/`-a` or `--no-approve`/`-na` to override project trust for one run.
-
-If no extension or saved decision applies, `defaultProjectTrust` controls the fallback behavior. Set it to `"ask"`, `"always"`, or `"never"` in `~/.midnight.server/agent/settings.json`, or change it with `/settings`.
-
-`midnight.server config` and package commands use the same project trust flow, except `midnight.server update` never prompts. Pass `--approve` to trust project-local settings for one command or `--no-approve` to ignore them.
-
-Use `/trust` in interactive mode to save a project trust decision for future sessions, including trust for the immediate parent folder. It writes `~/.midnight.server/agent/trust.json` only; the current session is not reloaded, so restart midnight.server for changes to take effect.
-
-### Telemetry and update checks
-
-midnight.server has two separate startup features:
-
-- **Update check:** fetches `https://pi.dev/api/latest-version` to check whether a newer midnight.server version exists. Disable it with `MIDNIGHT_SERVER_SKIP_VERSION_CHECK=1`. Disabling update checks only turns off this check.
-- **Install/update telemetry:** after first install or a changelog-detected update, sends an anonymous version ping to `https://pi.dev/api/report-install`. This setting also controls optional provider attribution headers for OpenRouter, Cloudflare, and direct NVIDIA NIM requests. Opt out by setting `enableInstallTelemetry` to `false` in `settings.json`, or by setting `MIDNIGHT_SERVER_TELEMETRY=0`. This does not disable update checks; midnight.server may still contact `pi.dev` for the latest version unless update checks are disabled or offline mode is enabled.
-
-Use `--offline` or `MIDNIGHT_SERVER_OFFLINE=1` to disable all startup network operations described here, including update checks, package update checks, and install/update telemetry.
-
----
-
-## Context Files
-
-midnight.server loads `AGENTS.md` (or `CLAUDE.md`) at startup from:
-- `~/.midnight.server/agent/AGENTS.md` (global)
-- Parent directories (walking up from cwd)
-- Current directory
-
-If a directory contains `AGENTS.override.md`, midnight.server loads it instead of `AGENTS.md` or `CLAUDE.md` from that directory. Context files from other directories are still concatenated.
-
-Use for project instructions (`AGENTS.md`/`CLAUDE.md`), conventions, common commands. All matching files are concatenated.
-
-Disable context file loading with `--no-context-files` (or `-nc`).
-
-### System Prompt
-
-Replace the default system prompt with `.midnight.server/SYSTEM.md` (project) or `~/.midnight.server/agent/SYSTEM.md` (global). Append without replacing via `APPEND_SYSTEM.md`.
-
----
-
-## Customization
-
-### Prompt Templates
-
-Reusable prompts as Markdown files. Type `/name` to expand.
-
-```markdown
-<!-- ~/.midnight.server/agent/prompts/review.md -->
-Review this code for bugs, security issues, and performance problems.
-Focus on: {{focus}}
+```
+midnight.server engine status             # selected backend, installed and available builds
+midnight.server engine probe              # measure GPU vs CPU again, print the numbers, save the result
+midnight.server engine use cuda           # always use this backend (no automatic fallback)
+midnight.server engine use auto           # back to automatic selection
+midnight.server engine fetch vulkan       # download a build ahead of time
 ```
 
-Place in `~/.midnight.server/agent/prompts/`, `.midnight.server/prompts/`, or a [midnight.server package](#midnightserver-packages) to share with others. See [docs/prompt-templates.md](docs/prompt-templates.md).
+**Supported hardware.** Builds pinned for llama.cpp `b11166`; "run" means a maintainer started the engine and generated a reply with the model on it.
 
-### Skills
+| Platform | Automatic | Opt-in | Run by maintainers |
+| --- | --- | --- | --- |
+| Windows x64 | CPU, Vulkan | `cuda` (12.4), `cuda-13`, `rocm`, `sycl`, `openvino` | CPU; Vulkan on Intel UHD 620 |
+| Windows ARM64 | CPU | `cuda-13`, `opencl` (Adreno) | none |
+| Linux x64 | CPU, Vulkan | `cuda` (12.8), `cuda-13`, `rocm`, `sycl`, `openvino` | CPU (WSL; Vulkan found no GPU there) |
+| Linux ARM64 | CPU, Vulkan | `cuda-13`, `hexagon` (Snapdragon) | none |
+| macOS Apple Silicon | Metal | none | none |
+| macOS Intel | CPU | none | none |
 
-On-demand capability packages following the [Agent Skills standard](https://agentskills.io). Invoke via `/skill:name` or let the agent load them automatically.
+Engines for every platform are pinned, but the released app itself is Windows x64 only so far; on Linux and macOS it currently runs from a source build.
 
-```markdown
-<!-- ~/.midnight.server/agent/skills/my-skill/SKILL.md -->
-# My Skill
-Use this skill when the user asks about X.
+`cuda` selects `cuda-12` (works with older NVIDIA drivers); `cuda-13` needs a recent driver. On Linux the CPU and Vulkan builds need `libgomp1` (`sudo apt install libgomp1`) and a Vulkan driver (`mesa-vulkan-drivers` or your GPU vendor's). Only the CPU and Vulkan builds have been run by the maintainers; report results from other backends with `midnight.server doctor --smoke`.
 
-## Steps
-1. Do this
-2. Then that
+On Windows the default shell tool and the `!` commands use PowerShell. See [Windows setup](packages/coding-agent/docs/windows.md).
+
+## Troubleshooting
+
+- **`midnight.server` is not recognized.** Terminals opened before the install don't see the new PATH. Open a new terminal, or run `$env:Path += ";$env:LOCALAPPDATA\Programs\midnight.server"`.
+- **The install command fails with a download or TLS error.** A proxy or antivirus is blocking GitHub. Use the manual install above.
+- **The first local run takes minutes.** It downloads the model (2.5 GiB) and, with `auto`, measures GPU against CPU (about two minutes, once). `midnight.server model fetch` and `midnight.server engine probe` do both ahead of time.
+- **The engine fails to start.** The error shows the end of the engine log; the full log is `%LOCALAPPDATA%\midnight.server\logs\engine.log`. For a GPU backend you chose, check the driver, or return to automatic selection with `midnight.server engine use auto`.
+- **It picked the CPU but you have a GPU.** Run `midnight.server engine probe` to see the measured speeds. If the GPU has less memory than the model needs (about 3 GiB) or was slower, the CPU is the right choice. To force it anyway: `midnight.server engine use vulkan` (or `cuda`).
+- **Linux: `libgomp.so.1: cannot open shared object file`.** Install it with `sudo apt install libgomp1`.
+- **Answers are wrong or incomplete.** It is a 2B model. Give the helper smaller inputs (under about 6 KB) and check its evidence before acting on it.
+
+## Build from source
+
+```powershell
+.\scripts\bootstrap.ps1 -Install        # check Node/Git/csc, fetch pinned Bun, npm ci --ignore-scripts
+.\scripts\build.ps1                      # build\dist\midnight.server-windows-x64-cpu\
+.\scripts\fetch-model.ps1                # models\cache\MiniCPM5-2B-Q8_0.gguf (verified)
+.\scripts\package.ps1 -IncludeModel      # dist\*.zip, split parts, SHA256SUMS
+.\scripts\verify-release.ps1 -Package dist\midnight.server-windows-x64-offline.zip -Smoke
 ```
 
-Place in `~/.midnight.server/agent/skills/`, `~/.agents/skills/`, `.midnight.server/skills/`, or `.agents/skills/` (from `cwd` up through parent directories) or a [midnight.server package](#midnightserver-packages) to share with others. See [docs/skills.md](docs/skills.md).
+`build.ps1` compiles the CLI from TypeScript sources with Bun and `native\midnight-host` with the C# compiler included in Windows. It installs the SHA-256-pinned llama.cpp CPU build into `engine\cpu` using the built CLI's own `engine fetch`. `node scripts/generate-engine-pins.mjs <tag>` re-pins every engine build to another llama.cpp release. No Visual Studio or CMake is needed. Building llama.cpp from source is not implemented yet.
 
-### Extensions
+From a source checkout you can also run `.\pi-test.ps1 <args>`. Set `TSX_TSCONFIG_PATH` to the repo's `tsconfig.json` when running it from another directory.
 
-<p align="center"><img src="docs/images/doom-extension.png" alt="Doom Extension" width="600"></p>
+## Security
 
-TypeScript modules that extend midnight.server with custom tools, commands, keyboard shortcuts, event handlers, and UI components.
+- `--local` fails closed: a corrupted model/engine, or a `MIDNIGHT_SERVER_MODEL`/`MIDNIGHT_SERVER_ENGINE_DIR` override pointing at nothing, is an error — never a silent fallback to a cloud provider. A missing model or engine with no override set is downloaded and verified automatically instead of erroring.
+- The PowerShell/Bash tools run with your full user permissions; nothing is sandboxed. Only the helper is restricted (workspace-confined reads, no tools).
+- Extensions run in-process with full privileges.
 
-```typescript
-export default function (pi: ExtensionAPI) {
-  pi.registerTool({ name: "deploy", ... });
-  pi.registerCommand("stats", { ... });
-  pi.on("tool_call", async (event, ctx) => { ... });
-}
-```
+## Sources and licenses
 
-The default export can also be `async`. midnight.server waits for async extension factories before startup continues, which is useful for one-time initialization such as fetching remote model lists before calling `pi.registerProvider()`.
-
-**What's possible:**
-- Custom tools (or replace built-in tools entirely)
-- Sub-agents and plan mode
-- Custom compaction and summarization
-- Permission gates and path protection
-- Custom editors and UI components
-- Status lines, headers, footers
-- Git checkpointing and auto-commit
-- SSH and sandbox execution
-- MCP server integration
-- Make midnight.server look like Claude Code
-- Games while waiting (yes, Doom runs)
-- ...anything you can dream up
-
-Place in `~/.midnight.server/agent/extensions/`, `.midnight.server/extensions/`, or a [midnight.server package](#midnightserver-packages) to share with others. See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](examples/extensions/).
-
-### Themes
-
-Built-in: `dark`, `light`. Themes hot-reload: modify the active theme file and midnight.server immediately applies changes.
-
-Place in `~/.midnight.server/agent/themes/`, `.midnight.server/themes/`, or a [midnight.server package](#midnightserver-packages) to share with others. See [docs/themes.md](docs/themes.md).
-
-### midnight.server Packages
-
-Bundle and share extensions, skills, prompts, and themes via npm or git. Find packages on [npmjs.com](https://www.npmjs.com/search?q=keywords%3Api-package) or [Discord](https://discord.com/channels/1456806362351669492/1457744485428629628).
-
-> **Security:** midnight.server packages run with full system access. Extensions execute arbitrary code, and skills can instruct the model to perform any action including running executables. Review source code before installing third-party packages.
-
-```bash
-midnight.server install npm:@foo/pi-tools
-midnight.server install npm:@foo/pi-tools@1.2.3      # pinned version
-midnight.server install git:github.com/user/repo
-midnight.server install git:github.com/user/repo@v1  # tag or commit
-midnight.server install git:git@github.com:user/repo
-midnight.server install git:git@github.com:user/repo@v1  # tag or commit
-midnight.server install https://github.com/user/repo
-midnight.server install https://github.com/user/repo@v1      # tag or commit
-midnight.server install ssh://git@github.com/user/repo
-midnight.server install ssh://git@github.com/user/repo@v1    # tag or commit
-midnight.server remove npm:@foo/pi-tools
-midnight.server uninstall npm:@foo/pi-tools          # alias for remove
-midnight.server list
-midnight.server update                               # update midnight.server only
-midnight.server update --all                         # update midnight.server and packages
-midnight.server update --extensions                  # update packages only
-midnight.server update --models                      # refresh model catalogs only
-midnight.server update --self                        # update midnight.server only
-midnight.server update --self --force                # reinstall midnight.server even if current
-midnight.server update npm:@foo/pi-tools             # update one package
-midnight.server config                               # enable/disable extensions, skills, prompts, themes
-```
-
-Packages install to `~/.midnight.server/agent/git/` (git) or `~/.midnight.server/agent/npm/` (npm). Use `-l` for project-local installs (`.midnight.server/git/`, `.midnight.server/npm/`). Git `@ref` values are pinned tags or commits; pinned packages are skipped by `midnight.server update --extensions` and `midnight.server update --all`, so use `midnight.server install git:host/user/repo@new-ref` to move an existing package to a new ref. Git packages install dependencies with `npm install --omit=dev` by default, so runtime deps must be listed under `dependencies`; when `npmCommand` is configured, git packages use plain `install` for compatibility with wrappers. If you use a Node version manager and want package installs to reuse a stable npm context, set `npmCommand` in `settings.json`, for example `["mise", "exec", "node@20", "--", "npm"]`.
-
-Create a package by adding a `pi` key to `package.json`:
-
-```json
-{
-  "name": "my-pi-package",
-  "keywords": ["pi-package"],
-  "pi": {
-    "extensions": ["./extensions"],
-    "skills": ["./skills"],
-    "prompts": ["./prompts"],
-    "themes": ["./themes"]
-  }
-}
-```
-
-Without a `pi` manifest, midnight.server auto-discovers from conventional directories (`extensions/`, `skills/`, `prompts/`, `themes/`).
-
-See [docs/packages.md](docs/packages.md).
-
----
-
-## Programmatic Usage
-
-### SDK
-
-```typescript
-import { createAgentSession, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
-
-const modelRuntime = await ModelRuntime.create();
-const { session } = await createAgentSession({
-  sessionManager: SessionManager.inMemory(),
-  modelRuntime,
-});
-
-await session.prompt("What files are in the current directory?");
-```
-
-For advanced multi-session runtime replacement, use `createAgentSessionRuntime()` and `AgentSessionRuntime`.
-
-See [docs/sdk.md](docs/sdk.md) and [examples/sdk/](examples/sdk/).
-
-### RPC Mode
-
-For non-Node.js integrations, use RPC mode over stdin/stdout:
-
-```bash
-midnight.server --mode rpc
-```
-
-RPC mode uses strict LF-delimited JSONL framing. Clients must split records on `\n` only. Do not use generic line readers like Node `readline`, which also split on Unicode separators inside JSON payloads.
-
-See [docs/rpc.md](docs/rpc.md) for the protocol.
-
----
-
-## Philosophy
-
-midnight.server is aggressively extensible so it doesn't have to dictate your workflow. Features that other tools bake in can be built with [extensions](#extensions), [skills](#skills), or installed from third-party [midnight.server packages](#midnightserver-packages). This keeps the core minimal while letting you shape midnight.server to fit how you work.
-
-**MCP as a bundled extension.** The core has no MCP code; [pi-mcp-adapter](docs/mcp.md) ships alongside it, so `/mcp` works out of the box through a single lazy proxy tool. CLI tools with READMEs (see [Skills](#skills)) remain the lighter option. [Why?](https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/)
-
-**No sub-agents.** There's many ways to do this. Spawn midnight.server instances via tmux, or build your own with [extensions](#extensions), or install a package that does it your way.
-
-**No permission popups.** Run in a container, or build your own confirmation flow with [extensions](#extensions) inline with your environment and security requirements.
-
-**No plan mode.** Write plans to files, or build it with [extensions](#extensions), or install a package.
-
-**No built-in to-dos.** They confuse models. Use a TODO.md file, or build your own with [extensions](#extensions).
-
-**No background bash.** Use tmux. Full observability, direct interaction.
-
-Read the [blog post](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/) for the full rationale.
-
----
-
-## CLI Reference
-
-```bash
-midnight.server [options] [--] [@files...] [messages...]
-```
-
-### Package Commands
-
-```bash
-midnight.server install <source> [-l]     # Install package, -l for project-local
-midnight.server remove <source> [-l]      # Remove package
-midnight.server uninstall <source> [-l]   # Alias for remove
-midnight.server update [source|self]   # Update midnight.server only, or one package source
-midnight.server update --all              # Update midnight.server and packages
-midnight.server update --extensions       # Update packages only
-midnight.server update --models           # Refresh model catalogs only
-midnight.server update --self             # Update midnight.server only
-midnight.server update --self --force     # Reinstall midnight.server even if current
-midnight.server update --extension <src>  # Update one package
-midnight.server list                      # List installed packages
-midnight.server config                    # Enable/disable package resources
-```
-
-`midnight.server config` and project package commands accept `--approve`/`--no-approve` to trust or ignore project-local settings for one command. `midnight.server update` never prompts for project trust.
-
-### Modes
-
-| Flag | Description |
-|------|-------------|
-| (default) | Interactive mode |
-| `-p`, `--print` | Print response and exit |
-| `--mode json` | Output all events as JSON lines (see [docs/json.md](docs/json.md)) |
-| `--mode rpc` | RPC mode for process integration (see [docs/rpc.md](docs/rpc.md)) |
-| `--export <in> [out]` | Export session to HTML |
-
-In print mode, midnight.server also reads piped stdin and merges it into the initial prompt:
-
-```bash
-cat README.md | midnight.server -p "Summarize this text"
-```
-
-### Model Options
-
-| Option | Description |
-|--------|-------------|
-| `--provider <name>` | Provider (anthropic, openai, google, etc.) |
-| `--model <pattern>` | Model pattern or ID (supports `provider/id` and optional `:<thinking>`) |
-| `--api-key <key>` | API key (overrides env vars) |
-| `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
-| `--models <patterns>` | Comma-separated patterns for Ctrl+P cycling |
-| `--list-models [search]` | List available models |
-
-### Session Options
-
-| Option | Description |
-|--------|-------------|
-| `-c`, `--continue` | Continue most recent session |
-| `-r`, `--resume` | Browse and select session |
-| `--session <path\|id>` | Use specific session file or partial UUID |
-| `--fork <path\|id>` | Fork specific session file or partial UUID into a new session |
-| `--session-dir <dir>` | Custom session storage directory |
-| `--no-session` | Ephemeral mode (don't save) |
-| `--name <name>`, `-n <name>` | Set session display name at startup |
-
-### Tool Options
-
-| Option | Description |
-|--------|-------------|
-| `--tools <list>`, `-t <list>` | Allowlist specific tool names across built-in, extension, and custom tools |
-| `--exclude-tools <list>`, `-xt <list>` | Disable specific tool names across built-in, extension, and custom tools |
-| `--no-builtin-tools`, `-nbt` | Disable built-in tools by default but keep extension/custom tools enabled |
-| `--no-tools`, `-nt` | Disable all tools by default |
-
-Available built-in tools: `read`, `bash`, `powershell` (Windows), `edit`, `write`, `grep`, `find`, `ls`
-
-### Resource Options
-
-| Option | Description |
-|--------|-------------|
-| `-e`, `--extension <source>` | Load extension from path, npm, or git (repeatable) |
-| `--no-extensions` | Disable extension discovery |
-| `--skill <path>` | Load skill (repeatable) |
-| `--no-skills` | Disable skill discovery |
-| `--prompt-template <path>` | Load prompt template (repeatable) |
-| `--no-prompt-templates` | Disable prompt template discovery |
-| `--theme <path>` | Load theme (repeatable) |
-| `--no-themes` | Disable theme discovery |
-| `--no-context-files`, `-nc` | Disable AGENTS.md and CLAUDE.md context file discovery |
-
-Combine `--no-*` with explicit flags to load exactly what you need, ignoring settings.json (e.g., `--no-extensions -e ./my-ext.ts`).
-
-### Other Options
-
-| Option | Description |
-|--------|-------------|
-| `--system-prompt <text>` | Replace default prompt (context files and skills still appended) |
-| `--append-system-prompt <text>` | Append to system prompt |
-| `--tui-mode <mode>` | TUI mode: `regular` (default) or experimental `fullscreen` |
-| `--use-theme <name[/name]>` | Set the initial interactive theme for this run without changing settings |
-| `--verbose` | Force verbose startup |
-| `-a`, `--approve` | Trust project-local files for this run |
-| `-na`, `--no-approve` | Ignore project-local files for this run |
-| `--` | Stop option parsing; remaining arguments are prompts or `@file` inputs |
-| `-h`, `--help` | Show help |
-| `-v`, `--version` | Show version |
-
-### File Arguments
-
-Prefix files with `@` to include in the message:
-
-```bash
-midnight.server @prompt.md "Answer this"
-midnight.server -p @screenshot.png "What's in this image?"
-midnight.server @code.ts @test.ts "Review these files"
-```
-
-### Examples
-
-```bash
-# Interactive with initial prompt
-midnight.server "List all .ts files in src/"
-
-# Non-interactive
-midnight.server -p "Summarize this codebase"
-
-# Prompt beginning with a dash
-midnight.server -p -- "- Summarize these points"
-
-# Non-interactive with piped stdin
-cat README.md | midnight.server -p "Summarize this text"
-
-# Named one-shot session
-midnight.server --name "release audit" -p "Audit this repository"
-
-# Different model
-midnight.server --provider openai --model gpt-4o "Help me refactor"
-
-# Model with provider prefix (no --provider needed)
-midnight.server --model openai/gpt-4o "Help me refactor"
-
-# Model with thinking level shorthand
-midnight.server --model sonnet:high "Solve this complex problem"
-
-# Limit model cycling
-midnight.server --models "claude-*,gpt-4o"
-
-# Read-only mode
-midnight.server --tools read,grep,find,ls -p "Review the code"
-
-# Disable one extension or built-in tool while keeping the rest available
-midnight.server --exclude-tools ask_question
-
-# High thinking level
-midnight.server --thinking high "Solve this complex problem"
-```
-
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `AI_AGENT` | Set to `midnight.server` by the CLI and RPC entry points so generic tooling can attribute child processes to midnight.server |
-| `MIDNIGHT_SERVER_CODING_AGENT` | Set to `true` by the CLI and RPC entry points so child processes can detect that they run inside midnight.server |
-| `MIDNIGHT_SERVER_CODING_AGENT_DIR` | Override config directory (default: `~/.midnight.server/agent`) |
-| `MIDNIGHT_SERVER_CODING_AGENT_SESSION_DIR` | Override session storage directory (overridden by `--session-dir`) |
-| `MIDNIGHT_SERVER_PACKAGE_DIR` | Override package directory (useful for Nix/Guix where store paths tokenize poorly) |
-| `MIDNIGHT_SERVER_OFFLINE` | Disable startup network operations, including update checks, package update checks, and install/update telemetry |
-| `MIDNIGHT_SERVER_SKIP_VERSION_CHECK` | Skip the midnight.server version update check at startup. This prevents the `pi.dev` latest-version request |
-| `MIDNIGHT_SERVER_TELEMETRY` | Override install/update telemetry and provider attribution headers. Use `1`/`true`/`yes` to enable or `0`/`false`/`no` to disable. This does not disable update checks |
-| `MIDNIGHT_SERVER_CACHE_RETENTION` | Set to `long` for extended prompt cache (Anthropic: 1h, OpenAI: 24h) |
-| `VISUAL`, `EDITOR` | Fallback external editor for Ctrl+G when `externalEditor` is unset; defaults to Notepad on Windows and `nano` elsewhere |
-
-Commands run by the LLM-callable `bash` and `powershell` tools also receive current session metadata:
-
-| Variable | Description |
-|----------|-------------|
-| `MIDNIGHT_SERVER_SESSION_ID` | Current session ID |
-| `MIDNIGHT_SERVER_SESSION_FILE` | Absolute session JSONL path; unset for ephemeral sessions |
-| `MIDNIGHT_SERVER_PROVIDER` | Currently selected model provider |
-| `MIDNIGHT_SERVER_MODEL` | Currently selected model ID |
-| `MIDNIGHT_SERVER_REASONING_LEVEL` | Current effective reasoning level |
-
-These values are resolved when each command starts. See [Environment Variables](docs/environment-variables.md#shell-tool-session-environment) for semantics, examples, and custom-tool opt-out.
-
----
-
-## Contributing & Development
-
-See [CONTRIBUTING.md](../../CONTRIBUTING.md) for guidelines and [docs/development.md](docs/development.md) for setup, forking, and debugging.
-
-## License
-
-MIT
-
-## See Also
-
-- [@earendil-works/pi-ai](https://www.npmjs.com/package/@earendil-works/pi-ai): Core LLM toolkit
-- [@earendil-works/pi-agent-core](https://www.npmjs.com/package/@earendil-works/pi-agent-core): Agent framework
-- [@earendil-works/pi-tui](https://www.npmjs.com/package/@earendil-works/pi-tui): Terminal UI components
-
-<p align="center">
-  <a href="https://pi.dev">pi.dev</a> domain graciously donated by
-  <br /><br />
-  <a href="https://exe.dev"><img src="docs/images/exy.png" alt="Exy mascot" width="48" /><br />exe.dev</a>
-</p>
+Built from [Pi](https://github.com/soliluqoy/pi) (MIT), [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT) and [MiniCPM5-2B](https://huggingface.co/openbmb/MiniCPM5-2B) (Apache-2.0). See [upstream pins](docs/upstreams.lock.json) and [third-party notices](packaging/THIRD_PARTY_NOTICES.md). The design is in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).

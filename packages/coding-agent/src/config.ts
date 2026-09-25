@@ -497,6 +497,8 @@ export const APP_NAME: string = piConfigName || "pi";
 export const APP_TITLE: string = `☾ ${APP_NAME}`;
 export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".pi";
 export const VERSION: string = pkg.version || "0.0.0";
+/** Where `/bug` tells users to file the exported report. */
+export const BUG_REPORT_URL = "https://github.com/soliluqoy/midnight.server/issues";
 
 // Product environment variables must not depend on the dotted display name.
 export const ENV_AGENT_DIR = "MIDNIGHT_SERVER_CODING_AGENT_DIR";

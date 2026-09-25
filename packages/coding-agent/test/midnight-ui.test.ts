@@ -257,7 +257,7 @@ describe("sidebar and footer", () => {
 		]);
 		expect(describeDrift(getMidnightStatus())).toBe("off");
 		updateMidnightStatus({ drift: { checking: false, lastVerdict: "drifting", turnsUntilCheck: 4 } });
-		expect(describeDrift(getMidnightStatus())).toBe("drifting · next in 4");
+		expect(describeDrift(getMidnightStatus())).toBe("drifting");
 	});
 
 	it("renders session, git, context, model, local and modified-file sections within width", () => {

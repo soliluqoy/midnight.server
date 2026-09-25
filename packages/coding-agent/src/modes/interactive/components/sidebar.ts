@@ -41,8 +41,7 @@ export function describeDrift(status: Readonly<MidnightStatus>): string {
 	const drift = status.drift;
 	if (!drift) return "off";
 	if (drift.checking) return "checking…";
-	const verdict = drift.lastVerdict ? drift.lastVerdict.replace("_", " ") : "no check yet";
-	return `${verdict} · next in ${drift.turnsUntilCheck}`;
+	return drift.lastVerdict ? drift.lastVerdict.replace("_", " ") : "no check yet";
 }
 
 /** Summarize git status as short tokens, e.g. ["↑1", "3 changed", "1 staged"]. */
@@ -138,7 +137,7 @@ export class SidebarComponent implements Component {
 			line(theme.fg("dim", "no model"));
 		}
 
-		heading("Local");
+		heading("Midnight");
 		line(`${theme.fg("muted", "engine")} ${theme.fg("text", describeEngine(status.engine))}`);
 		if (status.engine === "starting" && status.activity) line(theme.fg("dim", status.activity));
 		const driftColor = status.drift?.lastVerdict && status.drift.lastVerdict !== "on_track" ? "warning" : "text";

@@ -2,7 +2,8 @@
   "pi": {
     "repository": "https://github.com/soliluqoy/pi",
     "parent": "https://github.com/earendil-works/pi",
-    "commit": "36b60d2e8985899743c4cf5bd5f8929832a3f05d",
+    "commit": "f07218c4d4bbc12bef056a7058c3dd49dfe41abe",
+    "release": "v0.87.1",
     "import": "Source snapshot in packages/ (not a subtree); midnight changes are listed in docs/IMPLEMENTATION_STATUS.md",
     "license": "MIT"
   },

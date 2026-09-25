@@ -56,7 +56,7 @@ The engine is llama.cpp `b11166`: the CPU build ships in the release, and a GPU 
 **Example (illustrative).** You ask for a fix to the failing date-parsing test, with *"don't change the public API"*. Eight turns later the model has changed `parseDate`'s exported signature and is reworking the logger. Drift watch runs its check, decides the model is `drifting`, and adds this to the session:
 
 ```
-[local focus check: drifting] The task said not to change the public API, but parseDate's exported signature was changed.
+[check: drifting] The task said not to change the public API, but parseDate's exported signature was changed.
 ```
 
 The cloud model receives this reminder with your next prompt and can correct course before it goes further.

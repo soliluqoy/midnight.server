@@ -1,6 +1,6 @@
 # Implementation status
 
-Updated 2026-09-25. Tracks [the plan](../IMPLEMENTATION_PLAN.md). Everything below was verified on **one** machine (Windows 10 Pro 19045, i7-8650U, 15.9 GiB, CPU only) unless marked otherwise. This is not a release qualification.
+Updated 2026-09-26. Tracks [the plan](../IMPLEMENTATION_PLAN.md). Everything below was verified on **one** machine (Windows 10 Pro 19045, i7-8650U, 15.9 GiB, CPU only) unless marked otherwise. This is not a release qualification.
 
 ## Working and verified
 
@@ -22,6 +22,18 @@ Updated 2026-09-25. Tracks [the plan](../IMPLEMENTATION_PLAN.md). Everything bel
 | Measurements | `docs/benchmarks/cpu-i7-8650u.md` | Thread scaling, start times, helper latency, memory |
 
 Bugs found and fixed by these checks: the engine ignored the API key when passed through an environment variable (llama-server has none), and it could not open its key file under a non-ASCII path (ANSI file API).
+
+## Upstream base
+
+The Pi source snapshot is `earendil-works/pi` v0.87.1 (`f07218c4d`, recorded in `docs/upstreams.lock.json`), ported on 2026-09-26 from 0.85.1+147 (`36b60d2e`). How the port was done, so the next one can repeat it:
+
+1. `git diff -M 36b60d2e v0.87.1 | git apply -3` with the upstream objects fetched locally. Source conflicts were limited to imports and the `ENV_RADIUS_GATEWAY` move.
+2. Documentation was merged three ways against rebranded inputs (ours, `rebrand(base)`, `rebrand(upstream)`), so only real edits conflict. The rebrand is mechanical: `PI_*` becomes `MIDNIGHT_SERVER_*`, `~/.pi` and `.pi/` become `.midnight.server`, and prose `Pi`/`pi` becomes `midnight.server`; TypeScript, JavaScript, Python and JSON code blocks keep `pi` identifiers and the `"pi"` package manifest key. The package README stays ours; upstream reduced its copy to a pointer page.
+3. New upstream source was checked for `PI_*` variables and user-facing "Pi" strings. `PI_CACHE_RETENTION` and `PI_RADIUS_GATEWAY` became `MIDNIGHT_SERVER_*`.
+4. `/bug` is export-only: upstream uploads reports to the Pi developers' Radius service.
+5. Changelogs keep our Unreleased entries, drop upstream entries that were released since the base, and insert upstream's released sections.
+
+0.87.0 API changes checked against midnight code: `shouldStopAfterTurn` (unused), `context` handlers no longer receiving system messages (drift watch only reads the conversation), actionable `turn_end` and `agent_before_settle` boundaries (drift watch and session titles only observe), canonical `SessionManager` context (no midnight code assigns `agent.state.messages`), `ContextEditEntry` in `SessionEntry` (typechecks), and non-strict tools for unknown OpenAI-compatible endpoints (the local provider already sets `supportsStrictMode: false`). The bundled `pi-mcp-adapter` 2.37.0 is built against 0.87.0.
 
 ## Deviations from the plan
 
@@ -47,10 +59,10 @@ Bugs found and fixed by these checks: the engine ignored the API key when passed
 
 `npm run check` passes. All midnight tests pass, including the real-model integration test. Three existing tests that assumed Bash as the Windows default tool were updated.
 
-Package tests under `test.sh`'s isolated environment on this Windows machine (2026-09-25) still have failures that do not involve midnight code:
+Package tests under `test.sh`'s isolated environment on this Windows machine still have failures that do not involve midnight code. After the 0.87.1 port (2026-09-26), every package suite was run on both the pre-port tree and the ported tree: no test fails only after the port, and six pre-port failures are fixed by upstream. Upstream tests that encode Pi defaults were adapted: the `MIDNIGHT_SERVER_CACHE_RETENTION` name, the product name in the crash hint, and the Windows `powershell` default tool in the #9789 regression.
 
-- `coding-agent`: 131 of 2,397 tests fail in 35 files. Causes seen: the earlier config-directory rename (tests write project settings to `.pi/` while the product reads `.midnight.server/`), tests that pass raw `C:\` paths to `node --import` (Node rejects them on Windows), `pi` vs `midnight.server` strings in expected help text, Windows EPERM vs EACCES, and Git Bash path translation.
-- `agent-core`: 61 files fail on `@earendil-works/pi-ai/utils/uuid` resolution because package exports point at `dist/`, which is not built (the repository rules forbid `npm run build` without a request).
+- `coding-agent`: 125 of 2,601 tests fail. Causes seen: the earlier config-directory rename (tests write project settings to `.pi/` while the product reads `.midnight.server/`), tests that pass raw `C:\` paths to `node --import` (Node rejects them on Windows), `pi` vs `midnight.server` strings in expected help text, Windows EPERM vs EACCES, and Git Bash path translation.
+- `agent-core`, `durable`, `session-backends/sqlite-node`, `client`, `server`: many files fail to load because package exports point at `dist/`, which is not built (the repository rules forbid `npm run build` without a request). Run through a vitest config that resolves workspace packages to their `source` export (as `vitest.base.ts` does), `agent-core` runs 875 tests with 51 failures, all Windows symlink EPERM and JSONL v3 legacy migration, identical before and after the port; `durable` passes 77 of 77.
 - `scripts/coding-agent-consumer.test.mjs` spawns `C:\Program Files\nodejs\node.exe` through a shell without quoting, which stops `npm test` before the package tests.
 
 Fixing these is part of finishing the Phase 2 rename and Windows test portability.

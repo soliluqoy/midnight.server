@@ -6,7 +6,7 @@ midnight.server uses environment variables in three ways:
 - midnight.server sets process markers so child processes can identify midnight.server as the launching agent.
 - Commands run by the LLM-callable shell tools receive `PI_*` variables describing the current session.
 
-Provider API-key variables are documented separately in [Providers](providers.md#environment-variables-or-auth-file).
+Provider API-key variables are documented separately in [Provider Authentication](providers.md#use-an-api-key-from-the-environment).
 
 ## Process Marker
 
@@ -81,11 +81,12 @@ These variables are read by midnight.server itself:
 | `MIDNIGHT_SERVER_CODING_AGENT_DIR` | Override the config directory; default is `~/.midnight.server/agent` |
 | `MIDNIGHT_SERVER_CODING_AGENT_SESSION_DIR` | Override session storage; overridden by `--session-dir` |
 | `MIDNIGHT_SERVER_PACKAGE_DIR` | Override the package directory, useful for Nix/Guix store paths |
-| `MIDNIGHT_SERVER_OFFLINE` | Disable startup network operations, including update checks, package updates, and install/update telemetry |
+| `MIDNIGHT_SERVER_OFFLINE` | Disable automatic network activity, including model catalog refreshes |
 | `MIDNIGHT_SERVER_SKIP_VERSION_CHECK` | Disable the `pi.dev` latest-version request |
 | `MIDNIGHT_SERVER_TELEMETRY` | Override install/update telemetry and provider attribution headers: `1`/`true`/`yes` or `0`/`false`/`no` |
 | `MIDNIGHT_SERVER_CACHE_RETENTION` | Set to `long` for extended provider prompt caching where supported |
 | `MIDNIGHT_SERVER_SHARE_VIEWER_URL` | Override the base URL used by `/share` |
+| `MIDNIGHT_SERVER_RADIUS_GATEWAY` | Override the Radius gateway origin used by Radius relay connections |
 | `MIDNIGHT_SERVER_HARDWARE_CURSOR` | Set to `1` to show the hardware cursor; see [Terminal setup](terminal-setup.md) |
 | `MIDNIGHT_SERVER_HYPERLINKS` | Override OSC 8 hyperlink detection with `1`, `0`, or `auto` |
 | `MIDNIGHT_SERVER_IMAGE_PROTOCOL` | Override inline image detection with `kitty`, `iterm2`, `none`, or `auto` |
@@ -94,6 +95,4 @@ These variables are read by midnight.server itself:
 | `VISUAL`, `EDITOR` | External editor fallback when `externalEditor` is unset |
 | `HTTP_PROXY`, `HTTPS_PROXY` | Proxy outbound HTTP requests |
 
-Provider credentials such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and cloud-provider configuration are listed in [Providers](providers.md#environment-variables-or-auth-file).
-
-`MIDNIGHT_SERVER_SERVER_DIR` and `MIDNIGHT_SERVER_SERVER_ID` apply only to the source-only [experimental remote harness](development.md#experimental-remote-harness), not distributed builds.
+Provider credentials such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and cloud-provider configuration are listed in [Provider Authentication](providers.md#use-an-api-key-from-the-environment).

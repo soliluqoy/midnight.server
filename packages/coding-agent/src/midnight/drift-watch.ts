@@ -58,6 +58,11 @@ interface DriftVerdict {
 	reminder?: string;
 }
 
+/** Tag shown on drift nudges, e.g. `[check: off task]`. */
+function checkTag(status: DriftStatus): string {
+	return `[check: ${status.replace("_", " ")}]`;
+}
+
 const DRIFT_SCHEMA = {
 	type: "object",
 	properties: {
@@ -176,10 +181,9 @@ export function createDriftWatchExtension(manager: EngineManager, settings: Drif
 
 		pi.registerMessageRenderer("midnight_drift_watch", (message, { outputPad }, theme) => {
 			const details = message.details as DriftVerdict | undefined;
-			const label = details?.status === "off_task" ? "off task" : "drifting";
 			const box = new Box(outputPad, 1, (t) => theme.bg("customMessageBg", t));
 			box.addChild(
-				new Text(`${theme.fg("warning", `[local focus check: ${label}]`)} ${details?.reason ?? ""}`, 0, 0),
+				new Text(`${theme.fg("warning", checkTag(details?.status ?? "drifting"))} ${details?.reason ?? ""}`, 0, 0),
 			);
 			return box;
 		});
@@ -228,7 +232,7 @@ export function createDriftWatchExtension(manager: EngineManager, settings: Drif
 							content: [
 								{
 									type: "text",
-									text: `Local focus check (${verdict.status}): ${verdict.reason}\n\nReminder: ${reminder}`,
+									text: `${checkTag(verdict.status)} ${verdict.reason}\n\nReminder: ${reminder}`,
 								},
 							],
 							display: true,
@@ -239,10 +243,7 @@ export function createDriftWatchExtension(manager: EngineManager, settings: Drif
 				} catch (error) {
 					if (error instanceof LocalSetupError) unavailable = true;
 					else
-						ctx.ui.notify(
-							`Local focus check failed: ${error instanceof Error ? error.message : String(error)}`,
-							"warning",
-						);
+						ctx.ui.notify(`[check] failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
 				} finally {
 					checking = false;
 					publish();
