@@ -70,11 +70,18 @@ Write-Step "Installing engine ($Backend)"
 # .cache\engine-home keeps it between builds.
 $engineHome = Join-Path $RepoRoot ".cache\engine-home"
 $previousHome = $env:MIDNIGHT_SERVER_HOME
+$previousPreference = $ErrorActionPreference
 $env:MIDNIGHT_SERVER_HOME = $engineHome
+# Progress goes to stderr, which Windows PowerShell 5.1 turns into a terminating error under "Stop".
+$ErrorActionPreference = "Continue"
 try {
-	$fetched = & (Join-Path $OutDir "midnight.server.exe") engine fetch $Backend
-	if ($LASTEXITCODE -ne 0) { throw "midnight.server engine fetch $Backend exited with $LASTEXITCODE" }
-} finally { $env:MIDNIGHT_SERVER_HOME = $previousHome }
+	$fetched = & (Join-Path $OutDir "midnight.server.exe") engine fetch $Backend 2>&1 | ForEach-Object { "$_" }
+	$code = $LASTEXITCODE
+} finally {
+	$env:MIDNIGHT_SERVER_HOME = $previousHome
+	$ErrorActionPreference = $previousPreference
+}
+if ($code -ne 0) { throw "midnight.server engine fetch $Backend exited with ${code}: $($fetched -join "`n")" }
 $engineRoot = ($fetched | Select-String -Pattern "^Engine installed: (.+)$" | Select-Object -Last 1).Matches[0].Groups[1].Value
 $engineDir = Join-Path $OutDir "engine\$Backend"
 Copy-Item -Recurse -LiteralPath $engineRoot -Destination $engineDir
