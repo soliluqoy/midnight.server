@@ -1,9 +1,9 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { closeSync, mkdirSync, openSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { availableParallelism } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 
 export interface EngineSettings {
 	contextSize: number;
@@ -15,6 +15,8 @@ export interface EngineSettings {
 export interface EngineStartOptions extends Partial<EngineSettings> {
 	modelPath: string;
 	engineDir: string;
+	/** GPU layers when neither the options nor MIDNIGHT_SERVER_GPU_LAYERS set them. */
+	defaultGpuLayers?: number;
 	/** Job Object host. Required on Windows so the engine cannot outlive the CLI. */
 	hostPath?: string;
 	logPath: string;
@@ -58,15 +60,21 @@ function positiveIntegerEnv(name: string): number | undefined {
 	return value;
 }
 
-/** Defaults tuned for a small interactive helper; see IMPLEMENTATION_PLAN.md section 7. */
-export function resolveEngineSettings(overrides: Partial<EngineSettings> = {}): EngineSettings {
+/** Offload every layer. llama.cpp caps this at the model's layer count. */
+export const ALL_GPU_LAYERS = 999;
+
+/**
+ * Defaults tuned for a small interactive helper; see IMPLEMENTATION_PLAN.md section 7.
+ * `defaultGpuLayers` comes from the selected backend; the environment still wins over it.
+ */
+export function resolveEngineSettings(overrides: Partial<EngineSettings> = {}, defaultGpuLayers = 0): EngineSettings {
 	return {
 		contextSize: overrides.contextSize ?? positiveIntegerEnv("MIDNIGHT_SERVER_CONTEXT") ?? 8192,
 		threads:
 			overrides.threads ??
 			positiveIntegerEnv("MIDNIGHT_SERVER_THREADS") ??
 			Math.max(1, Math.min(8, availableParallelism() - 2)),
-		gpuLayers: overrides.gpuLayers ?? positiveIntegerEnv("MIDNIGHT_SERVER_GPU_LAYERS") ?? 0,
+		gpuLayers: overrides.gpuLayers ?? positiveIntegerEnv("MIDNIGHT_SERVER_GPU_LAYERS") ?? defaultGpuLayers,
 		startupTimeoutMs: overrides.startupTimeoutMs ?? 180_000,
 	};
 }
@@ -84,8 +92,12 @@ async function reservePort(): Promise<number> {
 	});
 }
 
-/** Only what the engine needs. Provider credentials in the parent environment are not inherited. */
-function engineEnvironment(engineDir: string): NodeJS.ProcessEnv {
+/**
+ * Only what the engine needs. Provider credentials in the parent environment are
+ * not inherited. GPU device selection variables are, and PATH follows the engine
+ * directory so vendor runtimes (oneAPI, ROCm, OpenVINO) installed system-wide load.
+ */
+export function engineEnvironment(engineDir: string): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = {};
 	for (const name of [
 		"SystemRoot",
@@ -98,13 +110,33 @@ function engineEnvironment(engineDir: string): NodeJS.ProcessEnv {
 		"PROCESSOR_IDENTIFIER",
 		"LANG",
 		"HOME",
+		"XDG_RUNTIME_DIR",
+		"LD_LIBRARY_PATH",
+		"CUDA_VISIBLE_DEVICES",
+		"HIP_VISIBLE_DEVICES",
+		"ROCR_VISIBLE_DEVICES",
+		"ONEAPI_DEVICE_SELECTOR",
 	]) {
 		const value = process.env[name];
 		if (value !== undefined) env[name] = value;
 	}
+	for (const [name, value] of Object.entries(process.env)) {
+		if ((name.startsWith("GGML_") || name.startsWith("VK_")) && value !== undefined) env[name] = value;
+	}
 	const systemRoot = process.env.SystemRoot;
-	env.PATH = systemRoot ? [engineDir, join(systemRoot, "System32")].join(";") : engineDir;
+	env.PATH = [engineDir, ...(systemRoot ? [join(systemRoot, "System32")] : []), process.env.PATH ?? process.env.Path]
+		.filter(Boolean)
+		.join(delimiter);
 	return env;
+}
+
+/** Last lines of the engine log, so a startup failure (missing driver or library) is visible without opening it. */
+function logTail(logPath: string, lines = 6): string {
+	try {
+		return readFileSync(logPath, "utf8").trimEnd().split(/\r?\n/).slice(-lines).join("\n");
+	} catch {
+		return "";
+	}
 }
 
 const delay = (ms: number) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
@@ -142,7 +174,7 @@ export class LocalEngine {
 	}
 
 	static async start(options: EngineStartOptions): Promise<LocalEngine> {
-		const settings = resolveEngineSettings(options);
+		const settings = resolveEngineSettings(options, options.defaultGpuLayers);
 		const serverExe = join(options.engineDir, process.platform === "win32" ? "llama-server.exe" : "llama-server");
 		if (process.platform === "win32" && !options.hostPath) {
 			throw new Error("midnight-host.exe was not found; refusing to start an engine without process ownership.");
@@ -206,7 +238,7 @@ export class LocalEngine {
 				settings,
 			);
 			try {
-				await engine.waitUntilReady(settings.startupTimeoutMs, options.signal);
+				await engine.waitUntilReady(settings.startupTimeoutMs, options.signal, options.logPath);
 				await engine.assertAuthenticated();
 				return engine;
 			} catch (error) {
@@ -226,13 +258,14 @@ export class LocalEngine {
 		return !this.stopped && this.exitInfo === undefined;
 	}
 
-	private async waitUntilReady(timeoutMs: number, signal?: AbortSignal): Promise<void> {
+	private async waitUntilReady(timeoutMs: number, signal: AbortSignal | undefined, logPath: string): Promise<void> {
 		const deadline = Date.now() + timeoutMs;
 		while (Date.now() < deadline) {
 			signal?.throwIfAborted();
 			if (this.exitInfo) {
+				const tail = logTail(logPath);
 				throw new EngineExitedError(
-					`Engine exited during startup (code ${this.exitInfo.code}). See the engine log.`,
+					`Engine exited during startup (code ${this.exitInfo.code}). Engine log ${logPath}${tail ? `:\n${tail}` : "."}`,
 				);
 			}
 			if (await this.health()) return;

@@ -10,7 +10,7 @@
     "repository": "https://github.com/ggml-org/llama.cpp",
     "release": "b11166",
     "commit": "a72e04abe0fe9b36e203033ac71bd5f379c35bc5",
-    "consumed": "Official Windows x64 CPU release binaries, pinned by SHA-256 in engine/llama-cpp-win-x64-cpu.lock.json. Not built from source in this repository yet.",
+    "consumed": "Official release binaries for every supported platform and backend, pinned by SHA-256 in packages/coding-agent/src/midnight/engine-builds.generated.ts (scripts/generate-engine-pins.mjs). The Windows x64 CPU build is bundled. Not built from source in this repository yet.",
     "license": "MIT"
   },
   "MiniCPM5-2B-GGUF": {

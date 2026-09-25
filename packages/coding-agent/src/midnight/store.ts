@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { type DownloadOptions, downloadVerified } from "./download.ts";
 import { type ModelLock, verifyModelFile } from "./model-integrity.ts";
 import {
@@ -12,7 +12,7 @@ import {
 	userEngineDir,
 	userModelPath,
 } from "./paths.ts";
-import { ENGINE_LOCK, type EngineLock, MODEL_LOCK, modelDownloadUrl } from "./pins.ts";
+import { cpuBackend, type EngineLock, engineDownloadBytes, engineLock, MODEL_LOCK, modelDownloadUrl } from "./pins.ts";
 
 interface VerificationStamp {
 	sizeBytes: number;
@@ -84,12 +84,61 @@ export async function fetchModel(lock: ModelLock = MODEL_LOCK, options: Download
 	return dest;
 }
 
-export function isCompleteEngineDir(dir: string, lock: EngineLock = ENGINE_LOCK): boolean {
-	return lock.files.every((file) => existsSync(join(dir, file)));
+/** Written last into an installed engine: which pinned build it holds and where llama-server is. */
+export const ENGINE_MARKER = ".midnight-engine.json";
+
+interface EngineMarker {
+	name: string;
+	release: string;
+	platform: string;
+	backend: string;
+	sha256: string[];
+	/** llama-server, relative to the install root. */
+	server: string;
 }
 
-export function findEngineDir(lock: EngineLock = ENGINE_LOCK): string | undefined {
-	return engineDirCandidates().find((dir) => isCompleteEngineDir(dir, lock));
+export function serverFileName(platform: string = process.platform): string {
+	return platform.startsWith("win32") ? "llama-server.exe" : "llama-server";
+}
+
+/** The directory holding llama-server if `root` holds exactly the pinned build `lock`, else undefined. */
+export function installedEngineDir(root: string, lock: EngineLock): string | undefined {
+	let marker: Partial<EngineMarker>;
+	try {
+		marker = JSON.parse(readFileSync(join(root, ENGINE_MARKER), "utf8")) as Partial<EngineMarker>;
+	} catch {
+		return undefined;
+	}
+	if (
+		marker.release !== lock.release ||
+		marker.platform !== lock.platform ||
+		marker.backend !== lock.backend ||
+		marker.sha256?.join() !== lock.archives.map((archive) => archive.sha256).join() ||
+		typeof marker.server !== "string"
+	) {
+		return undefined;
+	}
+	const server = resolve(root, marker.server);
+	if (relative(root, server).startsWith("..") || !existsSync(server)) return undefined;
+	return dirname(server);
+}
+
+/**
+ * Directory of llama-server for `lock`. `MIDNIGHT_SERVER_ENGINE_DIR` names the
+ * user's own llama.cpp build and wins over every pinned build.
+ */
+export function findEngineDir(lock: EngineLock | undefined = engineLock(cpuBackend())): string | undefined {
+	const override = process.env.MIDNIGHT_SERVER_ENGINE_DIR;
+	if (override) {
+		const dir = resolve(override);
+		return existsSync(join(dir, serverFileName())) ? dir : undefined;
+	}
+	if (!lock) return undefined;
+	for (const root of engineDirCandidates(lock)) {
+		const dir = installedEngineDir(root, lock);
+		if (dir) return dir;
+	}
+	return undefined;
 }
 
 export function findHost(): string | undefined {
@@ -110,29 +159,118 @@ function run(command: string, args: string[]): Promise<void> {
 	});
 }
 
-/**
- * Download the pinned engine archive, verify it, and extract only the runtime
- * files listed in the lock. Uses the bsdtar shipped with Windows 10 and later.
- */
-export async function fetchEngine(lock: EngineLock = ENGINE_LOCK, options: DownloadOptions = {}): Promise<string> {
-	const dest = userEngineDir();
-	if (isCompleteEngineDir(dest, lock)) return dest;
-	const archive = join(getMidnightHome(), "downloads", basename(new URL(lock.url).pathname));
-	if (!existsSync(archive)) {
-		await downloadVerified(lock.url, archive, lock, options);
+/** Linux and macOS archives wrap everything in one top-level directory; Windows zips are flat. */
+async function archiveRoot(dir: string): Promise<string> {
+	const entries = await readdir(dir, { withFileTypes: true });
+	return entries.length === 1 && entries[0].isDirectory() ? join(dir, entries[0].name) : dir;
+}
+
+/** Move `from`'s contents into `to`, merging directories and replacing files (a CUDA runtime archive adds libraries). */
+async function mergeInto(from: string, to: string): Promise<void> {
+	for (const entry of await readdir(from, { withFileTypes: true })) {
+		const source = join(from, entry.name);
+		const target = join(to, entry.name);
+		const existing = await lstat(target).catch(() => undefined);
+		if (entry.isDirectory() && existing?.isDirectory()) {
+			await mergeInto(source, target);
+			continue;
+		}
+		await rm(target, { recursive: true, force: true });
+		await rename(source, target);
 	}
+}
+
+async function findFile(root: string, name: string, depth = 3): Promise<string | undefined> {
+	const entries = await readdir(root, { withFileTypes: true });
+	if (entries.some((entry) => entry.isFile() && entry.name === name)) return join(root, name);
+	if (depth === 0) return undefined;
+	for (const entry of entries) {
+		if (!entry.isDirectory()) continue;
+		const found = await findFile(join(root, entry.name), name, depth - 1);
+		if (found) return found;
+	}
+	return undefined;
+}
+
+/**
+ * Release archives also carry llama.cpp's other tools (CLI, quantizer, bench,
+ * tests). Remove them and their `*-impl` libraries from the server's directory;
+ * shared ggml/llama libraries, runtimes and licenses stay.
+ */
+async function removeOtherTools(serverDir: string, serverName: string): Promise<void> {
+	for (const entry of await readdir(serverDir, { withFileTypes: true })) {
+		if (!entry.isFile() || entry.name === serverName) continue;
+		const path = join(serverDir, entry.name);
+		const impl = /^(?:lib)?llama-(.+)-impl\.(?:dll|so|dylib)$/.exec(entry.name);
+		const windowsTool = entry.name.endsWith(".exe");
+		const unixTool =
+			!entry.name.includes(".") && !entry.name.startsWith("LICENSE") && ((await stat(path)).mode & 0o111) !== 0;
+		if ((impl && impl[1] !== "server") || windowsTool || unixTool) await rm(path, { force: true });
+	}
+}
+
+function tarCommand(): string {
+	// bsdtar ships with Windows 10 and later and reads both .zip and .tar.gz.
+	return process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "tar";
+}
+
+/**
+ * Download every archive of a pinned engine build, verify each, and extract
+ * them into one directory. The install is staged and renamed into place, with
+ * the marker written last, so a partial install is never found.
+ */
+export async function fetchEngine(lock: EngineLock, options: DownloadOptions = {}): Promise<string> {
+	const dest = userEngineDir(lock);
+	if (installedEngineDir(dest, lock)) return dest;
+	const totalBytes = engineDownloadBytes(lock);
+	const downloads: string[] = [];
 	const staging = `${dest}.${process.pid}.tmp`;
 	await rm(staging, { recursive: true, force: true });
 	await mkdir(staging, { recursive: true });
-	const tar =
-		process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "tar";
-	await run(tar, ["-xf", archive, "-C", staging, ...lock.files]);
-	if (!isCompleteEngineDir(staging, lock)) {
+	try {
+		let doneBytes = 0;
+		for (const [index, archive] of lock.archives.entries()) {
+			const file = join(getMidnightHome(), "downloads", basename(new URL(archive.url).pathname));
+			downloads.push(file);
+			if (!existsSync(file)) {
+				await downloadVerified(archive.url, file, archive, {
+					...options,
+					onProgress: options.onProgress
+						? ({ receivedBytes }) =>
+								options.onProgress?.({ receivedBytes: doneBytes + receivedBytes, totalBytes })
+						: undefined,
+				});
+			}
+			doneBytes += archive.sizeBytes;
+			const unpack = `${staging}.${index}`;
+			await rm(unpack, { recursive: true, force: true });
+			await mkdir(unpack, { recursive: true });
+			try {
+				await run(tarCommand(), ["-xf", file, "-C", unpack]);
+				await mergeInto(await archiveRoot(unpack), staging);
+			} finally {
+				await rm(unpack, { recursive: true, force: true });
+			}
+		}
+		const serverName = serverFileName(lock.platform);
+		const server = await findFile(staging, serverName);
+		if (!server) throw new Error(`Engine archives for ${lock.platform}-${lock.backend} do not contain ${serverName}`);
+		await removeOtherTools(dirname(server), serverName);
+		const marker: EngineMarker = {
+			name: lock.name,
+			release: lock.release,
+			platform: lock.platform,
+			backend: lock.backend,
+			sha256: lock.archives.map((archive) => archive.sha256),
+			server: relative(staging, server).replaceAll("\\", "/"),
+		};
+		await writeFile(join(staging, ENGINE_MARKER), `${JSON.stringify(marker, null, "\t")}\n`);
+		await rm(dest, { recursive: true, force: true });
+		await rename(staging, dest);
+	} catch (error) {
 		await rm(staging, { recursive: true, force: true });
-		throw new Error(`Engine archive is missing required files: ${archive}`);
+		throw error;
 	}
-	await rm(dest, { recursive: true, force: true });
-	await rename(staging, dest);
-	await rm(archive, { force: true });
+	for (const file of downloads) await rm(file, { force: true });
 	return dest;
 }

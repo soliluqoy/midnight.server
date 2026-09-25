@@ -1,21 +1,40 @@
 import { join } from "node:path";
+import {
+	type BackendChoice,
+	listDevices,
+	newChoice,
+	type ProbeResult,
+	probeBackends,
+	readBackendChoice,
+	requestedBackend,
+	userGpuLayers,
+	writeBackendChoice,
+} from "./backend.ts";
 import type { DownloadProgress } from "./download.ts";
-import { type EngineSettings, LocalEngine } from "./engine.ts";
+import { ALL_GPU_LAYERS, type EngineSettings, engineEnvironment, LocalEngine } from "./engine.ts";
 import type { ModelLock } from "./model-integrity.ts";
 import { getLogDir, getMidnightHome } from "./paths.ts";
-import { ENGINE_LOCK, type EngineLock, MODEL_LOCK } from "./pins.ts";
+import { cpuBackend, type EngineLock, engineDownloadBytes, engineLock, MODEL_LOCK } from "./pins.ts";
 import { updateMidnightStatus } from "./status.ts";
-import { ensureModelVerified, fetchEngine, fetchModel, findEngineDir, findHost, findModel } from "./store.ts";
+import {
+	ensureModelVerified,
+	fetchEngine,
+	fetchModel,
+	findEngineDir,
+	findHost,
+	findModel,
+	installedEngineDir,
+} from "./store.ts";
 
 export class LocalSetupError extends Error {}
 
-export interface ResolvedLocalAssets {
+export interface ResolvedModel {
 	modelPath: string;
-	engineDir: string;
 	hostPath?: string;
 }
 
 const GiB = 1024 ** 3;
+const MiB = 1024 ** 2;
 
 /** Turns download byte counts into occasional, human-readable status lines instead of one per chunk. */
 function reportProgress(
@@ -32,22 +51,19 @@ function reportProgress(
 	};
 }
 
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
 /**
- * Locate the pinned model, engine and host, downloading the model and (on the
- * one supported platform) the engine automatically the first time either is
- * missing, so a fresh install works without a separate setup step. An explicit
- * `MIDNIGHT_SERVER_MODEL` / `MIDNIGHT_SERVER_ENGINE_DIR` override is never
- * routed around: if it points at nothing, that is a configuration error, not
- * something to silently download past.
+ * Locate and verify the pinned model and the process host, downloading the
+ * model the first time it is missing. An explicit `MIDNIGHT_SERVER_MODEL`
+ * override is never routed around: if it points at nothing, that is a
+ * configuration error, not something to silently download past.
  */
-export async function resolveLocalAssets(
+export async function resolveModel(
 	signal?: AbortSignal,
 	onStatus?: (message: string) => void,
-	locks: { model?: ModelLock; engine?: EngineLock } = {},
-): Promise<ResolvedLocalAssets> {
-	const modelLock = locks.model ?? MODEL_LOCK;
-	const engineLock = locks.engine ?? ENGINE_LOCK;
-
+	modelLock: ModelLock = MODEL_LOCK,
+): Promise<ResolvedModel> {
 	let modelPath = findModel(modelLock);
 	if (!modelPath) {
 		if (process.env.MIDNIGHT_SERVER_MODEL) {
@@ -62,29 +78,7 @@ export async function resolveLocalAssets(
 			modelPath = await fetchModel(modelLock, { signal, onProgress: reportProgress(onStatus, "Model download") });
 		} catch (error) {
 			throw new LocalSetupError(
-				`Could not download the local model automatically: ${error instanceof Error ? error.message : String(error)}. Run: midnight.server model fetch`,
-			);
-		}
-	}
-
-	let engineDir = findEngineDir(engineLock);
-	if (!engineDir) {
-		if (process.env.MIDNIGHT_SERVER_ENGINE_DIR) {
-			throw new LocalSetupError(
-				`MIDNIGHT_SERVER_ENGINE_DIR is set to ${process.env.MIDNIGHT_SERVER_ENGINE_DIR}, but it is not a complete llama.cpp build.`,
-			);
-		}
-		if (process.platform !== "win32" || process.arch !== "x64") {
-			throw new LocalSetupError(
-				"The local inference engine is not installed for this platform. Set MIDNIGHT_SERVER_ENGINE_DIR to a llama.cpp build.",
-			);
-		}
-		onStatus?.("Downloading the local inference engine (one-time)...");
-		try {
-			engineDir = await fetchEngine(engineLock, { signal, onProgress: reportProgress(onStatus, "Engine download") });
-		} catch (error) {
-			throw new LocalSetupError(
-				`Could not download the local inference engine automatically: ${error instanceof Error ? error.message : String(error)}. Run: midnight.server engine fetch`,
+				`Could not download the local model automatically: ${errorText(error)}. Run: midnight.server model fetch`,
 			);
 		}
 	}
@@ -99,10 +93,172 @@ export async function resolveLocalAssets(
 		await ensureModelVerified(modelPath, modelLock, { signal });
 	} catch (error) {
 		throw new LocalSetupError(
-			`Model verification failed for ${modelPath}: ${error instanceof Error ? error.message : String(error)}. Delete it and run: midnight.server model fetch`,
+			`Model verification failed for ${modelPath}: ${errorText(error)}. Delete it and run: midnight.server model fetch`,
 		);
 	}
-	return { modelPath, engineDir, hostPath };
+	return { modelPath, hostPath };
+}
+
+/**
+ * The llama-server directory for a pinned build, downloading it the first time.
+ * `MIDNIGHT_SERVER_ENGINE_DIR` wins over `lock` and fails closed if it is not a
+ * llama.cpp build.
+ */
+export async function resolveEngine(
+	lock: EngineLock | undefined,
+	signal?: AbortSignal,
+	onStatus?: (message: string) => void,
+): Promise<string> {
+	const found = findEngineDir(lock);
+	if (found) return found;
+	if (process.env.MIDNIGHT_SERVER_ENGINE_DIR) {
+		throw new LocalSetupError(
+			`MIDNIGHT_SERVER_ENGINE_DIR is set to ${process.env.MIDNIGHT_SERVER_ENGINE_DIR}, but it does not contain llama-server.`,
+		);
+	}
+	if (!lock) {
+		throw new LocalSetupError(
+			`No pinned inference engine for ${process.platform}-${process.arch}. Set MIDNIGHT_SERVER_ENGINE_DIR to a llama.cpp build.`,
+		);
+	}
+	onStatus?.(
+		`Downloading the ${lock.backend} inference engine (${Math.round(engineDownloadBytes(lock) / MiB)} MiB, one-time)...`,
+	);
+	try {
+		const root = await fetchEngine(lock, { signal, onProgress: reportProgress(onStatus, "Engine download") });
+		const dir = installedEngineDir(root, lock);
+		if (!dir) throw new Error(`the installed engine at ${root} is incomplete`);
+		return dir;
+	} catch (error) {
+		throw new LocalSetupError(
+			`Could not download the ${lock.backend} inference engine automatically: ${errorText(error)}. Run: midnight.server engine fetch ${lock.backend}`,
+		);
+	}
+}
+
+export interface EngineContext {
+	model: ResolvedModel;
+	settings?: Partial<EngineSettings>;
+	signal?: AbortSignal;
+	onStatus?: (message: string) => void;
+}
+
+function startEngine(context: EngineContext, engineDir: string, defaultGpuLayers: number, settings = context.settings) {
+	return LocalEngine.start({
+		...context.model,
+		engineDir,
+		defaultGpuLayers,
+		...settings,
+		logPath: join(getLogDir(), "engine.log"),
+		keyDir: join(getMidnightHome(), "run"),
+		signal: context.signal,
+	});
+}
+
+/** Measure the candidate backends on this machine now. Does not save the result. */
+export function probe(context: EngineContext): Promise<ProbeResult> {
+	return probeBackends({
+		ensureEngine: (lock) => resolveEngine(lock, context.signal, context.onStatus),
+		// A short context loads faster; the measured request fits in it.
+		startEngine: (engineDir, gpuLayers) => startEngine(context, engineDir, gpuLayers, { contextSize: 4096 }),
+		listDevices: (engineDir) => listDevices(engineDir, engineEnvironment(engineDir)),
+		modelBytes: MODEL_LOCK.sizeBytes,
+		onStatus: context.onStatus,
+	});
+}
+
+export interface SelectedBackend {
+	lock: EngineLock;
+	gpuLayers: number;
+	/** Automatic choices fall back to the CPU when the chosen engine fails to start. */
+	auto: boolean;
+}
+
+/**
+ * Backend precedence: `MIDNIGHT_SERVER_BACKEND`, then the saved choice (from
+ * `engine use` or an earlier measurement), then a new measurement, saved.
+ */
+export async function selectBackend(context: EngineContext): Promise<SelectedBackend> {
+	let requested: ReturnType<typeof requestedBackend>;
+	try {
+		requested = requestedBackend();
+	} catch (error) {
+		throw new LocalSetupError(errorText(error));
+	}
+	if (requested !== "auto") {
+		const lock = engineLock(requested);
+		if (!lock) throw new LocalSetupError(`No pinned ${requested} engine for this platform`);
+		return { lock, gpuLayers: userGpuLayers(requested), auto: false };
+	}
+	const saved = await readBackendChoice();
+	const savedLock = saved && engineLock(saved.backend);
+	if (saved && savedLock) return { lock: savedLock, gpuLayers: saved.gpuLayers, auto: saved.source === "auto" };
+
+	const result = await probe(context);
+	if (result.persist) await writeBackendChoice(result.choice);
+	context.onStatus?.(`Engine: ${describeChoice(result.choice)}`);
+	const lock = engineLock(result.choice.backend);
+	if (!lock) throw new LocalSetupError(`No pinned ${result.choice.backend} engine for this platform`);
+	return { lock, gpuLayers: result.choice.gpuLayers, auto: true };
+}
+
+export interface SelectionPreview {
+	lock: EngineLock | undefined;
+	gpuLayers: number;
+	label: string;
+}
+
+/** What `selectBackend` would use, without measuring or downloading anything. */
+export async function previewSelection(): Promise<SelectionPreview> {
+	if (process.env.MIDNIGHT_SERVER_ENGINE_DIR) {
+		return { lock: undefined, gpuLayers: ALL_GPU_LAYERS, label: "MIDNIGHT_SERVER_ENGINE_DIR (your own build)" };
+	}
+	const requested = requestedBackend();
+	if (requested !== "auto") {
+		return {
+			lock: engineLock(requested),
+			gpuLayers: userGpuLayers(requested),
+			label: `${requested} (MIDNIGHT_SERVER_BACKEND)`,
+		};
+	}
+	const saved = await readBackendChoice();
+	if (saved) return { lock: engineLock(saved.backend), gpuLayers: saved.gpuLayers, label: describeChoice(saved) };
+	return {
+		lock: engineLock(cpuBackend()),
+		gpuLayers: 0,
+		label: "auto (GPU and CPU are measured on first start)",
+	};
+}
+
+export function describeChoice(choice: BackendChoice): string {
+	const where = choice.gpuLayers > 0 ? "GPU" : "CPU";
+	return `${choice.backend} on ${where} (${choice.source === "user" ? "set by user" : choice.reason})`;
+}
+
+/**
+ * Start the engine with the selected backend. An automatic GPU choice that no
+ * longer starts (driver removed, GPU gone) falls back to the CPU and is
+ * replaced by a CPU choice, so later sessions do not retry it.
+ */
+export async function startSelectedEngine(context: EngineContext): Promise<LocalEngine> {
+	if (process.env.MIDNIGHT_SERVER_ENGINE_DIR) {
+		// The user's own build: offload everything; a CPU-only build ignores it.
+		return startEngine(context, await resolveEngine(undefined), ALL_GPU_LAYERS);
+	}
+	const selected = await selectBackend(context);
+	const engineDir = await resolveEngine(selected.lock, context.signal, context.onStatus);
+	context.onStatus?.("Starting local engine...");
+	try {
+		return await startEngine(context, engineDir, selected.gpuLayers);
+	} catch (error) {
+		const cpuLock = engineLock(cpuBackend());
+		const alreadyCpu = selected.lock.backend === cpuLock?.backend && selected.gpuLayers === 0;
+		if (!selected.auto || alreadyCpu || !cpuLock || context.signal?.aborted) throw error;
+		const reason = `the ${selected.lock.backend} engine failed to start: ${errorText(error).split("\n")[0]}`;
+		context.onStatus?.(`${reason}. Using the CPU instead.`);
+		await writeBackendChoice(newChoice(cpuLock, 0, "auto", reason));
+		return startEngine(context, await resolveEngine(cpuLock, context.signal, context.onStatus), 0);
+	}
 }
 
 /**
@@ -137,14 +293,12 @@ export class EngineManager {
 			updateMidnightStatus({ engine: "starting" });
 			this.starting = (async () => {
 				this.onStatus?.("Preparing local model...");
-				const assets = await resolveLocalAssets(signal, this.onStatus);
-				this.onStatus?.("Starting local engine...");
-				const engine = await LocalEngine.start({
-					...assets,
-					...this.settings,
-					logPath: join(getLogDir(), "engine.log"),
-					keyDir: join(getMidnightHome(), "run"),
+				const model = await resolveModel(signal, this.onStatus);
+				const engine = await startSelectedEngine({
+					model,
+					settings: this.settings,
 					signal,
+					onStatus: this.onStatus,
 				});
 				this.engine = engine;
 				updateMidnightStatus({ engine: "ready" });

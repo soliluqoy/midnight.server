@@ -6,7 +6,8 @@ Build the midnight.server Windows distribution layout (without the model).
 1. Compiles native\midnight-host (Job Object owner) with the in-box C# compiler.
 2. Compiles the CLI from TypeScript sources with the pinned Bun into one executable.
 3. Copies runtime assets beside it, as Pi's release layout expects.
-4. Installs the pinned, SHA-256-verified llama.cpp CPU engine into engine\cpu.
+4. Installs the pinned, SHA-256-verified llama.cpp CPU engine into engine\cpu, using
+   the built CLI's own `engine fetch` (pins: scripts\generate-engine-pins.mjs).
 5. Writes licenses and release-manifest.json (per-file SHA-256).
 
 Output: build\dist\midnight.server-windows-<arch>-<backend>\
@@ -64,15 +65,21 @@ foreach ($copy in $copies) {
 Copy-Item -Recurse -Force "$agent\docs" (Join-Path $OutDir "docs")
 
 Write-Step "Installing engine ($Backend)"
-$engineLock = Read-JsonFile (Join-Path $RepoRoot "engine\llama-cpp-win-$Architecture-$Backend.lock.json")
-$engineZip = Join-Path $RepoRoot ".cache\downloads\$(Split-Path -Leaf $engineLock.url)"
-Get-VerifiedFile $engineLock.url $engineZip $engineLock.sizeBytes $engineLock.sha256
+# The built CLI downloads, verifies and unpacks its own pinned engine, so the
+# bundled copy is laid out (and marked) exactly like a first-run download.
+# .cache\engine-home keeps it between builds.
+$engineHome = Join-Path $RepoRoot ".cache\engine-home"
+$previousHome = $env:MIDNIGHT_SERVER_HOME
+$env:MIDNIGHT_SERVER_HOME = $engineHome
+try {
+	$fetched = & (Join-Path $OutDir "midnight.server.exe") engine fetch $Backend
+	if ($LASTEXITCODE -ne 0) { throw "midnight.server engine fetch $Backend exited with $LASTEXITCODE" }
+} finally { $env:MIDNIGHT_SERVER_HOME = $previousHome }
+$engineRoot = ($fetched | Select-String -Pattern "^Engine installed: (.+)$" | Select-Object -Last 1).Matches[0].Groups[1].Value
 $engineDir = Join-Path $OutDir "engine\$Backend"
-New-Item -ItemType Directory -Force $engineDir | Out-Null
-Invoke-Checked (Join-Path $env:SystemRoot "System32\tar.exe") (@("-xf", $engineZip, "-C", $engineDir) + $engineLock.files)
-foreach ($file in $engineLock.files) {
-	if (-not (Test-Path -LiteralPath (Join-Path $engineDir $file))) { throw "Engine archive is missing $file" }
-}
+Copy-Item -Recurse -LiteralPath $engineRoot -Destination $engineDir
+$engineMarker = Read-JsonFile (Join-Path $engineDir ".midnight-engine.json")
+if (-not (Test-Path -LiteralPath (Join-Path $engineDir $engineMarker.server))) { throw "Bundled engine is missing $($engineMarker.server)" }
 Copy-Item -Force $hostOut (Join-Path $OutDir "engine\midnight-host.exe")
 
 Write-Step "Writing licenses and notices"
@@ -103,7 +110,7 @@ $manifest = [ordered]@{
 	sourceDirty = $dirty
 	builtAt = (Get-Date).ToUniversalTime().ToString("o")
 	bun = (& $bun --version)
-	engine = $engineLock
+	engine = $engineMarker
 	model = Read-JsonFile "$RepoRoot\models\minicpm5-2b-q8_0.lock.json"
 	modelIncluded = $false
 	files = @($files)

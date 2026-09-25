@@ -4,9 +4,16 @@ import { freemem, totalmem } from "node:os";
 import { join } from "node:path";
 import { APP_NAME, VERSION } from "../config.ts";
 import { getPowerShellConfig } from "../utils/shell.ts";
+import {
+	type BackendMeasurement,
+	clearBackendChoice,
+	newChoice,
+	userGpuLayers,
+	writeBackendChoice,
+} from "./backend.ts";
 import type { DownloadProgress } from "./download.ts";
 import { resolveEngineSettings } from "./engine.ts";
-import { EngineManager } from "./engine-manager.ts";
+import { describeChoice, EngineManager, previewSelection, probe, resolveModel } from "./engine-manager.ts";
 import {
 	createHelperTask,
 	formatHelperResult,
@@ -18,8 +25,26 @@ import {
 	runHelperTask,
 } from "./helper.ts";
 import { engineDirCandidates, getInstallDir, getMidnightHome, hostCandidates, modelCandidates } from "./paths.ts";
-import { ENGINE_LOCK, MODEL_LOCK, modelDownloadUrl } from "./pins.ts";
-import { ensureModelVerified, fetchEngine, fetchModel, findEngineDir, findHost, findModel } from "./store.ts";
+import {
+	availableBackends,
+	cpuBackend,
+	currentEnginePlatform,
+	type EngineBackend,
+	engineDownloadBytes,
+	engineLock,
+	MODEL_LOCK,
+	modelDownloadUrl,
+	parseBackend,
+} from "./pins.ts";
+import {
+	ensureModelVerified,
+	fetchEngine,
+	fetchModel,
+	findEngineDir,
+	findHost,
+	findModel,
+	installedEngineDir,
+} from "./store.ts";
 
 export const MIDNIGHT_COMMANDS = ["model", "engine", "doctor", "helper"] as const;
 
@@ -84,32 +109,92 @@ async function modelCommand(args: string[]): Promise<number> {
 	return 2;
 }
 
+function formatMeasurement(measurement: BackendMeasurement): string {
+	const where = measurement.gpuLayers > 0 ? "GPU" : "CPU";
+	return `${`${measurement.backend} on ${where}`.padEnd(16)} prompt ${measurement.promptTokensPerSecond.toFixed(1)} tok/s, generation ${measurement.generationTokensPerSecond.toFixed(1)} tok/s, ~${Math.round(measurement.estimatedSeconds)} s per typical task`;
+}
+
+function backendArgument(name: string | undefined): EngineBackend {
+	const backend = name ? parseBackend(name.toLowerCase()) : undefined;
+	if (!backend) {
+		throw new Error(
+			`${name ? `Unknown backend "${name}" for ${process.platform}-${process.arch}. ` : ""}Available: ${availableBackends().join(", ") || "none"}`,
+		);
+	}
+	return backend;
+}
+
 async function engineCommand(args: string[]): Promise<number> {
 	const sub = args[0] ?? "status";
+	const platform = currentEnginePlatform();
 	if (sub === "status") {
-		const dir = findEngineDir();
-		const host = findHost();
+		const selection = await previewSelection();
+		const cpuLock = engineLock(cpuBackend());
+		const release = selection.lock ?? cpuLock;
 		console.log(
-			`Engine:   ${ENGINE_LOCK.name} ${ENGINE_LOCK.release} (${ENGINE_LOCK.commit.slice(0, 12)}) ${ENGINE_LOCK.platform}-${ENGINE_LOCK.backend}`,
+			release
+				? `Engine:   ${release.name} ${release.release} (${release.commit.slice(0, 12)}) for ${release.platform}`
+				: `Engine:   no pinned builds for ${process.platform}-${process.arch}`,
 		);
-		console.log(`Location: ${dir ?? "not installed"}`);
-		console.log(`Host:     ${host ?? "not found"}`);
-		if (!dir) console.log(`Searched: ${engineDirCandidates().join(", ")}`);
-		if (!host) console.log(`Searched: ${hostCandidates().join(", ")}`);
+		console.log(`Backend:  ${selection.label}`);
+		const dir = findEngineDir(selection.lock);
+		console.log(`Location: ${dir ?? "not installed (downloads on first use)"}`);
+		const host = findHost();
+		if (process.platform === "win32")
+			console.log(`Host:     ${host ?? `not found; searched ${hostCandidates().join(", ")}`}`);
+		console.log("\nBuilds for this platform:");
+		for (const backend of availableBackends(platform)) {
+			const lock = engineLock(backend, platform);
+			if (!lock) continue;
+			const installed = engineDirCandidates(lock)
+				.map((root) => installedEngineDir(root, lock))
+				.find(Boolean);
+			console.log(
+				`  ${backend.padEnd(10)} ${installed ? `installed  ${installed}` : `${Math.round(engineDownloadBytes(lock) / 1024 ** 2)} MiB download`}`,
+			);
+		}
+		console.log(
+			`\nChange with: ${APP_NAME} engine use <backend|auto>, or measure again with: ${APP_NAME} engine probe`,
+		);
 		return dir && (host || process.platform !== "win32") ? 0 : 1;
 	}
 	if (sub === "fetch") {
-		if (process.platform !== "win32" || process.arch !== "x64") {
-			console.error(
-				"Only the Windows x64 CPU engine is pinned. Set MIDNIGHT_SERVER_ENGINE_DIR to a llama.cpp build.",
-			);
-			return 1;
-		}
-		const dir = await fetchEngine(ENGINE_LOCK, { signal: interruptSignal(), onProgress: progressPrinter("Engine") });
+		const backend = args[1] ? backendArgument(args[1]) : ((await previewSelection()).lock?.backend ?? cpuBackend());
+		const lock = engineLock(backend);
+		if (!lock) throw new Error(`No pinned ${backend} engine for ${process.platform}-${process.arch}`);
+		console.error(`Downloading the ${backend} engine (${Math.round(engineDownloadBytes(lock) / 1024 ** 2)} MiB)`);
+		const dir = await fetchEngine(lock, { signal: interruptSignal(), onProgress: progressPrinter("Engine") });
 		console.log(`Engine installed: ${dir}`);
 		return 0;
 	}
-	console.error(`Usage: ${APP_NAME} engine [status|fetch]`);
+	if (sub === "use") {
+		if (args[1]?.toLowerCase() === "auto") {
+			await clearBackendChoice();
+			console.log("Backend: auto. GPU and CPU are measured on the next engine start.");
+			return 0;
+		}
+		const backend = backendArgument(args[1]);
+		const lock = engineLock(backend);
+		if (!lock) throw new Error(`No pinned ${backend} engine for ${process.platform}-${process.arch}`);
+		await writeBackendChoice(newChoice(lock, userGpuLayers(backend), "user", "set with engine use"));
+		console.log(
+			`Backend: ${backend}${userGpuLayers(backend) > 0 ? " with every layer on the GPU" : ""}. It downloads on the next engine start if needed.`,
+		);
+		return 0;
+	}
+	if (sub === "probe") {
+		const signal = interruptSignal();
+		const onStatus = (message: string) => console.error(message);
+		const model = await resolveModel(signal, onStatus);
+		const result = await probe({ model, signal, onStatus });
+		console.log("");
+		for (const measurement of result.choice.measurements ?? []) console.log(formatMeasurement(measurement));
+		console.log(`Selected: ${describeChoice(result.choice)}`);
+		if (result.persist) await writeBackendChoice(result.choice);
+		else console.log("Not saved: the result reflects a temporary problem. Run the probe again later.");
+		return 0;
+	}
+	console.error(`Usage: ${APP_NAME} engine [status | fetch [backend] | use <backend|auto> | probe]`);
 	return 2;
 }
 
@@ -126,7 +211,9 @@ async function doctorCommand(args: string[]): Promise<number> {
 	);
 	console.log(`Install dir: ${getInstallDir()}`);
 	console.log(`State dir:   ${getMidnightHome()}`);
-	const settings = resolveEngineSettings();
+	const selection = await previewSelection();
+	const settings = resolveEngineSettings({}, selection.gpuLayers);
+	console.log(`Backend:     ${selection.label}`);
 	console.log(
 		`Engine settings: context ${settings.contextSize}, threads ${settings.threads}, GPU layers ${settings.gpuLayers}`,
 	);
@@ -140,8 +227,17 @@ async function doctorCommand(args: string[]): Promise<number> {
 		) && ok;
 	const model = findModel();
 	ok = check(Boolean(model), "model", model ?? `missing; run ${APP_NAME} model fetch`) && ok;
-	const engine = findEngineDir();
-	ok = check(Boolean(engine), "engine", engine ?? `missing; run ${APP_NAME} engine fetch`) && ok;
+	const engine = findEngineDir(selection.lock);
+	// A pinned build that is not installed yet downloads on first start; only a platform without one is a failure.
+	ok =
+		check(
+			Boolean(engine || selection.lock),
+			`engine (${selection.lock?.backend ?? "custom"})`,
+			engine ??
+				(selection.lock
+					? `not installed yet; downloads on first start (or run ${APP_NAME} engine fetch)`
+					: `no pinned build for ${process.platform}-${process.arch}; set MIDNIGHT_SERVER_ENGINE_DIR`),
+		) && ok;
 	if (process.platform === "win32") {
 		const host = findHost();
 		ok = check(Boolean(host), "process host", host ?? "midnight-host.exe missing") && ok;

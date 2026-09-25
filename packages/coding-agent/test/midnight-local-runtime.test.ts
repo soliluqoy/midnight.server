@@ -14,7 +14,7 @@ import {
 	parseMidnightMode,
 	prepareLocalRuntime,
 } from "../src/midnight/local-runtime.ts";
-import { ENGINE_LOCK, LOCAL_MODEL_ID, LOCAL_PROVIDER_ID, MODEL_LOCK } from "../src/midnight/pins.ts";
+import { LOCAL_MODEL_ID, LOCAL_PROVIDER_ID, MODEL_LOCK } from "../src/midnight/pins.ts";
 
 const savedEnv = { ...process.env };
 afterEach(() => {
@@ -318,14 +318,10 @@ describe("Windows shell defaults", () => {
 });
 
 describe("pins", () => {
-	it("keeps the compiled pins equal to the JSON locks used by scripts", () => {
+	it("keeps the compiled model pin equal to the JSON lock used by scripts", () => {
 		const modelLock = JSON.parse(
 			readFileSync(new URL("../../../models/minicpm5-2b-q8_0.lock.json", import.meta.url), "utf8"),
 		);
-		const engineLock = JSON.parse(
-			readFileSync(new URL("../../../engine/llama-cpp-win-x64-cpu.lock.json", import.meta.url), "utf8"),
-		);
 		expect(modelLock).toEqual(MODEL_LOCK);
-		expect(engineLock).toEqual(ENGINE_LOCK);
 	});
 });

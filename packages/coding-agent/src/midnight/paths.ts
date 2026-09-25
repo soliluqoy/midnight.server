@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { getPackageDir, isBunBinary } from "../config.ts";
-import { ENGINE_LOCK, type EngineLock } from "./pins.ts";
+import type { EngineLock } from "./pins.ts";
 
 /** Per-user state: downloaded model and engine, verification cache, logs. */
 export function getMidnightHome(): string {
@@ -18,7 +18,7 @@ export function getInstallDir(): string {
 	return getPackageDir();
 }
 
-export function engineDirName(lock: EngineLock = ENGINE_LOCK): string {
+function engineDirName(lock: EngineLock): string {
 	return `${lock.name}-${lock.release}-${lock.platform}-${lock.backend}`;
 }
 
@@ -32,17 +32,15 @@ function sourceCheckoutPath(...segments: string[]): string[] {
 }
 
 /**
- * Candidate locations, highest precedence first: explicit override, the offline
+ * Install roots for one pinned engine build, highest precedence first: the
  * bundle beside the executable, the per-user download, then (source runs only)
- * the checkout's build output.
+ * the checkout's build output. `MIDNIGHT_SERVER_ENGINE_DIR` bypasses these.
  */
-export function engineDirCandidates(): string[] {
-	const override = process.env.MIDNIGHT_SERVER_ENGINE_DIR;
-	if (override) return [resolve(override)];
+export function engineDirCandidates(lock: EngineLock): string[] {
 	return [
-		join(getInstallDir(), "engine", ENGINE_LOCK.backend),
-		join(getMidnightHome(), "engine", engineDirName()),
-		...sourceCheckoutPath("build", "engine", ENGINE_LOCK.backend),
+		join(getInstallDir(), "engine", lock.backend),
+		userEngineDir(lock),
+		...sourceCheckoutPath("build", "engine", lock.backend),
 	];
 }
 
@@ -68,8 +66,13 @@ export function userModelPath(fileName: string): string {
 	return join(getMidnightHome(), "models", fileName);
 }
 
-export function userEngineDir(): string {
-	return join(getMidnightHome(), "engine", engineDirName());
+export function userEngineDir(lock: EngineLock): string {
+	return join(getMidnightHome(), "engine", engineDirName(lock));
+}
+
+/** Saved result of automatic backend selection. */
+export function backendChoicePath(): string {
+	return join(getMidnightHome(), "state", "engine-backend.json");
 }
 
 export function getLogDir(): string {

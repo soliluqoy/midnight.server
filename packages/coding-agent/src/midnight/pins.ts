@@ -1,8 +1,10 @@
+import { ENGINE_BUILDS, ENGINE_RELEASE } from "./engine-builds.generated.ts";
 import type { ModelLock } from "./model-integrity.ts";
 
 /**
- * Pinned artifacts compiled into the executable. The JSON locks under
- * `models/` and `engine/` mirror these values for scripts; a test keeps them equal.
+ * Pinned artifacts compiled into the executable. The JSON lock under `models/`
+ * mirrors MODEL_LOCK for scripts; a test keeps them equal. Engine builds are
+ * generated from a llama.cpp release by scripts/generate-engine-pins.mjs.
  */
 export const MODEL_LOCK: ModelLock = {
 	modelId: "openbmb/MiniCPM5-2B",
@@ -13,54 +15,90 @@ export const MODEL_LOCK: ModelLock = {
 	sha256: "c5415f8989bf88a8288f1b55a3cc371af53c07b0faa220a63bd7a990cfaba078",
 };
 
-export interface EngineLock {
-	name: string;
-	release: string;
-	commit: string;
-	backend: "cpu";
-	platform: "win32-x64";
+export const ENGINE_PLATFORMS = [
+	"win32-x64",
+	"win32-arm64",
+	"linux-x64",
+	"linux-arm64",
+	"darwin-x64",
+	"darwin-arm64",
+] as const;
+export type EnginePlatform = (typeof ENGINE_PLATFORMS)[number];
+
+/** llama.cpp build flavors. `cuda-12`/`cuda-13` differ in the minimum NVIDIA driver they need. */
+export const ENGINE_BACKENDS = [
+	"cpu",
+	"metal",
+	"vulkan",
+	"cuda-12",
+	"cuda-13",
+	"rocm",
+	"sycl",
+	"openvino",
+	"opencl",
+	"hexagon",
+] as const;
+export type EngineBackend = (typeof ENGINE_BACKENDS)[number];
+
+export interface EngineArchive {
 	url: string;
 	sizeBytes: number;
 	sha256: string;
-	/** Files extracted from the archive. Everything else (other tools) is left out. */
-	files: string[];
 }
 
-export const ENGINE_LOCK: EngineLock = {
-	name: "llama.cpp",
-	release: "b11166",
-	commit: "a72e04abe0fe9b36e203033ac71bd5f379c35bc5",
-	backend: "cpu",
-	platform: "win32-x64",
-	url: "https://github.com/ggml-org/llama.cpp/releases/download/b11166/llama-b11166-bin-win-cpu-x64.zip",
-	sizeBytes: 18567816,
-	sha256: "a9372816f6cff6a6f16ebdc22e9fdcd6da6ab42838bc5c082a0c6ad92633f84a",
-	files: [
-		"llama-server.exe",
-		"llama-server-impl.dll",
-		"llama-common.dll",
-		"llama.dll",
-		"mtmd.dll",
-		"ggml.dll",
-		"ggml-base.dll",
-		"ggml-cpu-alderlake.dll",
-		"ggml-cpu-cannonlake.dll",
-		"ggml-cpu-cascadelake.dll",
-		"ggml-cpu-cooperlake.dll",
-		"ggml-cpu-haswell.dll",
-		"ggml-cpu-icelake.dll",
-		"ggml-cpu-ivybridge.dll",
-		"ggml-cpu-piledriver.dll",
-		"ggml-cpu-sandybridge.dll",
-		"ggml-cpu-sapphirerapids.dll",
-		"ggml-cpu-skylakex.dll",
-		"ggml-cpu-sse42.dll",
-		"ggml-cpu-x64.dll",
-		"ggml-cpu-zen4.dll",
-		"libomp.dll",
-		"LICENSE-LLVM-OpenMP",
-	],
-};
+export interface EngineRelease {
+	name: string;
+	release: string;
+	commit: string;
+}
+
+export type EngineBuilds = Record<EnginePlatform, Partial<Record<EngineBackend, EngineArchive[]>>>;
+
+/** One installable engine: every archive is extracted into the same directory, in order. */
+export interface EngineLock extends EngineRelease {
+	platform: EnginePlatform;
+	backend: EngineBackend;
+	archives: EngineArchive[];
+}
+
+export function currentEnginePlatform(): EnginePlatform | undefined {
+	const platform = `${process.platform}-${process.arch}`;
+	return (ENGINE_PLATFORMS as readonly string[]).includes(platform) ? (platform as EnginePlatform) : undefined;
+}
+
+export function engineLock(
+	backend: EngineBackend,
+	platform: EnginePlatform | undefined = currentEnginePlatform(),
+): EngineLock | undefined {
+	const archives = platform ? ENGINE_BUILDS[platform][backend] : undefined;
+	return platform && archives ? { ...ENGINE_RELEASE, platform, backend, archives } : undefined;
+}
+
+export function availableBackends(platform: EnginePlatform | undefined = currentEnginePlatform()): EngineBackend[] {
+	return platform ? ENGINE_BACKENDS.filter((backend) => ENGINE_BUILDS[platform][backend]) : [];
+}
+
+/**
+ * The backend that runs on the CPU alone for a platform. On Apple Silicon the
+ * only build is Metal, which runs on the CPU with zero GPU layers.
+ */
+export function cpuBackend(platform: EnginePlatform | undefined = currentEnginePlatform()): EngineBackend {
+	return platform === "darwin-arm64" ? "metal" : "cpu";
+}
+
+/** Parse a user-supplied backend name. `cuda` means whichever CUDA build the platform has, oldest first. */
+export function parseBackend(
+	name: string,
+	platform: EnginePlatform | undefined = currentEnginePlatform(),
+): EngineBackend | undefined {
+	const available = availableBackends(platform);
+	if (name === "cuda") return available.find((backend) => backend.startsWith("cuda-"));
+	return available.find((backend) => backend === name);
+}
+
+export function engineDownloadBytes(lock: EngineLock): number {
+	return lock.archives.reduce((sum, archive) => sum + archive.sizeBytes, 0);
+}
 
 export function modelDownloadUrl(lock: ModelLock): string {
 	return `https://huggingface.co/${lock.repository}/resolve/${lock.revision}/${lock.fileName}`;
