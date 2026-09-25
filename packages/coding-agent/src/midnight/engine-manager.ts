@@ -1,8 +1,10 @@
 import { join } from "node:path";
+import type { DownloadProgress } from "./download.ts";
 import { type EngineSettings, LocalEngine } from "./engine.ts";
+import type { ModelLock } from "./model-integrity.ts";
 import { getLogDir, getMidnightHome } from "./paths.ts";
-import { MODEL_LOCK } from "./pins.ts";
-import { ensureModelVerified, findEngineDir, findHost, findModel } from "./store.ts";
+import { ENGINE_LOCK, type EngineLock, MODEL_LOCK } from "./pins.ts";
+import { ensureModelVerified, fetchEngine, fetchModel, findEngineDir, findHost, findModel } from "./store.ts";
 
 export class LocalSetupError extends Error {}
 
@@ -12,18 +14,80 @@ export interface ResolvedLocalAssets {
 	hostPath?: string;
 }
 
-/** Locate and verify the pinned model, engine and host. Throws actionable setup errors. */
-export async function resolveLocalAssets(signal?: AbortSignal): Promise<ResolvedLocalAssets> {
-	const modelPath = findModel();
+const GiB = 1024 ** 3;
+
+/** Turns download byte counts into occasional, human-readable status lines instead of one per chunk. */
+function reportProgress(
+	onStatus: ((message: string) => void) | undefined,
+	label: string,
+): ((progress: DownloadProgress) => void) | undefined {
+	if (!onStatus) return undefined;
+	let lastPercent = -1;
+	return ({ receivedBytes, totalBytes }) => {
+		const percent = Math.floor((receivedBytes / totalBytes) * 100);
+		if (percent === lastPercent) return;
+		lastPercent = percent;
+		onStatus(`${label}: ${percent}% (${(receivedBytes / GiB).toFixed(2)} / ${(totalBytes / GiB).toFixed(2)} GiB)`);
+	};
+}
+
+/**
+ * Locate the pinned model, engine and host, downloading the model and (on the
+ * one supported platform) the engine automatically the first time either is
+ * missing, so a fresh install works without a separate setup step. An explicit
+ * `MIDNIGHT_SERVER_MODEL` / `MIDNIGHT_SERVER_ENGINE_DIR` override is never
+ * routed around: if it points at nothing, that is a configuration error, not
+ * something to silently download past.
+ */
+export async function resolveLocalAssets(
+	signal?: AbortSignal,
+	onStatus?: (message: string) => void,
+	locks: { model?: ModelLock; engine?: EngineLock } = {},
+): Promise<ResolvedLocalAssets> {
+	const modelLock = locks.model ?? MODEL_LOCK;
+	const engineLock = locks.engine ?? ENGINE_LOCK;
+
+	let modelPath = findModel(modelLock);
 	if (!modelPath) {
-		throw new LocalSetupError(
-			`The MiniCPM model (${MODEL_LOCK.fileName}) is not installed. Run: midnight.server model fetch`,
+		if (process.env.MIDNIGHT_SERVER_MODEL) {
+			throw new LocalSetupError(
+				`MIDNIGHT_SERVER_MODEL is set to ${process.env.MIDNIGHT_SERVER_MODEL}, but no file exists there.`,
+			);
+		}
+		onStatus?.(
+			`Downloading the local model (${modelLock.fileName}, ${(modelLock.sizeBytes / GiB).toFixed(2)} GiB, one-time)...`,
 		);
+		try {
+			modelPath = await fetchModel(modelLock, { signal, onProgress: reportProgress(onStatus, "Model download") });
+		} catch (error) {
+			throw new LocalSetupError(
+				`Could not download the local model automatically: ${error instanceof Error ? error.message : String(error)}. Run: midnight.server model fetch`,
+			);
+		}
 	}
-	const engineDir = findEngineDir();
+
+	let engineDir = findEngineDir(engineLock);
 	if (!engineDir) {
-		throw new LocalSetupError("The local inference engine is not installed. Run: midnight.server engine fetch");
+		if (process.env.MIDNIGHT_SERVER_ENGINE_DIR) {
+			throw new LocalSetupError(
+				`MIDNIGHT_SERVER_ENGINE_DIR is set to ${process.env.MIDNIGHT_SERVER_ENGINE_DIR}, but it is not a complete llama.cpp build.`,
+			);
+		}
+		if (process.platform !== "win32" || process.arch !== "x64") {
+			throw new LocalSetupError(
+				"The local inference engine is not installed for this platform. Set MIDNIGHT_SERVER_ENGINE_DIR to a llama.cpp build.",
+			);
+		}
+		onStatus?.("Downloading the local inference engine (one-time)...");
+		try {
+			engineDir = await fetchEngine(engineLock, { signal, onProgress: reportProgress(onStatus, "Engine download") });
+		} catch (error) {
+			throw new LocalSetupError(
+				`Could not download the local inference engine automatically: ${error instanceof Error ? error.message : String(error)}. Run: midnight.server engine fetch`,
+			);
+		}
 	}
+
 	const hostPath = findHost();
 	if (process.platform === "win32" && !hostPath) {
 		throw new LocalSetupError(
@@ -31,7 +95,7 @@ export async function resolveLocalAssets(signal?: AbortSignal): Promise<Resolved
 		);
 	}
 	try {
-		await ensureModelVerified(modelPath, MODEL_LOCK, { signal });
+		await ensureModelVerified(modelPath, modelLock, { signal });
 	} catch (error) {
 		throw new LocalSetupError(
 			`Model verification failed for ${modelPath}: ${error instanceof Error ? error.message : String(error)}. Delete it and run: midnight.server model fetch`,
@@ -70,8 +134,8 @@ export class EngineManager {
 		if (this.engine?.running) return this.engine;
 		if (!this.starting) {
 			this.starting = (async () => {
-				this.onStatus?.("Verifying local model...");
-				const assets = await resolveLocalAssets(signal);
+				this.onStatus?.("Preparing local model...");
+				const assets = await resolveLocalAssets(signal, this.onStatus);
 				this.onStatus?.("Starting local engine...");
 				const engine = await LocalEngine.start({
 					...assets,

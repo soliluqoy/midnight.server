@@ -13,7 +13,7 @@ A native Windows coding CLI and terminal UI built from a modified [Pi](https://g
 - **Workspace-confined, read-only.** The helper only reads files it is explicitly given, resolved and confined to the workspace (symlinks, junctions, `..`, other drives and UNC paths all rejected). It has no shell tool and cannot write.
 - **Read-only git context.** The helper can run `status`, `diff`, `log`, `show`, or `blame` itself, with a fixed argv (never a shell) and byte-capped output, to answer questions about history without any write access.
 - **Patch proposals, never applied.** `patch` tasks return an exact-match, evidence-backed unified diff for you to review; the helper never writes to disk.
-- **Verified, resumable downloads.** Model and engine downloads resume, are pinned by SHA-256, and are never used unverified.
+- **Zero-setup first run.** `--local`, the no-provider-configured fallback, and the first `delegate_local`/drift-watch call all download the model automatically if it's missing (and, on Windows x64, the engine too) — resumable, SHA-256 verified, never used unverified.
 - **Process isolation.** The engine runs under a Windows Job Object owned by the CLI, bound to loopback with a random per-session key, and exits with its descendants when the CLI exits, including after a crash.
 - **Diagnostics.** `doctor [--smoke]`, `model status|verify|fetch`, `engine status|fetch` check the install and, with `--smoke`, start the engine and generate a real reply.
 - **Native Windows.** PowerShell is the default shell tool; no Node.js, Python, WSL, or Git Bash is needed to run it.
@@ -24,7 +24,7 @@ A native Windows coding CLI and terminal UI built from a modified [Pi](https://g
 | Mode | Command | Behavior |
 | --- | --- | --- |
 | Default / Hybrid | `midnight.server` (same as `midnight.server --hybrid`) | Your configured provider leads. It gets a `delegate_local` tool that hands small read-only jobs to the local model, which starts on first use. MiniCPM also runs a background drift check every few turns and nudges the parent model if it has lost track of the goal. If no provider is configured at all, the session silently starts on the local model instead — not offline-locked, so `/login` still works afterward. |
-| Local | `midnight.server --local` | Runs the whole session on the embedded MiniCPM5-2B Q8_0. Starts offline and **blocks every model request to any other provider** for the session. |
+| Local | `midnight.server --local` | Runs the whole session on the embedded MiniCPM5-2B Q8_0, downloading it (and the engine, on Windows x64) automatically on first run if not already installed. Starts offline and **blocks every model request to any other provider** for the session. |
 | Direct helper | `midnight.server helper inspect "question" file.ts` | Runs one helper task locally, no provider needed. |
 
 The helper (`delegate_local`, `helper`) reads only the workspace files it is given. It has no shell or tools, and it returns a schema-checked result with line evidence. `patch` tasks return a unified diff that is **not applied**. It can also run one read-only git operation itself (`status`, `diff`, `log`, `show`, `blame`) with a fixed argv, never a shell — never anything that mutates the repository.
@@ -35,6 +35,7 @@ The engine is the pinned llama.cpp `b11166` CPU build. It runs as a child proces
 
 - **Default (hybrid) for daily coding.** Just run `midnight.server`. Your configured provider leads and automatically gets `delegate_local` and the drift watcher — there is nothing to opt into.
 - **`--local` when you want zero network calls**: offline, air-gapped, or reviewing code you don't want leaving the machine. It's a 2B model, so expect it to be slower and weaker than a cloud model on multi-step work.
+- **First run needs one network trip.** If the model (2.5 GiB) isn't installed yet, the first `--local` run, first no-provider session, or first `delegate_local`/helper call downloads and verifies it automatically — expect that one run to take a while. Run `midnight.server model fetch` ahead of time if you want to do that download on your own schedule, or on a fully offline machine, use the `-offline.zip` release, which already includes the model.
 - **`helper` for one-off questions** when a full session is overkill: `midnight.server helper inspect "why does this throw?" src/foo.ts`. No provider needed, and faster than starting an agent loop.
 - **Keep helper inputs small.** It answers best under roughly 6 KB of source per call; a 12 KB file was measured to return a wrong answer instead of escalating (see [implementation status](docs/IMPLEMENTATION_STATUS.md)). Point it at the specific file or function rather than the whole repo.
 - **Treat `patch` output as a proposal.** It's an unapplied diff built from exact-match text edits — read it before applying it yourself; the 2B model can be wrong (see [measurements](docs/benchmarks/cpu-i7-8650u.md)).
@@ -45,7 +46,7 @@ The engine is the pinned llama.cpp `b11166` CPU build. It runs as a child proces
 
 Release archives (built by `scripts\package.ps1`):
 
-- `midnight.server-windows-x64.zip` (~58 MiB): app and engine. Download the model once with `midnight.server model fetch` (2.5 GiB, resumable, SHA-256 verified).
+- `midnight.server-windows-x64.zip` (~58 MiB): app and engine. The model (2.5 GiB) downloads automatically the first time it's needed — resumable, SHA-256 verified — or pre-fetch it with `midnight.server model fetch`.
 - `midnight.server-windows-x64-offline.zip` (~2.6 GiB): includes the model and needs no network. GitHub limits release assets to under 2 GiB, so it is also published as `.001`/`.002` parts. Run `join-offline.ps1` in the download folder to reassemble and verify it.
 
 Requirements: Windows 10 or 11, x64, 16 GiB RAM recommended. Node.js, Python, WSL and Git Bash are not required.
@@ -95,7 +96,7 @@ From a source checkout you can also run `.\pi-test.ps1 <args>`. Set `TSX_TSCONFI
 
 ## Security
 
-- `--local` fails closed: a missing or unverified model or engine is an error, never a fallback to a cloud provider.
+- `--local` fails closed: a corrupted model/engine, or a `MIDNIGHT_SERVER_MODEL`/`MIDNIGHT_SERVER_ENGINE_DIR` override pointing at nothing, is an error — never a silent fallback to a cloud provider. A missing model or engine with no override set is downloaded and verified automatically instead of erroring.
 - The PowerShell/Bash tools run with your full user permissions; nothing is sandboxed. Only the helper is restricted (workspace-confined reads, no tools).
 - Extensions run in-process with full privileges.
 

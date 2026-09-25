@@ -149,9 +149,9 @@ describe("mode selection", () => {
 		);
 	});
 
-	it("fails closed with setup guidance when the model is missing", async () => {
+	it("fails closed, rather than downloading past it, when MIDNIGHT_SERVER_MODEL points at nothing", async () => {
 		process.env.MIDNIGHT_SERVER_MODEL = fileURLToPath(new URL("./does-not-exist.gguf", import.meta.url));
-		await expect(prepareLocalRuntime(["--local", "private prompt"])).rejects.toThrow(/model fetch/);
+		await expect(prepareLocalRuntime(["--local", "private prompt"])).rejects.toThrow(/MIDNIGHT_SERVER_MODEL/);
 	});
 
 	it("selects only the embedded model and forces offline startup in local mode", async () => {
