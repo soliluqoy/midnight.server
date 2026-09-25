@@ -345,6 +345,9 @@ export class AgentSession {
 	readonly settingsManager: SettingsManager;
 
 	private _scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
+	private _contextUsageCache:
+		| { revision: number; leafId: string | null; contextWindow: number; usage: ContextUsage }
+		| undefined;
 
 	// Event subscription state
 	private _unsubscribeAgent?: () => void;
@@ -3876,6 +3879,25 @@ export class AgentSession {
 		const contextWindow = model.contextWindow ?? 0;
 		if (contextWindow <= 0) return undefined;
 
+		// The footer and sidebar call this on every frame, including every scroll frame. Rebuilding
+		// the projection walks the whole session, so reuse the result until the session changes.
+		const revision = this.sessionManager.getRevision();
+		const leafId = this.sessionManager.getLeafId();
+		const cached = this._contextUsageCache;
+		if (
+			cached &&
+			cached.revision === revision &&
+			cached.leafId === leafId &&
+			cached.contextWindow === contextWindow
+		) {
+			return { ...cached.usage };
+		}
+		const usage = this._computeContextUsage(contextWindow);
+		this._contextUsageCache = { revision, leafId, contextWindow, usage };
+		return { ...usage };
+	}
+
+	private _computeContextUsage(contextWindow: number): ContextUsage {
 		// After compaction, the last assistant usage reflects pre-compaction context size.
 		// We can only trust usage from an assistant that responded after the latest compaction.
 		// If no such assistant exists, context token count is unknown until the next LLM response.

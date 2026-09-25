@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed slow fullscreen frames with side-by-side columns: stack layout no longer renders a column only to measure a height it discards, and compositing no longer re-measures each row (scroll frames with a sidebar went from about 15 ms to 3 ms on a 42,000-line transcript).
+- Fixed mouse wheel scrolling waiting for the throttled render timer, which on Windows fires on a ~16 ms tick; consumed mouse input now renders on the next tick like key presses.
+- Sped up text measuring, truncation, slicing, compositing and word wrapping for styled ASCII text by skipping grapheme segmentation, and reuse Markdown tokens across width changes (resizing or toggling a side panel re-renders a long transcript 2.5 to 4 times faster).
+
 ## [0.87.1] - 2026-09-22
 
 ## [0.87.0] - 2026-09-21

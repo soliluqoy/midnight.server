@@ -4,7 +4,8 @@ import type { AgentSession } from "../../../core/agent-session.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
 import type { GitStatusSummary } from "../../../core/git-status.ts";
-import { addUsageToTotals, createUsageTotals } from "../../../core/usage-totals.ts";
+import type { SessionManager } from "../../../core/session-manager.ts";
+import { addUsageToTotals, createUsageTotals, type UsageTotals } from "../../../core/usage-totals.ts";
 import { getMidnightStatus } from "../../../midnight/status.ts";
 import { theme } from "../theme/theme.ts";
 
@@ -56,6 +57,15 @@ export class FooterComponent implements Component {
 	private gitStatus: { getStatus(): GitStatusSummary | undefined } | undefined;
 	/** True while the sidebar shows usage and local-model state; the footer then drops to one line. */
 	private compact: () => boolean;
+	private usageStats:
+		| {
+				sessionManager: SessionManager;
+				revision: number;
+				usageTotals: UsageTotals;
+				latestCacheHitRate: number | undefined;
+				sessionName: string | undefined;
+		  }
+		| undefined;
 
 	constructor(
 		session: AgentSession,
@@ -93,14 +103,20 @@ export class FooterComponent implements Component {
 		// Git watcher cleanup handled by provider
 	}
 
-	render(width: number): string[] {
-		const state = this.session.state;
+	/**
+	 * Cumulative usage from ALL session entries (not just post-compaction messages). The footer
+	 * renders on every frame, including each scroll step, so rescan only when the session changes.
+	 */
+	private getUsageStats(): NonNullable<FooterComponent["usageStats"]> {
+		const sessionManager = this.session.sessionManager;
+		const revision = sessionManager.getRevision();
+		const cached = this.usageStats;
+		if (cached && cached.sessionManager === sessionManager && cached.revision === revision) return cached;
 
-		// Calculate cumulative usage from ALL session entries (not just post-compaction messages)
 		const usageTotals = createUsageTotals();
 		let latestCacheHitRate: number | undefined;
 
-		for (const entry of this.session.sessionManager.getEntries()) {
+		for (const entry of sessionManager.getEntries()) {
 			if (entry.type === "usage") {
 				addUsageToTotals(usageTotals, entry.usage);
 			} else if (entry.type === "message" && entry.message.role === "assistant") {
@@ -116,6 +132,19 @@ export class FooterComponent implements Component {
 				addUsageToTotals(usageTotals, entry.usage);
 			}
 		}
+		this.usageStats = {
+			sessionManager,
+			revision,
+			usageTotals,
+			latestCacheHitRate,
+			sessionName: sessionManager.getSessionName(),
+		};
+		return this.usageStats;
+	}
+
+	render(width: number): string[] {
+		const state = this.session.state;
+		const { usageTotals, latestCacheHitRate, sessionName } = this.getUsageStats();
 
 		// Calculate context usage from session (handles compaction correctly).
 		// After compaction, tokens are unknown until the next LLM response.
@@ -140,7 +169,6 @@ export class FooterComponent implements Component {
 		}
 
 		// Add session name if set
-		const sessionName = this.session.sessionManager.getSessionName();
 		if (sessionName) {
 			pwd = `${pwd} • ${sessionName}`;
 		}

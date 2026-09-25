@@ -75,6 +75,7 @@ function createSession(options: {
 		},
 		sessionManager: {
 			getEntries: () => entries,
+			getRevision: () => 0,
 			getSessionName: () => options.sessionName,
 			getCwd: () => "/tmp/project",
 		},

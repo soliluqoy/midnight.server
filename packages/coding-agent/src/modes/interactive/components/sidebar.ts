@@ -3,8 +3,9 @@ import { APP_NAME, VERSION } from "../../../config.ts";
 import type { AgentSession } from "../../../core/agent-session.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
 import type { GitStatusSummary } from "../../../core/git-status.ts";
-import { collectSessionFileChanges } from "../../../core/session-file-changes.ts";
-import { getSessionUsageTotals } from "../../../core/usage-totals.ts";
+import { collectSessionFileChanges, type SessionFileChange } from "../../../core/session-file-changes.ts";
+import type { SessionManager } from "../../../core/session-manager.ts";
+import { getSessionUsageTotals, type UsageTotals } from "../../../core/usage-totals.ts";
 import { getMidnightStatus, type MidnightStatus } from "../../../midnight/status.ts";
 import { theme } from "../theme/theme.ts";
 import { formatTokens } from "./footer.ts";
@@ -70,9 +71,37 @@ function contextBar(percent: number, width: number): string {
  */
 export class SidebarComponent implements Component {
 	private readonly options: SidebarOptions;
+	private sessionScan:
+		| {
+				sessionManager: SessionManager;
+				revision: number;
+				name: string | undefined;
+				totals: UsageTotals;
+				changes: SessionFileChange[];
+		  }
+		| undefined;
 
 	constructor(options: SidebarOptions) {
 		this.options = options;
+	}
+
+	/**
+	 * Values that walk every session entry. The sidebar renders on every frame, including each
+	 * scroll step, so recompute them only when the session changes.
+	 */
+	private scanSession(sessionManager: SessionManager): NonNullable<SidebarComponent["sessionScan"]> {
+		const revision = sessionManager.getRevision();
+		const cached = this.sessionScan;
+		if (cached && cached.sessionManager === sessionManager && cached.revision === revision) return cached;
+		const entries = sessionManager.getEntries();
+		this.sessionScan = {
+			sessionManager,
+			revision,
+			name: sessionManager.getSessionName(),
+			totals: getSessionUsageTotals(entries),
+			changes: collectSessionFileChanges(entries, sessionManager.getCwd()),
+		};
+		return this.sessionScan;
 	}
 
 	invalidate(): void {}
@@ -100,7 +129,8 @@ export class SidebarComponent implements Component {
 		if (mode) line(theme.fg("dim", mode));
 
 		heading("Session");
-		const name = session.sessionManager.getSessionName();
+		const scan = this.scanSession(session.sessionManager);
+		const name = scan.name;
 		line(name ? theme.fg("text", name) : theme.fg("dim", "untitled"));
 
 		const branch = this.options.footerData.getGitBranch();
@@ -122,7 +152,7 @@ export class SidebarComponent implements Component {
 		} else {
 			line(theme.fg("muted", `? / ${formatTokens(contextWindow)} tokens`));
 		}
-		const totals = getSessionUsageTotals(session.sessionManager.getEntries());
+		const totals = scan.totals;
 		const spend = [`↑${formatTokens(totals.input)}`, `↓${formatTokens(totals.output)}`];
 		if (totals.cost > 0) spend.push(`$${totals.cost.toFixed(3)}`);
 		line(theme.fg("muted", spend.join("  ")));
@@ -143,7 +173,7 @@ export class SidebarComponent implements Component {
 		const driftColor = status.drift?.lastVerdict && status.drift.lastVerdict !== "on_track" ? "warning" : "text";
 		line(`${theme.fg("muted", "drift")}  ${theme.fg(driftColor, describeDrift(status))}`);
 
-		const changes = collectSessionFileChanges(session.sessionManager.getEntries(), session.sessionManager.getCwd());
+		const changes = scan.changes;
 		if (changes.length > 0) {
 			heading(`Modified files (${changes.length})`);
 			for (const change of changes.slice(0, MAX_LISTED_FILES)) {

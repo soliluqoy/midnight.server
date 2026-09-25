@@ -246,6 +246,10 @@ export class Markdown implements Component {
 	private cachedText?: string;
 	private cachedWidth?: number;
 	private cachedLines?: string[];
+	// Lexing does not depend on width, so a width change (terminal resize, sidebar toggle) reuses
+	// the tokens and only re-wraps. Rendering reads tokens without mutating them.
+	private cachedTokensSource?: string;
+	private cachedTokens?: Token[];
 
 	constructor(
 		text: string,
@@ -298,8 +302,13 @@ export class Markdown implements Component {
 		const normalizedText = text.replace(/\t/g, "   ");
 
 		// Parse markdown to HTML-like tokens
-		const tokens = markdownParser.lexer(normalizedText);
-		trimPartialClosingFences(tokens);
+		let tokens = this.cachedTokensSource === normalizedText ? this.cachedTokens : undefined;
+		if (!tokens) {
+			tokens = markdownParser.lexer(normalizedText);
+			trimPartialClosingFences(tokens);
+			this.cachedTokensSource = normalizedText;
+			this.cachedTokens = tokens;
+		}
 
 		// Convert tokens to styled terminal output
 		const renderedLines: string[] = [];

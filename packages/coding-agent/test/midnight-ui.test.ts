@@ -5,7 +5,7 @@ import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.ts";
 import { type GitStatusSummary, GitStatusTracker, parseGitStatusPorcelainV2 } from "../src/core/git-status.ts";
 import { collectSessionFileChanges, countPatchLines } from "../src/core/session-file-changes.ts";
-import type { SessionEntry } from "../src/core/session-manager.ts";
+import { type SessionEntry, SessionManager } from "../src/core/session-manager.ts";
 import agentModeExtension, { PLAN_MODE_TOOLS } from "../src/extensions/agent-mode.ts";
 import { cleanSessionTitle, generateSessionTitle } from "../src/midnight/session-title.ts";
 import {
@@ -217,6 +217,7 @@ function createSession(): AgentSession {
 		},
 		sessionManager: {
 			getEntries: () => entries,
+			getRevision: () => 0,
 			getSessionName: () => "Fix date parsing",
 			getCwd: () => process.cwd(),
 		},
@@ -287,6 +288,29 @@ describe("sidebar and footer", () => {
 		]) {
 			expect(text).toContain(expected);
 		}
+	});
+
+	it("refreshes cached session scans in the sidebar and footer when the session changes", () => {
+		const sessionManager = SessionManager.inMemory(process.cwd());
+		const session = { ...createSession(), sessionManager } as unknown as AgentSession;
+		const sidebar = new SidebarComponent({
+			session: () => session,
+			footerData: createFooterData(),
+			gitStatus,
+			getHeight: () => 40,
+			agentModeKey: () => "tab",
+		});
+		const footer = new FooterComponent(session, createFooterData(), gitStatus);
+		const sidebarText = () => stripAnsi(sidebar.render(36).join("\n"));
+		const footerText = () => stripAnsi(footer.render(240).join("\n"));
+		expect(sidebarText()).toContain("untitled");
+		expect(footerText()).not.toContain("Renamed");
+
+		const revision = sessionManager.getRevision();
+		sessionManager.appendSessionInfo("Renamed");
+		expect(sessionManager.getRevision()).not.toBe(revision);
+		expect(sidebarText()).toContain("Renamed");
+		expect(footerText()).toContain("• Renamed");
 	});
 
 	it("shows the mode badge, branch, dirty count and local status in the footer", () => {

@@ -47,6 +47,8 @@
 - Fixed `--version`, `--help`, `--export`, `--list-models` and package/auth subcommands starting (and on a fresh install downloading) the local model when no provider is configured.
 - Fixed the startup update notice comparing against upstream Pi releases; it now checks midnight.server GitHub releases and links to the release page.
 - Fixed dotted environment variable names for the midnight.server config and session directories, and directed binary update instructions to the product repository.
+- Fixed slow, uneven scrolling in fullscreen mode on long sessions. The file explorer rescanned the whole session once per visible file on every frame (about half a second per frame at 4,500 entries), and the sidebar and footer rescanned it once per frame; they now reuse the result until the session changes. `getContextUsage()` is cached the same way.
+- Fixed local-engine progress and drift-watch updates re-wrapping the whole transcript; only the startup header is refreshed now, and its plan/build badge updates when the mode changes.
 
 ### Removed
 

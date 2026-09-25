@@ -171,11 +171,11 @@ export class FileExplorerComponent implements Component, Focusable {
 		return { handled: true, focus: true };
 	}
 
-	private renderRow(row: ExplorerRow, selected: boolean, width: number): string {
+	private renderRow(row: ExplorerRow, selected: boolean, width: number, sessionChanges: ReadonlySet<string>): string {
 		const { entry, depth } = row;
 		const snapshot = this.snapshot;
 		const mark = snapshot?.mark(entry.path);
-		const changedBySession = !entry.directory && this.options.sessionChanges().has(entry.path);
+		const changedBySession = !entry.directory && sessionChanges.has(entry.path);
 		const indent = "  ".repeat(depth);
 		const icon = entry.directory ? (this.expanded.has(entry.path) ? "▾ " : "▸ ") : "  ";
 		let suffix = "";
@@ -218,12 +218,13 @@ export class FileExplorerComponent implements Component, Focusable {
 			),
 		);
 		lines.push("");
+		const sessionChanges = this.options.sessionChanges();
 		if (!this.snapshot) lines.push(theme.fg("dim", "loading…"));
 		else if (this.rows.length === 0) lines.push(theme.fg("dim", "no files"));
 		for (let offset = 0; offset < treeHeight; offset++) {
 			const row = this.rows[this.scrollTop + offset];
 			if (!row) break;
-			lines.push(this.renderRow(row, this.scrollTop + offset === selected, contentWidth));
+			lines.push(this.renderRow(row, this.scrollTop + offset === selected, contentWidth, sessionChanges));
 		}
 		while (lines.length < height - 2) lines.push("");
 		const hints = this.focused

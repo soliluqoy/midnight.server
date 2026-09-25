@@ -230,6 +230,7 @@ function isExpandable(obj: unknown): obj is Expandable {
 class ExpandableText extends Text implements Expandable {
 	private readonly getCollapsedText: () => string;
 	private readonly getExpandedText: () => string;
+	private expanded: boolean;
 
 	constructor(
 		getCollapsedText: () => string,
@@ -241,10 +242,17 @@ class ExpandableText extends Text implements Expandable {
 		super(expanded ? getExpandedText() : getCollapsedText(), paddingX, paddingY);
 		this.getCollapsedText = getCollapsedText;
 		this.getExpandedText = getExpandedText;
+		this.expanded = expanded;
 	}
 
 	setExpanded(expanded: boolean): void {
+		this.expanded = expanded;
 		this.setText(expanded ? this.getExpandedText() : this.getCollapsedText());
+	}
+
+	/** Rebuild the text so live parts (the plan/build badge and session mode) are current. */
+	override invalidate(): void {
+		this.setText(this.expanded ? this.getExpandedText() : this.getCollapsedText());
 	}
 }
 
@@ -441,6 +449,9 @@ export class InteractiveMode {
 	private explorer: FileExplorerComponent;
 	/** Session-only explorer override from the toggle key; undefined follows the `explorer` setting. */
 	private explorerOverride: boolean | undefined;
+	private sessionChangedPaths:
+		| { sessionManager: SessionManager; revision: number; paths: ReadonlySet<string> }
+		| undefined;
 	/** Increments per workspace read so a slow, older read never replaces a newer one. */
 	private explorerGeneration = 0;
 	private unsubscribeMidnightStatus: (() => void) | undefined;
@@ -647,12 +658,7 @@ export class InteractiveMode {
 		});
 		this.explorer = new FileExplorerComponent({
 			rootName: () => path.basename(this.sessionManager.getCwd()) || this.sessionManager.getCwd(),
-			sessionChanges: () =>
-				new Set(
-					collectSessionFileChanges(this.sessionManager.getEntries(), this.sessionManager.getCwd()).map(
-						(change) => change.path,
-					),
-				),
+			sessionChanges: () => this.getSessionChangedPaths(),
 			getHeight: () => this.ui.terminal.rows,
 			onOpen: (filePath) => this.insertFileReference(filePath),
 			onPreview: (filePath) => this.showFilePreview(filePath),
@@ -1129,7 +1135,10 @@ export class InteractiveMode {
 		this.gitStatusTracker.onChange(() => this.ui.requestRender());
 		void this.gitStatusTracker.refresh();
 		this.unsubscribeMidnightStatus = onMidnightStatusChange(() => {
-			this.ui.invalidate();
+			// The sidebar and footer read the status on every render; only the startup header caches
+			// text built from it. Invalidating the whole UI here would re-wrap every transcript message
+			// on each drift check and engine progress update.
+			this.builtInHeader?.invalidate();
 			this.ui.requestRender();
 		});
 
@@ -3103,6 +3112,22 @@ export class InteractiveMode {
 			this.explorer.setSnapshot(snapshot);
 			this.ui.requestRender();
 		});
+	}
+
+	/**
+	 * Paths changed by the agent in this session, for the explorer's change dots. The explorer
+	 * renders on every frame, so rescan the session only when its entries change.
+	 */
+	private getSessionChangedPaths(): ReadonlySet<string> {
+		const sessionManager = this.sessionManager;
+		const revision = sessionManager.getRevision();
+		const cached = this.sessionChangedPaths;
+		if (cached && cached.sessionManager === sessionManager && cached.revision === revision) return cached.paths;
+		const paths = new Set(
+			collectSessionFileChanges(sessionManager.getEntries(), sessionManager.getCwd()).map((change) => change.path),
+		);
+		this.sessionChangedPaths = { sessionManager, revision, paths };
+		return paths;
 	}
 
 	/** Add `@path` to the prompt, the same form the `@` autocomplete produces, and focus the prompt. */
