@@ -33,7 +33,15 @@ import { listModels } from "./cli/list-models.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
-import { APP_NAME, ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir, VERSION } from "./config.ts";
+import {
+	APP_NAME,
+	ENV_AGENT_DIR,
+	ENV_SESSION_DIR,
+	expandTildePath,
+	getAgentDir,
+	getPackageDir,
+	VERSION,
+} from "./config.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
 import {
 	type AgentSessionRuntimeDiagnostic,
@@ -565,6 +573,12 @@ export async function main(args: string[], options?: MainOptions) {
 	if (offlineMode) {
 		process.env.MIDNIGHT_SERVER_OFFLINE = "1";
 		process.env.MIDNIGHT_SERVER_SKIP_VERSION_CHECK = "1";
+	}
+	// Pi extensions (e.g. the bundled pi-mcp-adapter) read piConfig through PI_PACKAGE_DIR and the
+	// agent dir from <APP_NAME>_CODING_AGENT_DIR, so they use ~/.midnight.server instead of ~/.pi.
+	process.env.PI_PACKAGE_DIR ??= getPackageDir();
+	if (process.env[ENV_AGENT_DIR]) {
+		process.env[`${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`] ??= process.env[ENV_AGENT_DIR];
 	}
 
 	if (await runAuthCommand(args)) {

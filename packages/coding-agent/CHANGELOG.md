@@ -9,6 +9,7 @@
 
 ### Added
 
+- Added bundled extensions: packages pinned in `packaging/extensions` ship in `extensions/` beside the executable and load by default, skipped when settings configure the same npm package or `MIDNIGHT_SERVER_NO_BUNDLED_EXTENSIONS` is set. The first is [pi-mcp-adapter](docs/mcp.md), so `/mcp` works on a fresh install and reads `~/.midnight.server/agent/mcp.json`.
 - Added plan and build modes. Tab in an empty editor switches; plan mode limits the model to read-only tools (`read`, `grep`, `find`, `ls`, `delegate_local`), adds a planning instruction to the system prompt, and blocks other tool calls, and build mode restores the previous tool set. The mode shows in the header, footer, sidebar and editor border.
 - Added an opencode-style session sidebar in fullscreen mode with the session title, git branch and working-tree status (changed/staged counts, ahead/behind), context usage and cost, the model, local engine and drift-watch state, and files changed this session with line counts. The `sidebar` setting (`auto`, `always`, `hidden`) and `app.sidebar.toggle` (Alt+S) control it.
 - Added a command palette (`app.commandPalette`, Alt+X) listing actions and slash commands with fuzzy search.

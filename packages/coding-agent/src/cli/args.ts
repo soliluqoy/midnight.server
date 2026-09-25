@@ -430,6 +430,7 @@ ${chalk.bold("Environment Variables:")}
   ${ENV_AGENT_DIR.padEnd(32)} - Config directory (default: ~/${CONFIG_DIR_NAME}/agent)
   ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
   MIDNIGHT_SERVER_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
+  MIDNIGHT_SERVER_NO_BUNDLED_EXTENSIONS         - Skip extensions shipped with midnight.server (e.g. MCP) when set
   MIDNIGHT_SERVER_OFFLINE                       - Disable startup network operations when set to 1/true/yes
   MIDNIGHT_SERVER_TELEMETRY                     - Override install telemetry when set to 1/true/yes or 0/false/no
   MIDNIGHT_SERVER_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)

@@ -111,6 +111,48 @@ describe("DefaultPackageManager", () => {
 			);
 		});
 
+		describe("bundled packages", () => {
+			let bundledPackageRoot: string;
+
+			beforeEach(() => {
+				// getBundledExtensionsDir() resolves <packageDir>/../../packaging/extensions outside a Bun binary.
+				const repoDir = join(tempDir, "repo");
+				const bundledDir = join(repoDir, "packaging", "extensions");
+				bundledPackageRoot = join(bundledDir, "node_modules", "bundled-ext");
+				mkdirSync(join(bundledPackageRoot, "extensions"), { recursive: true });
+				mkdirSync(join(repoDir, "packages", "coding-agent"), { recursive: true });
+				writeFileSync(
+					join(bundledDir, "package.json"),
+					JSON.stringify({ private: true, dependencies: { "bundled-ext": "1.0.0" } }),
+				);
+				writeFileSync(join(bundledPackageRoot, "package.json"), JSON.stringify({ name: "bundled-ext" }));
+				writeFileSync(join(bundledPackageRoot, "extensions", "index.ts"), "export default function() {}");
+				vi.stubEnv("MIDNIGHT_SERVER_PACKAGE_DIR", join(repoDir, "packages", "coding-agent"));
+				vi.stubEnv("MIDNIGHT_SERVER_NO_BUNDLED_EXTENSIONS", "");
+			});
+
+			it("loads bundled packages without settings entries", async () => {
+				const result = await packageManager.resolve();
+				const bundled = result.extensions.find(
+					(r) => r.path === join(bundledPackageRoot, "extensions", "index.ts"),
+				);
+				expect(bundled?.enabled).toBe(true);
+				expect(bundled?.metadata).toMatchObject({ source: "builtin:bundled-ext", origin: "package" });
+			});
+
+			it("skips a bundled package that settings already configure", async () => {
+				settingsManager.setPackages(["npm:bundled-ext"]);
+				const result = await packageManager.resolve(async () => "skip");
+				expect(result.extensions.some((r) => r.metadata.source === "builtin:bundled-ext")).toBe(false);
+			});
+
+			it("loads nothing when MIDNIGHT_SERVER_NO_BUNDLED_EXTENSIONS is set", async () => {
+				vi.stubEnv("MIDNIGHT_SERVER_NO_BUNDLED_EXTENSIONS", "1");
+				const result = await packageManager.resolve();
+				expect(result.extensions).toEqual([]);
+			});
+		});
+
 		it("should resolve local extension paths from settings", async () => {
 			const extDir = join(agentDir, "extensions");
 			mkdirSync(extDir, { recursive: true });

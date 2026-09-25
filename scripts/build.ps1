@@ -64,6 +64,21 @@ foreach ($copy in $copies) {
 }
 Copy-Item -Recurse -Force "$agent\docs" (Join-Path $OutDir "docs")
 
+Write-Step "Installing bundled extensions"
+# Pinned by packaging\extensions\package-lock.json; loaded by default from extensions\ beside the exe.
+$bundled = Join-Path $RepoRoot "packaging\extensions"
+Invoke-Checked "npm" @("ci", "--ignore-scripts", "--omit=peer", "--prefix", $bundled)
+$bundledOut = Join-Path $OutDir "extensions"
+New-Item -ItemType Directory -Force $bundledOut | Out-Null
+Copy-Item -Force -LiteralPath (Join-Path $bundled "package.json") -Destination $bundledOut
+Copy-Item -Recurse -Force -LiteralPath (Join-Path $bundled "node_modules") -Destination $bundledOut
+# pi-mcp-adapter only calls recheck's checkSync, which runs in JS; the native and Java
+# agents (~50 MiB) back the async check() and are never loaded.
+foreach ($unused in @("recheck-jar", "recheck-windows-x64", ".bin")) {
+	$unusedPath = Join-Path $bundledOut "node_modules\$unused"
+	if (Test-Path -LiteralPath $unusedPath) { Remove-Item -Recurse -Force -LiteralPath $unusedPath }
+}
+
 Write-Step "Installing engine ($Backend)"
 # The built CLI downloads, verifies and unpacks its own pinned engine, so the
 # bundled copy is laid out (and marked) exactly like a first-run download.

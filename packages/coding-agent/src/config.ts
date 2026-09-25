@@ -451,6 +451,20 @@ export function getExamplesPath(): string {
 	return resolve(join(getPackageDir(), "examples"));
 }
 
+/**
+ * Get the directory of extension packages that ship with midnight.server and load by default.
+ * - For Bun binary: extensions/ next to executable
+ * - From a source checkout: packaging/extensions/ at the repository root
+ * Returns undefined when it is absent or MIDNIGHT_SERVER_NO_BUNDLED_EXTENSIONS is set.
+ */
+export function getBundledExtensionsDir(): string | undefined {
+	if (process.env.MIDNIGHT_SERVER_NO_BUNDLED_EXTENSIONS) return undefined;
+	const dir = isBunBinary
+		? join(getPackageDir(), "extensions")
+		: resolve(getPackageDir(), "..", "..", "packaging", "extensions");
+	return existsSync(join(dir, "package.json")) ? dir : undefined;
+}
+
 /** Get path to CHANGELOG.md */
 export function getChangelogPath(): string {
 	return resolve(join(getPackageDir(), "CHANGELOG.md"));

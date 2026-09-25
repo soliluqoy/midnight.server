@@ -55,7 +55,10 @@ Write-Host "bun    $(& $bun --version) ($bun)"
 if ($Install) {
 	Write-Step "Installing npm dependencies (lifecycle scripts disabled)"
 	Push-Location $RepoRoot
-	try { Invoke-Checked "npm" @("ci", "--ignore-scripts") } finally { Pop-Location }
+	try {
+		Invoke-Checked "npm" @("ci", "--ignore-scripts")
+		Invoke-Checked "npm" @("ci", "--ignore-scripts", "--prefix", "packaging\extensions")
+	} finally { Pop-Location }
 }
 
 Write-Host "Build host ready."

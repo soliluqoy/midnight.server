@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { spawn, spawnSync } from "child_process";
-import { getBinDir } from "../config.ts";
+import { getBinDir, getPackageDir } from "../config.ts";
 
 export interface ShellConfig {
 	shell: string;
@@ -143,10 +143,10 @@ export function getShellEnv(): NodeJS.ProcessEnv {
 	const hasBinDir = pathEntries.includes(binDir);
 	const updatedPath = hasBinDir ? currentPath : [binDir, currentPath].filter(Boolean).join(delimiter);
 
-	return {
-		...process.env,
-		[pathKey]: updatedPath,
-	};
+	const env: NodeJS.ProcessEnv = { ...process.env, [pathKey]: updatedPath };
+	// main() points PI_PACKAGE_DIR at midnight.server for in-process pi extensions; a `pi` run from the shell must not see it.
+	if (env.PI_PACKAGE_DIR === getPackageDir()) delete env.PI_PACKAGE_DIR;
+	return env;
 }
 
 /**

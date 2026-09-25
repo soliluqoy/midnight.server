@@ -37,7 +37,7 @@ import type { Readable } from "node:stream";
 import ignore from "ignore";
 import { minimatch } from "minimatch";
 import { gt, maxSatisfying, rcompare, satisfies, valid, validRange } from "semver";
-import { CONFIG_DIR_NAME } from "../config.ts";
+import { CONFIG_DIR_NAME, getBundledExtensionsDir } from "../config.ts";
 import { spawnProcess, spawnProcessSync } from "../utils/child-process.ts";
 import { type GitSource, parseGitUrl } from "../utils/git.ts";
 import { canonicalizePath, isLocalPath, markPathIgnoredByCloudSync, resolvePath } from "../utils/paths.ts";
@@ -926,6 +926,7 @@ export class DefaultPackageManager implements PackageManager {
 		// Dedupe: project scope wins over global for same package identity
 		const packageSources = this.dedupePackages(allPackages);
 		await this.resolvePackageSources(packageSources, accumulator, onMissing);
+		this.resolveBundledPackages(packageSources, accumulator);
 
 		const globalBaseDir = this.agentDir;
 		const projectBaseDir = join(this.cwd, CONFIG_DIR_NAME);
@@ -1306,6 +1307,36 @@ export class DefaultPackageManager implements PackageManager {
 				metadata.baseDir = installedPath;
 				this.collectPackageResources(installedPath, accumulator, filter, metadata);
 			}
+		}
+	}
+
+	/** Load packages shipped with midnight.server, unless settings already configure the same npm package. */
+	private resolveBundledPackages(
+		configured: Array<{ pkg: PackageSource; scope: SourceScope }>,
+		accumulator: ResourceAccumulator,
+	): void {
+		const bundledDir = getBundledExtensionsDir();
+		if (!bundledDir) return;
+		let dependencies: Record<string, string>;
+		try {
+			const pkgJson = JSON.parse(stripBom(readFileSync(join(bundledDir, "package.json"), "utf-8")));
+			dependencies = pkgJson.dependencies ?? {};
+		} catch {
+			return;
+		}
+		const configuredIdentities = new Set(
+			configured.map((entry) => this.getPackageIdentity(this.getPackageSourceString(entry.pkg), entry.scope)),
+		);
+		for (const name of Object.keys(dependencies)) {
+			if (configuredIdentities.has(`npm:${name}`)) continue;
+			const packageRoot = join(bundledDir, "node_modules", name);
+			if (!existsSync(packageRoot)) continue;
+			this.collectPackageResources(packageRoot, accumulator, undefined, {
+				source: `builtin:${name}`,
+				scope: "user",
+				origin: "package",
+				baseDir: packageRoot,
+			});
 		}
 	}
 
