@@ -1,25 +1,15 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionFactory } from "../core/extensions/types.ts";
-import type { ChatRequest, ChatResult } from "./engine.ts";
-import type { EngineManager } from "./engine-manager.ts";
-import { MODEL_LOCK } from "./pins.ts";
-import { findModel } from "./store.ts";
 
-interface TitleEngine {
-	chat(request: ChatRequest): Promise<ChatResult>;
-}
-
-const TITLE_SCHEMA = {
-	type: "object",
-	properties: { title: { type: "string", maxLength: 60 } },
-	required: ["title"],
-} as const;
+/** Sends one request to the session model. */
+export type TitleCompleter = (context: Context, signal: AbortSignal) => Promise<AssistantMessage>;
 
 const TITLE_SYSTEM_PROMPT = [
 	"You name coding assistant sessions.",
 	"Given the user's first request and the start of the reply, write a short title of 2 to 6 words that says what the session is about.",
 	"No quotes, no trailing punctuation, no emojis.",
-	"Respond with one JSON object matching the required schema.",
+	"Reply with the title only.",
 ].join("\n");
 
 const MAX_TITLE_LENGTH = 60;
@@ -50,42 +40,39 @@ export function cleanSessionTitle(raw: string): string | undefined {
 }
 
 export async function generateSessionTitle(
-	engine: TitleEngine,
+	complete: TitleCompleter,
 	userText: string,
 	assistantText: string,
 	signal: AbortSignal,
 ): Promise<string | undefined> {
-	const result = await engine.chat({
-		messages: [
-			{ role: "system", content: TITLE_SYSTEM_PROMPT },
-			{
-				role: "user",
-				content: `<request>\n${userText.slice(0, MAX_EXCERPT_CHARS)}\n</request>\n<reply>\n${assistantText.slice(0, MAX_EXCERPT_CHARS)}\n</reply>`,
-			},
-		],
-		maxTokens: 60,
-		enableThinking: false,
-		jsonSchema: TITLE_SCHEMA,
+	const reply = await complete(
+		{
+			systemPrompt: TITLE_SYSTEM_PROMPT,
+			messages: [
+				{
+					role: "user",
+					content: `<request>\n${userText.slice(0, MAX_EXCERPT_CHARS)}\n</request>\n<reply>\n${assistantText.slice(0, MAX_EXCERPT_CHARS)}\n</reply>`,
+					timestamp: Date.now(),
+				},
+			],
+		},
 		signal,
-	});
-	if (result.finishReason === "length") return undefined;
-	try {
-		const value: unknown = JSON.parse(result.content);
-		if (typeof value !== "object" || value === null) return undefined;
-		const title = (value as Record<string, unknown>).title;
-		return typeof title === "string" ? cleanSessionTitle(title) : undefined;
-	} catch {
-		return undefined;
-	}
+	);
+	if (reply.stopReason !== "stop") return undefined;
+	const text = reply.content
+		.map((part) => (part.type === "text" ? part.text : ""))
+		.join("")
+		.trim();
+	// A model that explains itself puts the title first; ignore the rest.
+	return cleanSessionTitle(text.split(/\r?\n/, 1)[0] ?? "");
 }
 
 /**
- * Name an unnamed session after its first exchange, using the local model so it costs
- * no cloud tokens. Runs in the background once per session and never overrides a name
- * set with --name, /name, or by an extension. Skipped when the local model is not
- * installed yet: a cosmetic title is not worth a one-time 2.5 GiB download.
+ * Name an unnamed session after its first exchange, using the session's own model.
+ * Runs in the background once per session and never overrides a name set with
+ * --name, /name, or by an extension.
  */
-export function createSessionTitleExtension(manager: EngineManager): ExtensionFactory {
+export function createSessionTitleExtension(): ExtensionFactory {
 	return (pi: ExtensionAPI) => {
 		let attempted = false;
 		let controller: AbortController | undefined;
@@ -100,20 +87,21 @@ export function createSessionTitleExtension(manager: EngineManager): ExtensionFa
 
 		pi.on("agent_end", (event, ctx) => {
 			if (attempted || !ctx.hasUI || pi.getSessionName()) return;
+			const model = ctx.model;
 			const userText = messageText(event.messages.find((message) => message.role === "user"));
 			const assistantText = messageText(event.messages.find((message) => message.role === "assistant"));
-			if (!userText || (!manager.current && !findModel(MODEL_LOCK))) return;
+			if (!model || !userText) return;
 			attempted = true;
 			controller = new AbortController();
 			const signal = controller.signal;
+			const complete: TitleCompleter = (context, requestSignal) =>
+				ctx.modelRegistry.complete(model, context, { signal: requestSignal });
 			void (async () => {
 				try {
-					const engine = await manager.get(signal);
-					manager.touch();
-					const title = await generateSessionTitle(engine, userText, assistantText, signal);
+					const title = await generateSessionTitle(complete, userText, assistantText, signal);
 					if (title && !pi.getSessionName()) pi.setSessionName(title);
 				} catch {
-					// Titles are cosmetic; a missing local model or a failed request just leaves the session unnamed.
+					// Titles are cosmetic; a failed request just leaves the session unnamed.
 				}
 			})();
 		});

@@ -262,6 +262,7 @@ describe("local provider", () => {
 			const runtime = await unconfiguredModelRuntime();
 			const pi = {
 				registerProvider: (id: string, config: ProviderConfigInput) => runtime.registerProvider(id, config),
+				registerCommand: () => {},
 				on: () => {},
 			} as unknown as ExtensionAPI;
 			createLocalProviderExtension(manager, { localOnly: false, contextSize: 4096 })(pi);

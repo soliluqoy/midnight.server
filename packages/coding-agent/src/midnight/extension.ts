@@ -14,6 +14,7 @@ import {
 } from "./helper.ts";
 import { getMidnightHome } from "./paths.ts";
 import { LOCAL_MODEL_ID, LOCAL_PROVIDER_ID } from "./pins.ts";
+import { getMidnightStatus } from "./status.ts";
 
 /**
  * Register the engine as the `midnight` provider. Each request gets the engine
@@ -63,6 +64,18 @@ export function createLocalProviderExtension(
 					},
 				},
 			],
+		});
+		pi.registerCommand("local-stop", {
+			description: "Stop the local model engine and free its memory (it restarts on next use)",
+			handler: async (_args, ctx) => {
+				const { engine } = getMidnightStatus();
+				if (engine !== "ready" && engine !== "starting") {
+					ctx.ui.notify("Local model is not running.");
+					return;
+				}
+				await manager.stop();
+				ctx.ui.notify("Local model stopped.");
+			},
 		});
 		if (options.localOnly) {
 			pi.on("session_start", (_event, ctx) => {
