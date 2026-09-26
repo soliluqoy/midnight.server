@@ -33,6 +33,7 @@
 
 ### Changed
 
+- Drift watch findings are now side threads on the newest transcript item instead of reminders injected into the agent's next turn. The agent sees a finding only when you send it (`m`) or branch from before its item (`b`); the finding shows the gate's confidence, e.g. `[check: drifting] (82% not on track)`. Side threads have one shared store per session, so background findings and your own questions never overwrite each other.
 - `delegate_local` and `helper` tasks now decode at temperature 0, and `inspect` thinks by default (summarize/classify still do not). An `inspect` task takes about 50 s instead of 10 s on a laptop CPU, but answers correctly. The helper prompt also states that finding a bug or answering "no" is a completed task, not a reason to escalate.
 - The startup header credits pi: "Built on pi (pi.dev). Ask midnight.server how to use or extend it; it reads its own docs to answer."
 - `MIDNIGHT_SERVER_GPU_LAYERS` now defaults to the selected backend (0 on the CPU, every layer on a GPU), and the engine inherits `PATH` after its own directory so system-wide vendor runtimes load. An engine that exits during startup reports the end of its log in the error.

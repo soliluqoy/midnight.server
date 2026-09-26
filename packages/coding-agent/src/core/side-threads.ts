@@ -39,6 +39,8 @@ export interface SideThreadTurn {
 	error?: string;
 	startedAt: number;
 	finishedAt?: number;
+	/** Set when a background check wrote the turn instead of the user asking it. */
+	origin?: "drift";
 }
 
 export interface SideThread {
@@ -75,7 +77,29 @@ export function sideThreadFileFor(sessionFile: string | undefined): string | und
 /** Remove a session's thread file. Used when the session file itself is deleted. */
 export function deleteSideThreadFile(sessionFile: string): void {
 	const file = sideThreadFileFor(sessionFile);
-	if (file) rmSync(file, { force: true });
+	if (!file) return;
+	openStores.delete(file);
+	rmSync(file, { force: true });
+}
+
+const openStores = new Map<string, SideThreadStore>();
+
+/**
+ * The live store for a session. The interactive UI and background writers such as drift
+ * watch share it, so neither overwrites the other's threads when saving.
+ */
+export function sideThreadStoreFor(session: {
+	getSessionFile(): string | undefined;
+	getSessionId(): string;
+}): SideThreadStore {
+	const file = sideThreadFileFor(session.getSessionFile());
+	const key = file ?? `memory:${session.getSessionId()}`;
+	let store = openStores.get(key);
+	if (!store) {
+		store = new SideThreadStore(file);
+		openStores.set(key, store);
+	}
+	return store;
 }
 
 /**
@@ -85,6 +109,7 @@ export function deleteSideThreadFile(sessionFile: string): void {
 export class SideThreadStore {
 	readonly file: string | undefined;
 	private threads = new Map<string, SideThread>();
+	private readonly listeners = new Set<() => void>();
 
 	constructor(file: string | undefined) {
 		this.file = file;
@@ -128,6 +153,24 @@ export class SideThreadStore {
 		return thread;
 	}
 
+	/**
+	 * Add a finished turn to the item's thread, creating the thread if needed. It goes before
+	 * a running answer, which stays last (send-to-main relies on that).
+	 */
+	appendTurn(anchor: ThreadAnchor, turn: SideThreadTurn): SideThread {
+		const thread = this.getOrCreate(anchor.id, anchor.label, anchor.excerpt);
+		const last = thread.turns[thread.turns.length - 1];
+		thread.turns.splice(last?.status === "running" ? thread.turns.length - 1 : thread.turns.length, 0, turn);
+		this.save();
+		return thread;
+	}
+
+	/** Called after every save, including saves by other writers of this store. */
+	subscribe(listener: () => void): () => void {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
+	}
+
 	delete(anchorId: string): boolean {
 		const deleted = this.threads.delete(anchorId);
 		if (deleted) this.save();
@@ -136,6 +179,11 @@ export class SideThreadStore {
 
 	/** Write atomically; failures are ignored so a read-only session dir never breaks the UI. */
 	save(): void {
+		this.write();
+		for (const listener of this.listeners) listener();
+	}
+
+	private write(): void {
 		if (!this.file) return;
 		try {
 			if (this.threads.size === 0) {
@@ -342,6 +390,35 @@ export function branchPointFor(branch: readonly SessionEntry[], anchorId: string
 			: assistantAnchorId(message) === anchorId;
 	});
 	return entry?.parentId ?? undefined;
+}
+
+/**
+ * The newest item in a transcript a thread can attach to: the last tool call of the newest
+ * assistant message that made any, else that message's text. Matches the transcript order,
+ * where tool calls render below the reply text that introduced them.
+ */
+export function latestAnchor(messages: readonly AgentMessage[]): ThreadAnchor | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i]!;
+		if (message.role !== "assistant") continue;
+		const calls = message.content.filter((part) => part.type === "toolCall");
+		const call = calls[calls.length - 1];
+		if (call) {
+			const result = messages.find(
+				(candidate) => candidate.role === "toolResult" && candidate.toolCallId === call.id,
+			);
+			return toolCallAnchor(
+				call.name,
+				call.id,
+				call.arguments,
+				result?.role === "toolResult" ? result : undefined,
+				!result,
+			);
+		}
+		const reply = assistantAnchor(message);
+		if (reply) return reply;
+	}
+	return undefined;
 }
 
 /** A transcript item a thread can attach to. */

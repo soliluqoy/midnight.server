@@ -10,9 +10,9 @@ import {
 	runSideThreadTurn,
 	type SideThread,
 	type SideThreadModelKind,
-	SideThreadStore,
+	type SideThreadStore,
 	type SideThreadTurn,
-	sideThreadFileFor,
+	sideThreadStoreFor,
 	type ThreadAnchor,
 } from "../../core/side-threads.ts";
 import { LOCAL_MODEL_ID, LOCAL_PROVIDER_ID, MODEL_LOCK } from "../../midnight/pins.ts";
@@ -73,6 +73,7 @@ const RENDER_THROTTLE_MS = 50;
 export class SideThreadController implements TranscriptDecorations {
 	private readonly host: SideThreadHost;
 	private store: SideThreadStore;
+	private unsubscribe: () => void;
 	private mode: Mode = { type: "idle" };
 	private selectedId: string | undefined;
 	private readonly open = new Set<string>();
@@ -86,7 +87,8 @@ export class SideThreadController implements TranscriptDecorations {
 
 	constructor(host: SideThreadHost) {
 		this.host = host;
-		this.store = new SideThreadStore(sideThreadFileFor(host.session().sessionManager.getSessionFile()));
+		this.store = sideThreadStoreFor(host.session().sessionManager);
+		this.unsubscribe = this.store.subscribe(() => this.onStoreChange());
 		this.selectionBar.onInput = (data) => this.handleSelectionInput(data);
 	}
 
@@ -109,15 +111,23 @@ export class SideThreadController implements TranscriptDecorations {
 		return this.running.size;
 	}
 
-	/** Reload threads when the session file changed (new, resume, fork). */
+	/** Switch stores when the session changed (new, resume, fork). */
 	private syncStore(): void {
-		const file = sideThreadFileFor(this.host.session().sessionManager.getSessionFile());
-		if (file === this.store.file) return;
-		this.store = new SideThreadStore(file);
+		const store = sideThreadStoreFor(this.host.session().sessionManager);
+		if (store === this.store) return;
+		this.unsubscribe();
+		this.store = store;
+		this.unsubscribe = store.subscribe(() => this.onStoreChange());
 		this.open.clear();
 		this.renderCache.clear();
 		this.selectedId = undefined;
 		if (this.mode.type !== "idle") this.exitToIdle();
+	}
+
+	/** Another writer (drift watch) or this controller saved: redraw the threads. */
+	private onStoreChange(): void {
+		if (this.mode.type === "selecting") this.updateSelectionBar();
+		this.host.requestRender();
 	}
 
 	// ------------------------------------------------------- transcript hooks

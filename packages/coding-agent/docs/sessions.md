@@ -67,6 +67,8 @@ The default is the local model for tool output when it is installed, otherwise t
 
 Threads are saved beside the session file as `<session>.threads.json`, so they come back when you resume. They are not session entries: `/tree`, `/fork`, and compaction ignore them, and a fork starts without threads. `m` is the only way a thread reaches the main agent: it adds the unsent questions and answers as a visible message. If the agent is running, the message is added when the current turn ends. No turn is started.
 
+Drift watch (hybrid mode) reports its findings the same way: a thread from `drift watch` under the newest item when the check ran, shown in the warning color. It is not sent to the agent; use `m` or `b` as with any thread.
+
 ### Redo an item from a side thread
 
 When a side thread shows the agent went the wrong way at an item, select the item and press `b`. `/tree` opens on the entry just before it: the prompt that led to the item, or the tool result it followed. Navigate as usual (move the selection first if you want to go back further). After navigating, the thread's answered questions are added to the editor as a note, below the prompt text if you picked a user message. Edit it into guidance and send it to redo the item on a new branch.

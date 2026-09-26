@@ -2,7 +2,14 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { type Api, type AssistantMessage, fauxAssistantMessage, fauxToolCall, type Model } from "@earendil-works/pi-ai";
+import {
+	type Api,
+	type AssistantMessage,
+	fauxAssistantMessage,
+	fauxText,
+	fauxToolCall,
+	type Model,
+} from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionModelRequest } from "../src/core/agent-session.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
@@ -15,10 +22,12 @@ import {
 	formatThreadForBranch,
 	formatThreadForMain,
 	LOCAL_EXCERPT_CHARS,
+	latestAnchor,
 	recentTranscript,
 	type SideThread,
 	SideThreadStore,
 	sideThreadFileFor,
+	sideThreadStoreFor,
 	toolCallAnchor,
 } from "../src/core/side-threads.ts";
 
@@ -306,5 +315,57 @@ describe("branching from a side thread", () => {
 		expect(note).toContain("Q: one\nA: a1\n\nQ: two\nA: a2");
 		expect(note).not.toContain("three");
 		expect(formatThreadForBranch(thread({ turns: [running] }))).toBeUndefined();
+	});
+});
+
+describe("shared thread store", () => {
+	const finding = {
+		question: "Drift check: is the agent still on track?",
+		answer: "[check: drifting] lost the goal",
+		model: { provider: "midnight", id: "minicpm5-2b-q8_0", kind: "local" as const },
+		status: "done" as const,
+		startedAt: 1,
+		origin: "drift" as const,
+	};
+	const anchor = { id: "tool:call-1", label: "bash npm run check", excerpt: "Tool call: bash" };
+
+	it("gives every writer of a session the same store and tells subscribers about saves", () => {
+		const session = SessionManager.inMemory();
+		const store = sideThreadStoreFor(session);
+		expect(sideThreadStoreFor(session)).toBe(store);
+		expect(sideThreadStoreFor(SessionManager.inMemory())).not.toBe(store);
+		let changes = 0;
+		const unsubscribe = store.subscribe(() => changes++);
+		store.appendTurn(anchor, finding);
+		unsubscribe();
+		store.appendTurn(anchor, finding);
+		expect(changes).toBe(1);
+		expect(store.get(anchor.id)?.turns).toHaveLength(2);
+	});
+
+	it("adds a finding before a running answer so the running turn stays last", () => {
+		const store = sideThreadStoreFor(SessionManager.inMemory());
+		const thread = store.getOrCreate(anchor.id, anchor.label, anchor.excerpt);
+		thread.turns.push({ ...finding, question: "mine", status: "running", origin: undefined });
+		store.appendTurn(anchor, finding);
+		expect(thread.turns.map((turn) => turn.status)).toEqual(["done", "running"]);
+	});
+
+	it("finds the newest item: the last tool call of the newest reply that made one, else its text", () => {
+		const call = fauxToolCall("bash", { command: "npm run check" }, { id: "call-9" });
+		const calling = fauxAssistantMessage([fauxText("Checking."), call]);
+		const result: AgentMessage = {
+			role: "toolResult",
+			toolCallId: "call-9",
+			toolName: "bash",
+			content: [{ type: "text", text: "lint error" }],
+			isError: true,
+			timestamp: 2,
+		};
+		expect(latestAnchor([calling, result])).toMatchObject({ id: "tool:call-9", label: "bash npm run check" });
+		expect(latestAnchor([calling, result])?.excerpt).toContain("lint error");
+		const reply = fauxAssistantMessage("All done.");
+		expect(latestAnchor([calling, result, reply])?.id).toBe(`assistant:${reply.timestamp}`);
+		expect(latestAnchor([{ role: "user", content: "hi", timestamp: 1 }])).toBeUndefined();
 	});
 });

@@ -919,7 +919,7 @@
         const count = thread.turns.length === 1 ? '1 side question' : `${thread.turns.length} side questions`;
         let body = '';
         for (const turn of thread.turns) {
-          body += `<div><span class="side-thread-who">you</span>${escapeHtml(turn.question)}</div>`;
+          body += `<div><span class="side-thread-who">${turn.origin === 'drift' ? 'drift watch' : 'you'}</span>${escapeHtml(turn.question)}</div>`;
           if (turn.answer) {
             body += `<div><span class="side-thread-who">${escapeHtml(sideThreadModel(turn))}</span><div class="markdown-content">${safeMarkedParse(turn.answer)}</div></div>`;
           }

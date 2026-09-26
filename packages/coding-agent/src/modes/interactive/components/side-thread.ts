@@ -32,6 +32,7 @@ export function renderFoldedThread(thread: SideThread, width: number): string[] 
 	if (last?.status === "running") summary = theme.fg("warning", ` answering… ${elapsed(last)}`);
 	else if (last?.status === "error") summary = theme.fg("error", ` ${firstLine(last.error ?? "failed", 50)}`);
 	else if (last?.status === "aborted") summary = theme.fg("muted", " stopped");
+	else if (last?.origin === "drift") summary = theme.fg("warning", ` ${firstLine(last.answer, 80)}`);
 	else if (last) summary = theme.fg("muted", ` "${firstLine(last.question, 30)}" → ${firstLine(last.answer, 50)}`);
 	const sent = thread.sentTurns > 0 ? theme.fg("dim", " · sent to main") : "";
 	const line = `${INDENT}${theme.fg("accent", `▸ ${turnWord(thread.turns.length)}`)}${theme.fg("dim", " · ")}${theme.fg("accent", models)}${summary}${sent}`;
@@ -55,7 +56,8 @@ export function renderOpenThread(thread: SideThread, width: number): string[] {
 	const markdownTheme = getMarkdownTheme();
 	for (const [index, turn] of thread.turns.entries()) {
 		if (index > 0) lines.push(bar);
-		for (const line of wrapTextWithAnsi(`${theme.fg("accent", "you")}  ${turn.question}`, innerWidth)) {
+		const asker = turn.origin === "drift" ? theme.fg("warning", "drift watch") : theme.fg("accent", "you");
+		for (const line of wrapTextWithAnsi(`${asker}  ${turn.question}`, innerWidth)) {
 			lines.push(bar + line);
 		}
 		const who = theme.fg("accent", modelRefLabel(turn.model));
