@@ -24,6 +24,7 @@ Extensions, prompt templates, and skills can add commands. The command menu in m
 | `/resume` | Switch to another saved session |
 | `/name [name]` | Set the session display name, or show the current name when omitted |
 | `/session` | Show current session information and statistics |
+| `/ask [@model] [question]` | Side question about the newest tool call or reply; the answer stays out of the main context. See [Sessions](sessions.md#ask-side-questions) |
 | `/tree` | Navigate the session tree |
 | `/fork` | Create a new session from an earlier user message |
 | `/clone` | Duplicate the current session at its current position |

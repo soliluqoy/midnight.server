@@ -3,6 +3,7 @@ import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 
 type SubmitContext = {
 	defaultEditor: { onSubmit?: (text: string) => void };
+	sideThreads: { isComposing(): boolean };
 	editor: {
 		addToHistory?: (text: string) => void;
 		setText: (text: string) => void;
@@ -39,6 +40,7 @@ const interactiveModePrototype = InteractiveMode.prototype as unknown as Interac
 function createSubmitContext(): SubmitContext {
 	return {
 		defaultEditor: {},
+		sideThreads: { isComposing: () => false },
 		editor: {
 			addToHistory: vi.fn(),
 			setText: vi.fn(),

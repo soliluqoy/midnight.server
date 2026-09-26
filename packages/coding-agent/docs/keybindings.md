@@ -133,6 +133,12 @@ In fullscreen mode, these actions control the transcript and take precedence ove
 | `app.explorer.expand` | `right` | File explorer: expand a folder, or preview a file |
 | `app.explorer.collapse` | `left` | File explorer: collapse a folder, or go to its parent |
 | `app.explorer.preview` | `space` | File explorer: preview the selected file |
+| `app.thread.select` | `alt+t` | Select a transcript item to ask a side question about, or leave selection. See [Sessions](sessions.md#ask-side-questions) |
+| `app.thread.ask` | `enter` | Side threads: ask about the selected item |
+| `app.thread.toggle` | `space` | Side threads: open or fold the selected item's thread |
+| `app.thread.sendToMain` | `m` | Side threads: add the selected thread to the main agent's context |
+| `app.thread.delete` | `d` | Side threads: delete the selected thread |
+| `app.thread.stop` | `x` | Side threads: stop the selected thread's running answer |
 
 On native Windows, `app.suspend` has no default because Windows terminals do not support Unix job control. If you assign it manually, midnight.server shows a status message instead of suspending. WSL uses the normal `ctrl+z` and `fg` behavior.
 

@@ -178,6 +178,7 @@ import {
 } from "./components/status-indicator.ts";
 import { ThinkingSelectorComponent } from "./components/thinking-selector.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
+import { TranscriptContainer } from "./components/transcript-container.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
@@ -186,6 +187,7 @@ import { editInExternalEditor } from "./external-editor.ts";
 import { refreshModelCatalogs } from "./model-catalog-refresh.ts";
 import { getModelSearchText } from "./model-search.ts";
 import { shareSession } from "./session-share.ts";
+import { SideThreadController } from "./side-thread-controller.ts";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
@@ -438,7 +440,12 @@ export class InteractiveMode {
 	private ui: TUI;
 	private mainScreenRenderState: TuiMainScreenRenderState | undefined;
 	private loadedResourcesContainer: Container;
-	private chatContainer: Container;
+	private chatContainer: TranscriptContainer;
+	private sideThreads: SideThreadController;
+	/** Bar above the editor while selecting a thread item or composing a side question. */
+	private sideThreadBar: Component | undefined;
+	/** Whether the transcript followed its end before selection scrolled it. */
+	private followEndBeforeReveal: boolean | undefined;
 	private documentContainer: Container;
 	private transcriptScrollView: TuiLayouts.ScrollView | undefined;
 	private fullscreenLayoutRoot: Component | undefined;
@@ -620,7 +627,24 @@ export class InteractiveMode {
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		this.headerContainer = new Container();
 		this.loadedResourcesContainer = new Container();
-		this.chatContainer = new Container();
+		this.chatContainer = new TranscriptContainer();
+		this.chatContainer.gutter = (line) => `${theme.fg("accent", "▌")} ${line}`;
+		this.sideThreads = new SideThreadController({
+			session: () => this.session,
+			transcript: this.chatContainer,
+			requestRender: () => this.ui.requestRender(),
+			setFocus: (component) => this.ui.setFocus(component ?? this.editor),
+			getEditorText: () => this.editor.getText(),
+			setEditorText: (text) => this.editor.setText(text),
+			setBar: (component) => {
+				this.sideThreadBar = component;
+				this.renderWidgets();
+			},
+			reveal: (anchorId) => this.revealTranscriptItem(anchorId),
+			showStatus: (message) => this.showStatus(message),
+			setRunningStatus: (text) => this.setExtensionStatus("side-threads", text && theme.fg("accent", text)),
+		});
+		this.chatContainer.decorations = this.sideThreads;
 		this.documentContainer = new Container();
 		this.documentContainer.addChild(this.headerContainer);
 		this.documentContainer.addChild(this.loadedResourcesContainer);
@@ -2493,6 +2517,7 @@ export class InteractiveMode {
 	private renderWidgets(): void {
 		if (!this.widgetContainerAbove || !this.widgetContainerBelow) return;
 		this.renderWidgetContainer(this.widgetContainerAbove, this.extensionWidgetsAbove, true, true);
+		if (this.sideThreadBar) this.widgetContainerAbove.addChild(this.sideThreadBar);
 		this.renderWidgetContainer(this.widgetContainerBelow, this.extensionWidgetsBelow, false, false);
 		this.ui.requestRender();
 	}
@@ -3098,6 +3123,31 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	/**
+	 * Scroll the transcript so a side-thread item is visible. Undefined ends selection and
+	 * restores following the end if the transcript followed it before.
+	 */
+	private revealTranscriptItem(anchorId: string | undefined): void {
+		const scrollView = this.transcriptScrollView;
+		if (this.ui.mode !== "fullscreen" || !scrollView) return;
+		if (anchorId === undefined) {
+			if (this.followEndBeforeReveal) scrollView.scrollToEnd();
+			this.followEndBeforeReveal = undefined;
+			return;
+		}
+		const width = this.chatContainer.renderedWidth;
+		const row = this.chatContainer.rowOf(anchorId);
+		if (!row || width <= 0) return;
+		this.followEndBeforeReveal ??= scrollView.isFollowingEnd;
+		// The transcript scrolls the whole document; the chat follows the header and resource list.
+		const start =
+			this.headerContainer.render(width).length + this.loadedResourcesContainer.render(width).length + row.start;
+		const top = scrollView.scrollTop;
+		const height = scrollView.viewportHeight;
+		if (start >= top && start + Math.min(row.height, height) <= top + height) return;
+		scrollView.scrollTo(Math.max(0, start - 2), { disableFollow: true });
+	}
+
 	private focusEditorFromExplorer(): void {
 		this.ui.setFocus(this.editor);
 		this.ui.requestRender();
@@ -3267,7 +3317,9 @@ export class InteractiveMode {
 		// Set up handlers on defaultEditor - they use this.editor for text access
 		// so they work correctly regardless of which editor is active
 		this.defaultEditor.onEscape = () => {
-			if (this.session.isStreaming) {
+			if (this.sideThreads.isComposing()) {
+				this.sideThreads.cancelComposer();
+			} else if (this.session.isStreaming) {
 				this.restoreQueuedMessagesToEditor({ abort: true });
 			} else if (this.session.isBashRunning) {
 				this.session.abortBash();
@@ -3299,8 +3351,15 @@ export class InteractiveMode {
 		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
 		this.defaultEditor.onAction("app.suspend", () => this.handleCtrlZ());
 		this.defaultEditor.onAction("app.thinking.cycle", () => this.cycleThinkingLevel());
-		this.defaultEditor.onAction("app.model.cycleForward", () => this.cycleModel("forward"));
-		this.defaultEditor.onAction("app.model.cycleBackward", () => this.cycleModel("backward"));
+		this.defaultEditor.onAction("app.model.cycleForward", () => {
+			if (this.sideThreads.isComposing()) this.sideThreads.cycleModel(1);
+			else this.cycleModel("forward");
+		});
+		this.defaultEditor.onAction("app.model.cycleBackward", () => {
+			if (this.sideThreads.isComposing()) this.sideThreads.cycleModel(-1);
+			else this.cycleModel("backward");
+		});
+		this.defaultEditor.onAction("app.thread.select", () => this.sideThreads.toggleSelection());
 
 		// Global debug handler on TUI (works regardless of focus)
 		this.ui.onDebug = () => this.handleDebugCommand();
@@ -3318,7 +3377,10 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
 		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
 		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
-		this.defaultEditor.onAction("app.agentMode.toggle", () => this.toggleAgentMode());
+		this.defaultEditor.onAction("app.agentMode.toggle", () => {
+			if (this.sideThreads.isComposing()) this.sideThreads.cycleModel(1);
+			else this.toggleAgentMode();
+		});
 		this.defaultEditor.onAction("app.sidebar.toggle", () => this.toggleSidebar());
 		this.defaultEditor.onAction("app.explorer.toggle", () => this.toggleExplorer());
 		this.defaultEditor.onAction("app.commandPalette", () => this.showCommandPalette());
@@ -3384,6 +3446,10 @@ export class InteractiveMode {
 
 	private setupEditorSubmitHandler(): void {
 		this.defaultEditor.onSubmit = async (text: string) => {
+			if (this.sideThreads.isComposing()) {
+				this.sideThreads.submitComposer(text);
+				return;
+			}
 			text = text.trim();
 			if (!text) return;
 
@@ -3444,6 +3510,11 @@ export class InteractiveMode {
 			if (text === "/session") {
 				this.handleSessionCommand();
 				this.editor.setText("");
+				return;
+			}
+			if (text === "/ask" || text.startsWith("/ask ")) {
+				this.editor.setText("");
+				this.handleAskCommand(text.slice("/ask".length).trim());
 				return;
 			}
 			if (text === "/changelog") {
@@ -4438,6 +4509,7 @@ export class InteractiveMode {
 	private async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
+		this.sideThreads.abortAll();
 		// Keep signal handlers registered until terminal cleanup has completed.
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
@@ -4613,6 +4685,13 @@ export class InteractiveMode {
 	}
 
 	private async handleFollowUp(): Promise<void> {
+		// A side question must never be queued for the main agent.
+		if (this.sideThreads.isComposing()) {
+			const question = this.editor.getText();
+			this.editor.setText("");
+			this.sideThreads.submitComposer(question);
+			return;
+		}
 		const text = (this.editor.getExpandedText?.() ?? this.editor.getText()).trim();
 		if (!text) return;
 
@@ -6727,6 +6806,30 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${sessionName ?? name}`), 1, 0));
 		this.ui.requestRender();
+	}
+
+	/**
+	 * `/ask [@model] [question]`: a side question about the newest tool call or reply.
+	 * Without a question, the editor switches to composing one.
+	 */
+	private handleAskCommand(args: string): void {
+		const anchor = this.sideThreads.latestAnchor();
+		if (!anchor) {
+			this.showStatus("Nothing to ask about yet: side threads attach to tool calls and replies");
+			return;
+		}
+		const match = /^@(\S+)\s*/.exec(args);
+		const choice = match ? this.sideThreads.resolveModel(match[1]!) : undefined;
+		if (match && !choice) {
+			this.showError(`Unknown model for /ask: ${match[1]}. Use @local, @same, or @provider/model.`);
+			return;
+		}
+		const question = match ? args.slice(match[0].length).trim() : args;
+		if (!question) {
+			this.sideThreads.startComposer(anchor, false, choice);
+			return;
+		}
+		void this.sideThreads.askAbout(anchor, question, choice);
 	}
 
 	private handleSessionCommand(): void {

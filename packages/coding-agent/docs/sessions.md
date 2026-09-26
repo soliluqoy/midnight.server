@@ -45,6 +45,28 @@ Compaction can fail if the provider is unavailable or cannot accept the summariz
 
 See [Compaction Reference](compaction.md) for thresholds, retained boundaries, branch-summary behavior, and extension hooks.
 
+## Ask side questions
+
+A side thread is a short question about one item in the transcript, such as a failed command or a reply. The answer appears folded under that item. The main agent never sees it, keeps running while you ask, and your prompt draft is kept.
+
+1. Press `alt+t`. The newest tool call or reply is highlighted. Use up/down to pick another item, or alt+click it.
+2. Press Enter. A line above the editor shows the item and the model. Press `ctrl+p` (or Tab in an empty editor) to switch models, type the question, and press Enter. Escape goes back without asking.
+3. The answer streams under the item. With the item selected, Space opens or folds its thread, Enter asks a follow-up, `x` stops a running answer, `d` deletes the thread, and `m` sends the thread to the main agent.
+
+`/ask [question]` asks about the newest item without selecting it. Start the question with `@local`, `@same`, or `@provider/model` to choose the model.
+
+The model decides how much context the question carries:
+
+| Model | Request |
+|---|---|
+| Same model as the session | The main agent's last request plus the question, so the provider can reuse its prompt cache |
+| Local model | The item only, clipped to about 6 KB, plus earlier answers in the thread |
+| Another model | The item, recent conversation text, and earlier answers in the thread |
+
+The default is the local model for tool output when it is installed, otherwise the session model. The choice you make with `ctrl+p` is kept for later questions until you quit.
+
+Threads are saved beside the session file as `<session>.threads.json`, so they come back when you resume. They are not session entries: `/tree`, `/fork`, and compaction ignore them, and a fork starts without threads. `m` is the only way a thread reaches the main agent: it adds the unsent questions and answers as a visible message. If the agent is running, the message is added when the current turn ends. No turn is started.
+
 ## Control session storage
 
 By default, midnight.server stores sessions under `~/.midnight.server/agent/sessions/`, grouped by working directory. Use `--session-dir`, `MIDNIGHT_SERVER_CODING_AGENT_SESSION_DIR`, or the `sessionDir` setting to choose another location. The CLI option has highest precedence.
@@ -56,6 +78,8 @@ Use `--session` when you already know the session path or ID. Use `--fork` to cr
 ## Export or share a session
 
 Use `/export` to write the current session as HTML or JSONL. Use `/share` to upload it and get a viewer link. midnight.server uses a Radius artifact when Radius authentication is configured; otherwise, it uses a private GitHub gist.
+
+HTML exports and shares include side threads, folded under their items. JSONL exports contain only the session file.
 
 Review exported or shared sessions first. They can contain prompts, model responses, tool arguments, command output, file contents, and extension messages.
 

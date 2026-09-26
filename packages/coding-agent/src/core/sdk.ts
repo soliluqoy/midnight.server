@@ -4,7 +4,7 @@ import type { ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
-import { AgentSession } from "./agent-session.ts";
+import { AgentSession, type SessionModelRequest } from "./agent-session.ts";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
 import { CacheWarmer } from "./cache-warmer.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
@@ -364,6 +364,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		});
 	};
 
+	// The last session request, so side threads can reuse its cached prompt prefix.
+	let lastSessionRequest: (SessionModelRequest & { isCurrent: () => boolean }) | undefined;
+
 	const agent = new Agent({
 		initialState: {
 			systemPrompt: "",
@@ -381,7 +384,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// shallow-copy the messages array or refresh the model object without changing
 			// the provider request, so top-level object identity is not a valid cache key.
 			if (options?.sessionId === sessionManager.getSessionId()) {
-				cacheWarmer.start({ model, context, options: requestOptions }, cacheContextIsCurrent(model));
+				const isCurrent = cacheContextIsCurrent(model);
+				cacheWarmer.start({ model, context, options: requestOptions }, isCurrent);
+				lastSessionRequest = { model, context, options: requestOptions, isCurrent };
 			}
 			return modelRuntime.streamSimple(model, context, requestOptions);
 		},
@@ -423,6 +428,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		customTools: options.customTools,
 		modelRuntime,
 		cacheWarmer,
+		getLastSessionRequest: () => {
+			const request = lastSessionRequest;
+			if (!request?.isCurrent()) return undefined;
+			return { model: request.model, context: request.context, options: request.options };
+		},
 		initialActiveToolNames,
 		allowedToolNames,
 		excludedToolNames,
