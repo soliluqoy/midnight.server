@@ -139,6 +139,7 @@ In fullscreen mode, these actions control the transcript and take precedence ove
 | `app.thread.sendToMain` | `m` | Side threads: add the selected thread to the main agent's context |
 | `app.thread.delete` | `d` | Side threads: delete the selected thread |
 | `app.thread.stop` | `x` | Side threads: stop the selected thread's running answer |
+| `app.thread.branch` | `b` | Side threads: branch the session from before the selected item, with the thread in the editor. See [Sessions](sessions.md#redo-an-item-from-a-side-thread) |
 
 On native Windows, `app.suspend` has no default because Windows terminals do not support Unix job control. If you assign it manually, midnight.server shows a status message instead of suspending. WSL uses the normal `ctrl+z` and `fg` behavior.
 

@@ -643,6 +643,7 @@ export class InteractiveMode {
 			reveal: (anchorId) => this.revealTranscriptItem(anchorId),
 			showStatus: (message) => this.showStatus(message),
 			setRunningStatus: (text) => this.setExtensionStatus("side-threads", text && theme.fg("accent", text)),
+			openTree: (entryId, note) => this.showTreeSelector(entryId, note),
 		});
 		this.chatContainer.decorations = this.sideThreads;
 		this.documentContainer = new Container();
@@ -5800,7 +5801,8 @@ export class InteractiveMode {
 		}
 	}
 
-	private showTreeSelector(initialSelectedId?: string): void {
+	/** `editorNote` is appended to the editor after navigating (a side thread's answers when branching from it). */
+	private showTreeSelector(initialSelectedId?: string, editorNote?: string): void {
 		const tree = this.sessionManager.getTree();
 		const realLeafId = this.sessionManager.getLeafId();
 		const initialFilterMode = this.settingsManager.getTreeFilterMode();
@@ -5841,7 +5843,7 @@ export class InteractiveMode {
 
 							if (summaryChoice === undefined) {
 								// User pressed escape - re-show tree selector with same selection
-								this.showTreeSelector(entryId);
+								this.showTreeSelector(entryId, editorNote);
 								return;
 							}
 
@@ -5897,7 +5899,7 @@ export class InteractiveMode {
 						if (result.aborted) {
 							// Summarization aborted - re-show tree selector with same selection
 							this.showStatus("Branch summarization cancelled");
-							this.showTreeSelector(entryId);
+							this.showTreeSelector(entryId, editorNote);
 							return;
 						}
 						if (result.cancelled) {
@@ -5908,9 +5910,9 @@ export class InteractiveMode {
 						// Update UI
 						this.chatContainer.clear();
 						this.renderInitialMessages();
-						if (result.editorText && !this.editor.getText().trim()) {
-							this.editor.setText(result.editorText);
-						}
+						const draft = this.editor.getText().trim() ? this.editor.getText() : (result.editorText ?? "");
+						const editorText = [draft, editorNote].filter(Boolean).join("\n\n");
+						if (editorText !== this.editor.getText()) this.editor.setText(editorText);
 						this.showStatus("Navigated to selected point");
 						void this.flushCompactionQueue({ willRetry: false });
 					} catch (error) {

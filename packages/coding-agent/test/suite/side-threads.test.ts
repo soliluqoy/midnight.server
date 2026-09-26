@@ -1,4 +1,4 @@
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { type Component, setKeybindings } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../../src/core/keybindings.ts";
@@ -30,7 +30,12 @@ class FakeItem implements Component {
 
 function setup(harness: Harness) {
 	const transcript = new TranscriptContainer();
-	const state = { editorText: "", bar: undefined as Component | undefined, focus: undefined as Component | undefined };
+	const state = {
+		editorText: "",
+		bar: undefined as Component | undefined,
+		focus: undefined as Component | undefined,
+		trees: [] as Array<{ entryId: string; note: string | undefined }>,
+	};
 	const statuses: string[] = [];
 	const host: SideThreadHost = {
 		session: () => harness.session,
@@ -49,6 +54,7 @@ function setup(harness: Harness) {
 		reveal: () => {},
 		showStatus: (message) => statuses.push(message),
 		setRunningStatus: () => {},
+		openTree: (entryId, note) => state.trees.push({ entryId, note }),
 	};
 	const controller = new SideThreadController(host);
 	transcript.decorations = controller;
@@ -202,6 +208,34 @@ describe("side threads", () => {
 		controller.cancelComposer();
 		expect(state.editorText).toBe("draft");
 		expect(controller.isSelecting()).toBe(true);
+	});
+
+	it("opens the tree before the selected item with the thread as the editor note", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		const { controller, state, statuses, lint, press } = setup(harness);
+		const userId = harness.sessionManager.appendMessage({ role: "user", content: "fix lint", timestamp: 1 });
+		harness.sessionManager.appendMessage(
+			fauxAssistantMessage([fauxToolCall("bash", { command: "npm run check" }, { id: "call-1" })]),
+		);
+
+		// call-2 is only in the transcript, not on the session branch.
+		controller.toggleSelection();
+		press("b");
+		expect(statuses).toContain("Nothing to branch from before this item");
+		expect(controller.isSelecting()).toBe(true);
+
+		press("\x1b[A");
+		press("b");
+		expect(state.trees).toEqual([{ entryId: userId, note: undefined }]);
+		expect(controller.isSelecting()).toBe(false);
+
+		harness.setResponses([fauxAssistantMessage("Run biome with --write instead.")]);
+		await controller.ask(lint.anchor, "how do I fix it?", controller.resolveModel("same")!);
+		controller.toggleSelection();
+		press("b");
+		expect(state.trees[1]?.entryId).toBe(userId);
+		expect(state.trees[1]?.note).toContain("Q: how do I fix it?\nA: Run biome with --write instead.");
 	});
 
 	it("folds a thread on click and selects an item on alt+click", async () => {

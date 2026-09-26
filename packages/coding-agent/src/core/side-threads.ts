@@ -18,6 +18,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import type { SessionModelRequest } from "./agent-session.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
+import type { SessionEntry } from "./session-manager.ts";
 
 /** How a turn chose its model; this decides how much context the request carries. */
 export type SideThreadModelKind = "local" | "same" | "other";
@@ -314,6 +315,33 @@ export function formatThreadForMain(thread: SideThread): string {
 	const turns = thread.turns.slice(thread.sentTurns).filter((turn) => turn.status === "done");
 	const body = turns.map((turn) => `Q: ${turn.question}\nA (${turn.model.id}): ${turn.answer}`).join("\n\n");
 	return `Side thread about ${thread.anchorLabel}:\n\n${body}`;
+}
+
+/**
+ * Editor text after branching from before a thread's item: every answered question, so the
+ * user can edit it into guidance for the new branch. Undefined when nothing was answered.
+ */
+export function formatThreadForBranch(thread: SideThread): string | undefined {
+	const turns = thread.turns.filter((turn) => turn.status === "done" && turn.answer.trim());
+	if (turns.length === 0) return undefined;
+	const body = turns.map((turn) => `Q: ${turn.question}\nA: ${turn.answer}`).join("\n\n");
+	return `Notes from a side thread about ${thread.anchorLabel} on the branch I left:\n\n${body}`;
+}
+
+/**
+ * The entry to branch from so an anchored item is redone: the parent of the message that
+ * holds it on the active branch. Undefined when the item is not on the branch or has no parent.
+ */
+export function branchPointFor(branch: readonly SessionEntry[], anchorId: string): string | undefined {
+	const toolCallId = anchorId.startsWith("tool:") ? anchorId.slice("tool:".length) : undefined;
+	const entry = branch.find((candidate) => {
+		if (candidate.type !== "message" || candidate.message.role !== "assistant") return false;
+		const message = candidate.message;
+		return toolCallId
+			? message.content.some((part) => part.type === "toolCall" && part.id === toolCallId)
+			: assistantAnchorId(message) === anchorId;
+	});
+	return entry?.parentId ?? undefined;
 }
 
 /** A transcript item a thread can attach to. */

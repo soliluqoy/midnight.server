@@ -42,6 +42,7 @@ export interface AppKeybindings {
 	"app.thread.sendToMain": true;
 	"app.thread.delete": true;
 	"app.thread.stop": true;
+	"app.thread.branch": true;
 	"app.session.new": true;
 	"app.session.tree": true;
 	"app.session.fork": true;
@@ -183,6 +184,10 @@ export const KEYBINDINGS = {
 		description: "Side threads: send the selected thread to the main agent's context",
 	},
 	"app.thread.delete": { defaultKeys: "d", description: "Side threads: delete the selected thread" },
+	"app.thread.branch": {
+		defaultKeys: "b",
+		description: "Side threads: branch the session from before the selected item, with the thread in the editor",
+	},
 	"app.thread.stop": { defaultKeys: "x", description: "Side threads: stop the selected thread's running answer" },
 	"app.session.new": { defaultKeys: [], description: "Start a new session" },
 	"app.session.tree": { defaultKeys: [], description: "Open session tree" },

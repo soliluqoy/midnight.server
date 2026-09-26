@@ -27,6 +27,7 @@
 - Added a pinned MiniCPM5-2B Q8_0 model lock and streaming size/SHA-256 verification for local GGUF files.
 - Added `ModelRegistry.restrictRequestProviders()` to limit a session's model requests to specific providers.
 - Added `/local-stop` and `/local-start`. `/local-stop` stops the local model engine for the rest of the session and frees its memory. It also cancels a start or download that is in progress. Until `/local-start`, nothing starts the engine again: the local model, `delegate_local`, drift watch and side threads all refuse. Both commands are listed in the command palette (Alt+X).
+- Added `b` in side-thread selection (`app.thread.branch`): it opens `/tree` on the entry before the selected item and, after navigating, adds the thread's answers to the editor, so a side question that finds a wrong turn becomes a redo on a new branch.
 - Added Linux x64 (`.deb` and tarball) and macOS (Apple Silicon and Intel) releases, a `get.sh` installer for them, and a release workflow that builds and verifies every platform from a `v*-midnight.*` tag. macOS builds are ad-hoc signed only, not notarized.
 - On Linux and macOS the engine now runs under a wrapper that stops it when the CLI exits or is killed, like the Windows Job Object host, so a crashed CLI no longer leaves `llama-server` running. On Linux the engine directory is added to `LD_LIBRARY_PATH` so its bundled libraries load.
 

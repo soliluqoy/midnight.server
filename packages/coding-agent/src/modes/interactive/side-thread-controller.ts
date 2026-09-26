@@ -3,7 +3,9 @@ import { type Component, getKeybindings } from "@earendil-works/pi-tui";
 import type { AgentSession } from "../../core/agent-session.ts";
 import {
 	answerText,
+	branchPointFor,
 	buildSideThreadRequest,
+	formatThreadForBranch,
 	formatThreadForMain,
 	runSideThreadTurn,
 	type SideThread,
@@ -40,6 +42,8 @@ export interface SideThreadHost {
 	showStatus(message: string): void;
 	/** Footer text while answers stream, or undefined when none are running. */
 	setRunningStatus(text: string | undefined): void;
+	/** Open the session tree on `entryId`; after navigating, add `note` to the editor. */
+	openTree(entryId: string, note: string | undefined): void;
 }
 
 export interface SideThreadModelChoice {
@@ -225,6 +229,7 @@ export class SideThreadController implements TranscriptDecorations {
 		} else if (keys.matches(data, "app.thread.sendToMain")) void this.sendSelectedToMain();
 		else if (keys.matches(data, "app.thread.delete")) this.deleteSelected();
 		else if (keys.matches(data, "app.thread.stop")) this.stopSelected();
+		else if (keys.matches(data, "app.thread.branch")) this.branchFromSelected();
 		else if (
 			keys.matches(data, "tui.select.cancel") ||
 			keys.matches(data, "app.thread.select") ||
@@ -255,6 +260,23 @@ export class SideThreadController implements TranscriptDecorations {
 
 	private stopSelected(): void {
 		if (this.selectedId) this.running.get(this.selectedId)?.abort();
+	}
+
+	/**
+	 * Redo the selected item: open `/tree` on the entry before it, and put the thread's answers
+	 * in the editor once the user navigates. The thread stays with the item on the old branch.
+	 */
+	private branchFromSelected(): void {
+		const id = this.selectedId;
+		if (!id) return;
+		const entryId = branchPointFor(this.host.session().sessionManager.getBranch(), id);
+		if (!entryId) {
+			this.host.showStatus("Nothing to branch from before this item");
+			return;
+		}
+		const thread = this.store.get(id);
+		this.exitToIdle();
+		this.host.openTree(entryId, thread ? formatThreadForBranch(thread) : undefined);
 	}
 
 	/** Add the thread's unsent answers to the main context as a visible message. No turn starts. */

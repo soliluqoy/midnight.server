@@ -51,7 +51,7 @@ A side thread is a short question about one item in the transcript, such as a fa
 
 1. Press `alt+t`. The newest tool call or reply is highlighted. Use up/down to pick another item, or alt+click it.
 2. Press Enter. A line above the editor shows the item and the model. Press `ctrl+p` to search all available models without changing the main session model; Tab in an empty editor cycles the short list instead. Type the question and press Enter. Escape goes back without asking.
-3. The answer streams under the item. With the item selected, Space opens or folds its thread, Enter asks a follow-up, `x` stops a running answer, `d` deletes the thread, and `m` sends the thread to the main agent.
+3. The answer streams under the item. With the item selected, Space opens or folds its thread, Enter asks a follow-up, `x` stops a running answer, `d` deletes the thread, `m` sends the thread to the main agent, and `b` branches from before the item (see below).
 
 `/ask [question]` asks about the newest item without selecting it. Start the question with `@local`, `@same`, or `@provider/model` to choose the model.
 
@@ -66,6 +66,12 @@ The model decides how much context the question carries:
 The default is the local model for tool output when it is installed, otherwise the session model. The model you choose is kept for later questions until you quit.
 
 Threads are saved beside the session file as `<session>.threads.json`, so they come back when you resume. They are not session entries: `/tree`, `/fork`, and compaction ignore them, and a fork starts without threads. `m` is the only way a thread reaches the main agent: it adds the unsent questions and answers as a visible message. If the agent is running, the message is added when the current turn ends. No turn is started.
+
+### Redo an item from a side thread
+
+When a side thread shows the agent went the wrong way at an item, select the item and press `b`. `/tree` opens on the entry just before it: the prompt that led to the item, or the tool result it followed. Navigate as usual (move the selection first if you want to go back further). After navigating, the thread's answered questions are added to the editor as a note, below the prompt text if you picked a user message. Edit it into guidance and send it to redo the item on a new branch.
+
+The thread stays with the item on the branch you left, and comes back if you navigate there again. If the agent is running, navigating stops it, as in `/tree`.
 
 ## Control session storage
 

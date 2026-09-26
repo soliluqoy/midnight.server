@@ -131,6 +131,7 @@ export class ThreadSelectionBar implements Component {
 					]
 				: []),
 			...(this.running ? [`${keyText("app.thread.stop")} stop`] : []),
+			`${keyText("app.thread.branch")} branch before`,
 			`${keyText("tui.select.cancel")} back`,
 		];
 		const title = `${theme.fg("accent", theme.bold("THREAD"))} ${theme.fg("text", this.selectedLabel)}`;
