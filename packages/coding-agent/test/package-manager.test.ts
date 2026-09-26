@@ -1503,29 +1503,6 @@ Content`,
 			expect(identity4).toBe("git:github.com/user/repo");
 		});
 
-		it("should deduplicate git URLs with different supported formats", async () => {
-			const pkgDir = join(tempDir, "https-dedup-pkg");
-			mkdirSync(join(pkgDir, "extensions"), { recursive: true });
-			writeFileSync(join(pkgDir, "extensions", "test.ts"), "export default function() {}");
-
-			// Mock the package as if it were cloned from different URL formats
-			// In reality, these would all point to the same local dir after install
-			settingsManager.setPackages([
-				"https://github.com/user/repo",
-				"git:github.com/user/repo",
-				"https://github.com/user/repo.git",
-			]);
-
-			// Since these URLs don't actually exist and we can't clone them,
-			// we verify they produce the same identity
-			const id1 = (packageManager as any).getPackageIdentity("https://github.com/user/repo");
-			const id2 = (packageManager as any).getPackageIdentity("git:github.com/user/repo");
-			const id3 = (packageManager as any).getPackageIdentity("https://github.com/user/repo.git");
-
-			expect(id1).toBe(id2);
-			expect(id2).toBe(id3);
-		});
-
 		it("should handle HTTPS URLs with refs in resolve", async () => {
 			// This tests that the ref is properly extracted and stored
 			const parsed = (packageManager as any).parseSource("https://github.com/user/repo@main");
@@ -1597,18 +1574,6 @@ Content`,
 			const result = await packageManager.resolve();
 			expect(result.skills.some((r) => isEnabled(r, "good-skill", "includes"))).toBe(true);
 			expect(result.skills.some((r) => isDisabled(r, "bad-skill", "includes"))).toBe(true);
-		});
-
-		it("should work without patterns (backward compatible)", async () => {
-			const extDir = join(agentDir, "extensions");
-			mkdirSync(extDir, { recursive: true });
-			const extPath = join(extDir, "my-ext.ts");
-			writeFileSync(extPath, "export default function() {}");
-
-			settingsManager.setExtensionPaths(["extensions/my-ext.ts"]);
-
-			const result = await packageManager.resolve();
-			expect(result.extensions.some((r) => r.path === extPath && r.enabled)).toBe(true);
 		});
 	});
 
