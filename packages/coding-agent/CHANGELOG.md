@@ -52,6 +52,7 @@
 - Fixed dotted environment variable names for the midnight.server config and session directories, and directed binary update instructions to the product repository.
 - Fixed slow, uneven scrolling in fullscreen mode on long sessions. The file explorer rescanned the whole session once per visible file on every frame (about half a second per frame at 4,500 entries), and the sidebar and footer rescanned it once per frame; they now reuse the result until the session changes. `getContextUsage()` is cached the same way.
 - Fixed local-engine progress and drift-watch updates re-wrapping the whole transcript; only the startup header is refreshed now, and its plan/build badge updates when the mode changes.
+- Fixed the model refusing to commit, push or delete branches: the `delegate_local` guideline "git is read-only" appeared as a global rule in the system prompt. It now says only the helper's git option is read-only.
 
 ### Removed
 

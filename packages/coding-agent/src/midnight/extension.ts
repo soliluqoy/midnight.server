@@ -147,7 +147,7 @@ export function createDelegateExtension(manager: EngineManager): ExtensionFactor
 			promptGuidelines: [
 				"delegate_local runs on this machine; its answers can be wrong. Check evidence before relying on them.",
 				"Keep delegate_local tasks small: at most a few files and one clear question.",
-				"git is read-only and whitelisted (status/diff/log/show/blame); it can't commit, push, or otherwise mutate the repo.",
+				"delegate_local's git option is read-only (status/diff/log/show/blame); it cannot commit, push, or change branches.",
 			],
 			parameters: delegateParameters,
 			executionMode: "sequential",
