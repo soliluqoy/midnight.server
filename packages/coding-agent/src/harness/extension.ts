@@ -1,4 +1,8 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import type {
@@ -9,6 +13,7 @@ import type {
 } from "../core/extensions/types.ts";
 import { LOCAL_PROVIDER_ID } from "../midnight/pins.ts";
 import { getMidnightStatus } from "../midnight/status.ts";
+import { CheckpointStore, isGitWorkTree } from "./checkpoints.ts";
 import {
 	type CheckOutcome,
 	filesModifiedSince,
@@ -17,16 +22,19 @@ import {
 	matchesAny,
 	parsePorcelainZ,
 	runCheck,
+	type SelectedCheck,
 	selectChecks,
 	workspaceRelative,
 } from "./checks.ts";
 import {
 	defaultHarnessConfig,
+	type HarnessCheck,
 	type HarnessConfig,
 	HarnessConfigError,
 	harnessConfigPath,
 	loadHarnessConfig,
 } from "./config.ts";
+import { buildContextPack, buildFollowUpPack } from "./context-pack.ts";
 import {
 	createContract,
 	formatContract,
@@ -36,12 +44,31 @@ import {
 	type TaskContract,
 	updateContract,
 } from "./contract.ts";
+import { type DetectedCheck, detectProjectChecks, expandTests, type ProjectFacts } from "./detect-checks.ts";
+import { LoopGuard, notFoundHint, repairIndentation, suggestPaths, type TextEdit } from "./edit-repair.ts";
+import { formatAdvice, requestAdvice } from "./escalate.ts";
+import {
+	CONTEXT_PACK_TOKENS,
+	classifyModel,
+	type FeatureName,
+	type ModelClass,
+	parseFeatureOverrides,
+	resolveFeatures,
+} from "./features.ts";
 import { remapForeignPath, repairPowerShellCommand, toolNeedsExistingPath } from "./interface-repair.ts";
 import { capToolOutput, LOCAL_TOOLS, splitContextFiles, withGreedyDefault } from "./local-profile.ts";
+import { LspManager } from "./lsp.ts";
 import { planMasking } from "./masking.ts";
+import { canCheckSyntax, introducedSyntaxError } from "./parse-gate.ts";
+import { formatDiagnostics, newErrors, runLookup } from "./semantic.ts";
+import { HarnessTelemetry } from "./telemetry.ts";
+import { buildWorkspaceIndex, testsFor, type WorkspaceIndex } from "./workspace-index.ts";
 
 export const CHECK_MESSAGE_TYPE = "harness_check";
 export const CONTRACT_MESSAGE_TYPE = "harness_contract";
+export const CONTEXT_MESSAGE_TYPE = "harness_context";
+export const ADVICE_MESSAGE_TYPE = "harness_advice";
+export const LOOKUP_TOOL_NAME = "lookup";
 
 const taskParameters = Type.Object({
 	action: Type.Union([Type.Literal("set"), Type.Literal("update")], {
@@ -91,12 +118,29 @@ const taskParameters = Type.Object({
 	addSteps: Type.Optional(Type.Array(Type.String(), { description: "update: plan steps to append." })),
 });
 
+const lookupParameters = Type.Object({
+	op: Type.Union([Type.Literal("definition"), Type.Literal("references"), Type.Literal("outline")], {
+		description:
+			"definition: where a symbol is declared, with its body. references: every use of a symbol. outline: the declarations in one file.",
+	}),
+	symbol: Type.Optional(
+		Type.String({ description: "definition/references: the name, e.g. parsePort or Parser.parse." }),
+	),
+	path: Type.Optional(
+		Type.String({ description: "outline: the file. definition/references: optional file to prefer." }),
+	),
+});
+
 function branchMessages(ctx: ExtensionContext): AgentMessage[] {
 	return ctx.sessionManager.getBranch().flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
 }
 
 function isLocalModel(ctx: ExtensionContext): boolean {
 	return ctx.model?.provider === LOCAL_PROVIDER_ID;
+}
+
+function textOf(content: readonly (TextContent | ImageContent)[]): string {
+	return content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
 }
 
 function contractReminder(contract: TaskContract, checkSummary: string | undefined): string {
@@ -115,31 +159,158 @@ function contractReminder(contract: TaskContract, checkSummary: string | undefin
 	return lines.join("\n");
 }
 
+/** Edits in an `edit` tool input, in either the current or the legacy single-edit shape. */
+function editsOf(input: Record<string, unknown>): TextEdit[] {
+	if (Array.isArray(input.edits)) {
+		return input.edits.filter(
+			(edit): edit is TextEdit =>
+				typeof edit === "object" &&
+				edit !== null &&
+				typeof (edit as TextEdit).oldText === "string" &&
+				typeof (edit as TextEdit).newText === "string",
+		);
+	}
+	if (typeof input.oldText === "string" && typeof input.newText === "string") {
+		return [input as unknown as TextEdit];
+	}
+	return [];
+}
+
 interface RunState {
 	startedAt?: number;
+	/** Files changed in this run and not yet covered by a passing settle check. */
 	changed: Set<string>;
+	/** Files changed since the last in-run check. */
+	changedSinceInRun: Set<string>;
+	/** Every file changed in this run, for the escalation diff and telemetry. */
+	allChanged: Set<string>;
 	shellRan: boolean;
 	repairRound: number;
 	lastFailedKey?: string;
 	contractNudged: boolean;
 	lastCheckSummary?: string;
+	lastFailureText?: string;
+	prompt: string;
+	loopGuard: LoopGuard;
+	escalations: number;
+	loopEscalated: boolean;
+	lastAssistantText?: string;
+	/** Files the last settle check covered, and whether it failed. */
+	lastChecked: string[];
+	lastCheckFailed: boolean;
 }
 
-function freshRun(): RunState {
-	return { changed: new Set(), shellRan: false, repairRound: 0, contractNudged: false };
+function freshRun(prompt = ""): RunState {
+	return {
+		changed: new Set(),
+		changedSinceInRun: new Set(),
+		allChanged: new Set(),
+		shellRan: false,
+		repairRound: 0,
+		contractNudged: false,
+		prompt,
+		loopGuard: new LoopGuard(),
+		escalations: 0,
+		loopEscalated: false,
+		lastChecked: [],
+		lastCheckFailed: false,
+	};
 }
+
+/** In-run checks skip any check that took longer than this last time: they must stay cheap. */
+const IN_RUN_CHECK_BUDGET_MS = 90_000;
 
 /**
- * The harness: grounded verification before a run may settle, a task contract that holds the
- * run to checkable acceptance criteria, protected files the agent cannot edit, batched
- * observation masking, and a local-model profile. Model-agnostic: it improves any session
- * model, and it adds no model calls of its own. See docs/harness.md.
+ * The harness: work moved out of the model and into code, so a model spends its tokens on
+ * the task instead of on exploring, recovering and double-checking. See docs/harness.md.
+ *
+ * - Before the first request: a context pack (environment, ranked files, their contents).
+ * - At each action: path, PowerShell and indentation repairs; syntax errors rejected in the
+ *   same turn; new language-server errors reported with the edit; repeated calls noticed.
+ * - After edits: project checks (configured or detected), cheapest first, during the run and
+ *   before it settles, with bounded repair rounds, rollback to the last passing state, and
+ *   advice from a stronger model when a fast model is stuck.
+ * - Always: protected files, observation masking scaled to the context window.
+ *
+ * Features switch per model class (fast, frontier, local) and per flag; see features.ts.
  */
 export default function harnessExtension(pi: ExtensionAPI): void {
 	let config: HarnessConfig = defaultHarnessConfig();
+	let envFeatures: Partial<Record<FeatureName, boolean>> = {};
 	let run = freshRun();
 	let controller = new AbortController();
-	const stats = { maskBatches: 0, elidedBytes: 0, checkRuns: 0, checkFailures: 0, repairs: 0, contractNudges: 0 };
+	let trusted = false;
+	let cwd = process.cwd();
+	let facts: ProjectFacts = { languages: [], checks: [] };
+	let index: WorkspaceIndex | undefined;
+	let indexDirty = true;
+	let packSent = false;
+	let lsp: LspManager | undefined;
+	let checkpoints: CheckpointStore | undefined;
+	let lastGreen: ReturnType<CheckpointStore["snapshot"]>;
+	const checkDurations = new Map<string, number>();
+	const telemetry = new HarnessTelemetry();
+	const stats = {
+		maskBatches: 0,
+		elidedBytes: 0,
+		checkRuns: 0,
+		checkFailures: 0,
+		repairs: 0,
+		contractNudges: 0,
+		escalations: 0,
+		escalationCostUsd: 0,
+		rollbacks: 0,
+		packs: 0,
+		packBytes: 0,
+	};
+
+	function modelClass(ctx: ExtensionContext): ModelClass {
+		return classifyModel(ctx.model);
+	}
+
+	function features(ctx: ExtensionContext): Record<FeatureName, boolean> {
+		const fromConfig: Partial<Record<FeatureName, boolean>> = {
+			contract: config.contract,
+			masking: config.masking.enabled,
+			localProfile: config.localProfile,
+			...config.features,
+		};
+		const resolved = resolveFeatures(modelClass(ctx), fromConfig, envFeatures);
+		// The local profile only ever applies to the local model.
+		if (!isLocalModel(ctx)) resolved.localProfile = false;
+		return resolved;
+	}
+
+	function on(ctx: ExtensionContext, name: FeatureName): boolean {
+		return config.enabled && features(ctx)[name];
+	}
+
+	/** Checks the harness runs: the project's configured ones, else the detected ones. */
+	function activeChecks(): Array<HarnessCheck | DetectedCheck> {
+		if (config.checks.length > 0) return config.checks;
+		return config.autoChecks && trusted ? facts.checks : [];
+	}
+
+	function workspace(): WorkspaceIndex {
+		if (!index || indexDirty) {
+			index = buildWorkspaceIndex(cwd, index);
+			indexDirty = false;
+		}
+		return index;
+	}
+
+	function lspManager(): LspManager | undefined {
+		if (!trusted) return undefined;
+		lsp ??= new LspManager(cwd);
+		return lsp;
+	}
+
+	function checkpointStore(): CheckpointStore | undefined {
+		if (checkpoints === undefined && isGitWorkTree(cwd)) {
+			checkpoints = new CheckpointStore(cwd, `${process.pid}-${Date.now().toString(36)}`);
+		}
+		return checkpoints;
+	}
 
 	pi.registerTool({
 		name: TASK_TOOL_NAME,
@@ -181,6 +352,22 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		},
 	});
 
+	pi.registerTool({
+		name: LOOKUP_TOOL_NAME,
+		label: "lookup",
+		description:
+			"Find code by symbol name instead of searching and reading: definition returns where a symbol is declared with its body, references lists every use, outline lists the declarations in a file. Uses the project's language server when available.",
+		promptSnippet: "Find a symbol's definition (with body), its references, or a file's outline",
+		promptGuidelines: ["To find where something is defined or used, call lookup with its name before grep or read."],
+		parameters: lookupParameters,
+		executionMode: "parallel",
+		async execute(_toolCallId, params: Static<typeof lookupParameters>, signal) {
+			const text = await runLookup(params, workspace(), lspManager(), signal);
+			telemetry.record({ type: "lookup", op: params.op });
+			return { content: [{ type: "text", text }], details: undefined };
+		},
+	});
+
 	const renderHarnessMessage =
 		(tag: string): MessageRenderer =>
 		(message, { expanded, outputPad }, theme) => {
@@ -198,22 +385,42 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		};
 	pi.registerMessageRenderer(CHECK_MESSAGE_TYPE, renderHarnessMessage("[harness]"));
 	pi.registerMessageRenderer(CONTRACT_MESSAGE_TYPE, renderHarnessMessage("[contract]"));
+	pi.registerMessageRenderer(ADVICE_MESSAGE_TYPE, renderHarnessMessage("[advice]"));
 
-	pi.on("session_start", (_event, ctx) => {
+	/** Load config, feature overrides and detected checks for the current trust state. */
+	function loadState(ctx: ExtensionContext): void {
+		cwd = ctx.cwd;
+		trusted = ctx.isProjectTrusted();
 		try {
-			config = loadHarnessConfig(ctx.cwd, ctx.isProjectTrusted());
+			envFeatures = parseFeatureOverrides(process.env.MIDNIGHT_SERVER_HARNESS_FEATURES);
+		} catch (error) {
+			envFeatures = {};
+			ctx.ui.notify(error instanceof Error ? error.message : String(error), "warning");
+		}
+		try {
+			config = loadHarnessConfig(ctx.cwd, trusted);
 		} catch (error) {
 			config = defaultHarnessConfig();
 			if (error instanceof HarnessConfigError) ctx.ui.notify(`Harness config ignored: ${error.message}`, "warning");
 			else throw error;
 		}
-		if (!config.enabled || !config.contract) {
-			pi.setActiveTools(pi.getActiveTools().filter((name) => name !== TASK_TOOL_NAME));
-		}
+		// Detection reads manifests only; the detected commands run only in trusted projects.
+		facts = detectProjectChecks(ctx.cwd, { python: trusted ? pythonCommand() : undefined });
+		if (!trusted || !config.autoChecks) facts = { ...facts, checks: [] };
+	}
+
+	pi.on("session_start", (_event, ctx) => {
+		loadState(ctx);
+		index = undefined;
+		indexDirty = true;
+		packSent = false;
+		syncTools(ctx);
 	});
 
 	pi.on("session_shutdown", () => {
 		controller.abort();
+		void lsp?.dispose();
+		checkpoints?.dispose();
 	});
 
 	pi.on("agent_start", () => {
@@ -224,13 +431,39 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		run = freshRun();
 	});
 
-	// Protected files: the project's own checks and anything the user listed. A model that can
-	// edit the checks it is graded by can pass them without doing the work.
+	/** Keep the harness's own tools active only when their features are on for this model. */
+	function syncTools(ctx: ExtensionContext): void {
+		const active = new Set(pi.getActiveTools());
+		const want: Array<[string, boolean]> = [
+			[TASK_TOOL_NAME, on(ctx, "contract")],
+			[LOOKUP_TOOL_NAME, on(ctx, "lookup")],
+		];
+		let changed = false;
+		for (const [name, enabled] of want) {
+			if (enabled && !active.has(name) && getMidnightStatus().agentMode !== "plan") {
+				active.add(name);
+				changed = true;
+			} else if (!enabled && active.has(name)) {
+				active.delete(name);
+				changed = true;
+			}
+		}
+		if (changed) pi.setActiveTools([...active]);
+	}
+
 	// Argument repairs made in tool_call, reported to the model with the tool's result.
-	const repairNotes = new Map<string, string>();
+	const repairNotes = new Map<string, string[]>();
+	const addNote = (toolCallId: string, note: string) => {
+		const notes = repairNotes.get(toolCallId) ?? [];
+		notes.push(note);
+		repairNotes.set(toolCallId, notes);
+	};
+	/** File content before an edit or write, for the parse gate. */
+	const beforeEdit = new Map<string, { path: string; before: string | undefined }>();
+
 	pi.on("tool_call", (event, ctx) => {
 		if (!config.enabled) return;
-		const input = event.input as { path?: unknown; command?: unknown; timeout?: unknown };
+		const input = event.input as Record<string, unknown> & { path?: unknown; command?: unknown; timeout?: unknown };
 		if (
 			(event.toolName === "bash" || event.toolName === "powershell") &&
 			input.timeout === undefined &&
@@ -242,91 +475,353 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			const repaired = repairPowerShellCommand(input.command);
 			if (repaired) {
 				input.command = repaired;
-				repairNotes.set(event.toolCallId, "[harness: rewrote /dev/null redirects as $null for PowerShell]");
+				addNote(event.toolCallId, "[harness: rewrote /dev/null redirects as $null for PowerShell]");
 			}
 		}
 		if (typeof input.path === "string") {
 			const remapped = remapForeignPath(ctx.cwd, input.path, toolNeedsExistingPath(event.toolName));
 			if (remapped) {
-				repairNotes.set(
+				addNote(
 					event.toolCallId,
 					`[harness: ${input.path} does not exist on this machine; used ${remapped} in the workspace (${ctx.cwd}). Use workspace-relative paths.]`,
 				);
 				input.path = remapped;
 			}
 		}
+		if (on(ctx, "loopGuard")) {
+			const note = run.loopGuard.call(event.toolName, input);
+			if (note) {
+				addNote(event.toolCallId, note);
+				telemetry.record({ type: "loop_note", tool: event.toolName });
+			}
+		}
 		if (event.toolName !== "edit" && event.toolName !== "write") return;
 		const path = input.path;
 		if (typeof path !== "string") return;
 		const rel = workspaceRelative(ctx.cwd, path);
-		if (!rel) return;
-		const configRel = workspaceRelative(ctx.cwd, harnessConfigPath(ctx.cwd));
-		if (rel !== configRel && !matchesAny(rel, config.protect)) return;
-		return {
-			block: true,
-			reason: `${rel} is protected by the harness: the user owns it and the agent may not change it. Change the code under test instead, or ask the user to change this file.`,
-		};
+		if (rel) {
+			const configRel = workspaceRelative(ctx.cwd, harnessConfigPath(ctx.cwd));
+			if (rel === configRel || matchesAny(rel, config.protect)) {
+				return {
+					block: true,
+					reason: `${rel} is protected by the harness: the user owns it and the agent may not change it. Change the code under test instead, or ask the user to change this file.`,
+				};
+			}
+		}
+		const absolute = resolve(ctx.cwd, path);
+		let before: string | undefined;
+		try {
+			before = existsSync(absolute) ? readFileSync(absolute, "utf8") : undefined;
+		} catch {
+			before = undefined;
+		}
+		if (event.toolName === "edit" && before !== undefined && on(ctx, "editRepair")) {
+			const edits = editsOf(input);
+			for (const edit of edits) {
+				const repaired = repairIndentation(before, edit);
+				if (!repaired) continue;
+				edit.oldText = repaired.oldText;
+				edit.newText = repaired.newText;
+				addNote(
+					event.toolCallId,
+					"[harness: oldText matched the file only with different indentation; applied it at the file's real indentation.]",
+				);
+				telemetry.record({ type: "edit_repair" });
+			}
+		}
+		if (on(ctx, "parseGate") || on(ctx, "diagnostics")) beforeEdit.set(event.toolCallId, { path: absolute, before });
 	});
 
-	pi.on("tool_result", (event, ctx) => {
+	pi.on("tool_result", async (event, ctx) => {
 		if (!config.enabled) return;
+		const notes = repairNotes.get(event.toolCallId) ?? [];
+		repairNotes.delete(event.toolCallId);
+		const snapshot = beforeEdit.get(event.toolCallId);
+		beforeEdit.delete(event.toolCallId);
+		const extra: string[] = [];
+		let isError: boolean | undefined;
+		let replaceContent: (TextContent | ImageContent)[] | undefined;
+
 		if ((event.toolName === "edit" || event.toolName === "write") && !event.isError) {
 			const path = event.input.path;
 			const rel = typeof path === "string" ? workspaceRelative(ctx.cwd, path) : undefined;
-			if (rel) run.changed.add(rel);
+			let rejected = false;
+			if (snapshot && on(ctx, "parseGate") && canCheckSyntax(snapshot.path)) {
+				let after: string | undefined;
+				try {
+					after = readFileSync(snapshot.path, "utf8");
+				} catch {
+					after = undefined;
+				}
+				const error =
+					after === undefined ? undefined : introducedSyntaxError(snapshot.before, after, snapshot.path, ctx.cwd);
+				if (error) {
+					if (snapshot.before === undefined) rmSync(snapshot.path, { force: true });
+					else writeFileSync(snapshot.path, snapshot.before);
+					rejected = true;
+					isError = true;
+					replaceContent = [
+						{
+							type: "text",
+							text: `Edit rejected by the harness: it makes ${rel ?? snapshot.path} invalid (${error.parser}: ${error.error ?? "syntax error"}). The file is unchanged. Fix the edit so the file still parses, for example by including the matching brackets or quotes.`,
+						},
+					];
+					telemetry.record({ type: "parse_gate_reject", parser: error.parser });
+				}
+			}
+			if (!rejected && rel) {
+				run.changed.add(rel);
+				run.changedSinceInRun.add(rel);
+				run.allChanged.add(rel);
+				indexDirty = true;
+				run.loopGuard.noteChange();
+				if (snapshot && on(ctx, "diagnostics") && trusted) {
+					const note = await diagnosticsNote(snapshot.path, snapshot.before, rel);
+					if (note) extra.push(note);
+				}
+			}
 		}
-		if (event.toolName === "bash" || event.toolName === "powershell") run.shellRan = true;
-		const note = repairNotes.get(event.toolCallId);
-		repairNotes.delete(event.toolCallId);
+
+		if (event.isError) {
+			const message = textOf(event.content);
+			if (event.toolName === "edit" && /Could not find/.test(message) && on(ctx, "editRepair")) {
+				const path = event.input.path;
+				if (typeof path === "string") {
+					try {
+						const content = readFileSync(resolve(ctx.cwd, path), "utf8");
+						const edit = editsOf(event.input as Record<string, unknown>).find(
+							(item) => !content.includes(item.oldText),
+						);
+						const hint = edit ? notFoundHint(path, content, edit.oldText) : undefined;
+						if (hint) {
+							extra.push(hint);
+							telemetry.record({ type: "edit_hint" });
+						}
+					} catch {
+						// No hint.
+					}
+				}
+			}
+			const path = (event.input as { path?: unknown }).path;
+			if (
+				typeof path === "string" &&
+				/ENOENT|not found|No such file|does not exist/i.test(message) &&
+				on(ctx, "pathHints")
+			) {
+				const suggestions = suggestPaths(
+					path,
+					workspace().files.map((file) => file.path),
+				);
+				if (suggestions.length > 0) {
+					extra.push(`[harness: ${path} does not exist. Did you mean: ${suggestions.join(", ")}?]`);
+					telemetry.record({ type: "path_hint" });
+				}
+			}
+			if ((event.toolName === "bash" || event.toolName === "powershell") && on(ctx, "loopGuard")) {
+				const command = (event.input as { command?: unknown }).command;
+				if (typeof command === "string") {
+					const note = run.loopGuard.failure(command);
+					if (note) {
+						extra.push(note);
+						telemetry.record({ type: "loop_note", tool: event.toolName });
+					}
+				}
+			}
+		}
+
+		if (event.toolName === "bash" || event.toolName === "powershell") {
+			run.shellRan = true;
+			indexDirty = true;
+		}
 		const capped =
-			config.localProfile && isLocalModel(ctx) && event.toolName !== TASK_TOOL_NAME
-				? capToolOutput(event.content, event.toolName)
+			on(ctx, "localProfile") && isLocalModel(ctx) && event.toolName !== TASK_TOOL_NAME
+				? capToolOutput(replaceContent ?? event.content, event.toolName)
 				: undefined;
-		if (!note && !capped) return;
-		const content = capped ?? event.content;
-		return { content: note ? [{ type: "text", text: note }, ...content] : content };
+		if (notes.length === 0 && extra.length === 0 && !capped && !replaceContent) return;
+		const content = capped ?? replaceContent ?? event.content;
+		return {
+			content: [
+				...notes.map((text) => ({ type: "text" as const, text })),
+				...content,
+				...extra.map((text) => ({ type: "text" as const, text })),
+			],
+			...(isError !== undefined ? { isError } : {}),
+		};
 	});
 
+	/** New language-server errors caused by an edit, or undefined. */
+	async function diagnosticsNote(path: string, before: string | undefined, rel: string): Promise<string | undefined> {
+		const manager = lspManager();
+		if (!manager) return undefined;
+		const client = await manager.clientFor(path);
+		if (!client) return undefined;
+		try {
+			const since = Date.now();
+			client.sync(path);
+			const after = await client.diagnosticsFor(path, since, 8_000);
+			if (!after || after.every((item) => (item.severity ?? 1) !== 1)) return undefined;
+			let previous: typeof after | undefined;
+			if (before !== undefined) {
+				const beforeSince = Date.now();
+				client.sync(path, before);
+				previous = await client.diagnosticsFor(path, beforeSince, 8_000);
+				client.sync(path);
+			}
+			const fresh = newErrors(previous, after);
+			if (fresh.length === 0) return undefined;
+			telemetry.record({ type: "diagnostics_new", count: fresh.length, server: client.spec.id });
+			return formatDiagnostics(rel, fresh, `${client.spec.id} language server`);
+		} catch {
+			return undefined;
+		}
+	}
+
 	pi.on("before_provider_request", (event, ctx) => {
-		if (!config.enabled || !config.localProfile || !isLocalModel(ctx)) return;
+		if (!on(ctx, "localProfile") || !isLocalModel(ctx)) return;
 		return withGreedyDefault(event.payload);
 	});
 
 	// Tools the local profile hid, restored as soon as a different model drives the session.
 	let hiddenTools: string[] = [];
 	pi.on("before_agent_start", (event, ctx) => {
-		if (!config.enabled || !config.localProfile || !isLocalModel(ctx)) {
-			if (hiddenTools.length > 0) {
-				pi.setActiveTools([...new Set([...pi.getActiveTools(), ...hiddenTools])]);
-				hiddenTools = [];
-			}
+		// Trust can be granted during a session; checks and servers follow it.
+		if (ctx.isProjectTrusted() !== trusted || ctx.cwd !== cwd) loadState(ctx);
+		run = freshRun(event.prompt);
+		run.startedAt = Date.now();
+		if (!config.enabled) {
 			delete event.systemPromptOptions.sections.project_files;
 			return;
 		}
-		const active = pi.getActiveTools();
-		const removed = active.filter((name) => !LOCAL_TOOLS.has(name));
-		if (removed.length > 0) {
-			pi.setActiveTools(active.filter((name) => LOCAL_TOOLS.has(name)));
-			hiddenTools = [...new Set([...hiddenTools, ...removed])];
+		syncTools(ctx);
+		if (!on(ctx, "localProfile") || !isLocalModel(ctx)) {
+			if (hiddenTools.length > 0) {
+				pi.setActiveTools([...new Set([...pi.getActiveTools(), ...hiddenTools])]);
+				hiddenTools = [];
+				syncTools(ctx);
+			}
+			delete event.systemPromptOptions.sections.project_files;
+		} else {
+			const active = pi.getActiveTools();
+			const removed = active.filter((name) => !LOCAL_TOOLS.has(name));
+			if (removed.length > 0) {
+				pi.setActiveTools(active.filter((name) => LOCAL_TOOLS.has(name)));
+				hiddenTools = [...new Set([...hiddenTools, ...removed])];
+			}
+			const { keep, note } = splitContextFiles(event.systemPromptOptions.contextFiles);
+			event.systemPromptOptions.contextFiles = keep;
+			if (note) event.systemPromptOptions.sections.project_files = note;
+			else delete event.systemPromptOptions.sections.project_files;
 		}
-		const { keep, note } = splitContextFiles(event.systemPromptOptions.contextFiles);
-		event.systemPromptOptions.contextFiles = keep;
-		if (note) event.systemPromptOptions.sections.project_files = note;
-		else delete event.systemPromptOptions.sections.project_files;
+		if (!on(ctx, "contextPack") || getMidnightStatus().agentMode === "plan" || !event.prompt.trim()) return;
+		try {
+			const started = Date.now();
+			const workspaceIndex = workspace();
+			let text: string | undefined;
+			if (!packSent) {
+				const window = ctx.model?.contextWindow ?? 0;
+				const budget = Math.min(
+					CONTEXT_PACK_TOKENS[modelClass(ctx)],
+					window > 0 ? Math.floor(window * 0.1) : Number.POSITIVE_INFINITY,
+				);
+				const active = pi.getActiveTools();
+				const pack = buildContextPack({
+					index: workspaceIndex,
+					request: event.prompt,
+					facts,
+					checks: activeChecks(),
+					platform: process.platform,
+					shell: active.includes("powershell") ? "powershell" : active.includes("bash") ? "bash" : undefined,
+					git: gitSummary(ctx.cwd),
+					budgetTokens: budget,
+				});
+				text = pack?.text;
+				if (pack) {
+					telemetry.record({
+						type: "context_pack",
+						bytes: pack.bytes,
+						inlined: pack.inlined.length,
+						files: workspaceIndex.files.length,
+						ms: Date.now() - started,
+					});
+				}
+			} else {
+				text = buildFollowUpPack(workspaceIndex, event.prompt);
+			}
+			if (!text) return;
+			packSent = true;
+			stats.packs++;
+			stats.packBytes += Buffer.byteLength(text);
+			return { message: { customType: CONTEXT_MESSAGE_TYPE, content: text, display: false } };
+		} catch (error) {
+			telemetry.record({
+				type: "context_pack_error",
+				message: error instanceof Error ? error.message : String(error),
+			});
+			return;
+		}
 	});
 
-	pi.on("turn_end", (event) => {
+	pi.on("turn_end", async (event, ctx) => {
 		if (!config.enabled) return;
-		const plan = planMasking(event.context.contextEntries, config.masking);
-		if (plan.edits.length === 0) return;
-		stats.maskBatches++;
-		stats.elidedBytes += plan.elidedBytes;
-		return { entries: plan.edits };
+		if (event.message.role === "assistant") {
+			const text = event.message.content
+				.flatMap((part) => (part.type === "text" ? [part.text] : []))
+				.join("\n")
+				.trim();
+			if (text) run.lastAssistantText = text;
+		}
+		const entries: SessionBoundaryDraft[] = [];
+		if (on(ctx, "masking")) {
+			const plan = planMasking(event.context.contextEntries, config.masking, ctx.model?.contextWindow);
+			if (plan.edits.length > 0) {
+				stats.maskBatches++;
+				stats.elidedBytes += plan.elidedBytes;
+				telemetry.record({ type: "mask_batch", bytes: plan.elidedBytes, results: plan.edits.length });
+				entries.push(...plan.edits);
+			}
+		}
+		const continuing =
+			event.message.role === "assistant" && event.message.content.some((part) => part.type === "toolCall");
+		if (
+			continuing &&
+			on(ctx, "inRunChecks") &&
+			run.changedSinceInRun.size > 0 &&
+			getMidnightStatus().agentMode !== "plan"
+		) {
+			const changed = [...run.changedSinceInRun];
+			run.changedSinceInRun.clear();
+			const result = await runLadder(ctx, changed, 2, true);
+			if (result && result.outcomes.length > 0) {
+				telemetry.record({
+					type: "inrun_check",
+					passed: result.failed.length === 0,
+					checks: result.outcomes.length,
+				});
+				if (result.failed.length === 0 && on(ctx, "checkpoints")) {
+					lastGreen = checkpointStore()?.snapshot("checks passed during the run") ?? lastGreen;
+				}
+				entries.push({
+					type: "custom_message",
+					customType: CHECK_MESSAGE_TYPE,
+					content:
+						result.failed.length === 0
+							? `Harness checks after your edits pass:\n${formatCheckSummary(result.outcomes)}\nYou do not need to rerun them yourself.`
+							: `Harness checks after your edits:\n${formatCheckFeedback(result.outcomes, 0, 0, false).split("\n").slice(1).join("\n")}`,
+					display: true,
+				});
+			}
+		}
+		if (continuing && on(ctx, "escalation") && !run.loopEscalated && run.loopGuard.loops >= 3) {
+			run.loopEscalated = true;
+			const advice = await escalate(ctx, "The agent keeps repeating the same calls or the same failing command.");
+			if (advice) entries.push(advice);
+		}
+		return entries.length > 0 ? { entries } : undefined;
 	});
 
 	// Compaction drops the task tool results from context; restore the contract as a message.
 	pi.on("session_compact", (_event, ctx) => {
-		if (!config.enabled || !config.contract) return;
+		if (!on(ctx, "contract")) return;
 		const contract = latestContract(branchMessages(ctx));
 		if (!contract) return;
 		pi.sendMessage(
@@ -352,27 +847,132 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		return [...changed];
 	}
 
-	pi.on("agent_before_settle", async (event, ctx) => {
-		if (!config.enabled || event.outcome !== "completed" || getMidnightStatus().agentMode === "plan") return;
+	/**
+	 * Run the checks for `changed` as a ladder: level by level, stopping at the first level
+	 * with a failure. `inRun` limits it to cheap checks with shorter timeouts.
+	 */
+	async function runLadder(
+		ctx: ExtensionContext,
+		changed: readonly string[],
+		maxLevel: 1 | 2 | 3,
+		inRun: boolean,
+	): Promise<{ outcomes: CheckOutcome[]; failed: CheckOutcome[] } | undefined> {
+		const checks = activeChecks();
+		if (checks.length === 0 || changed.length === 0) return undefined;
 		if (controller.signal.aborted) controller = new AbortController();
-
-		const selected = selectChecks(config.checks, await changedFiles(ctx));
-		if (selected.length > 0) {
-			const outcomes: CheckOutcome[] = [];
+		const outcomes: CheckOutcome[] = [];
+		let tests: string[] | undefined;
+		for (let level = 1; level <= maxLevel; level++) {
+			const levelChecks = checks.filter((check) => (check.level ?? 1) === level);
+			if (levelChecks.length === 0) continue;
+			const selected: SelectedCheck[] = [];
+			for (const item of selectChecks(levelChecks, changed)) {
+				if (inRun && (checkDurations.get(item.check.name) ?? 0) > IN_RUN_CHECK_BUDGET_MS) continue;
+				if (item.check.command.includes("{tests}")) {
+					tests ??= testsFor(workspace(), changed);
+					const argv = expandTests(item.check, tests);
+					if (!argv) continue;
+					selected.push({ ...item, argv });
+				} else selected.push(item);
+			}
+			const levelOutcomes: CheckOutcome[] = [];
 			for (const item of selected) {
 				ctx.ui.setWorkingMessage(`Harness check: ${item.check.name}...`);
-				outcomes.push(await runCheck(item, ctx.cwd, controller.signal));
+				const check = inRun
+					? {
+							...item,
+							check: { ...item.check, timeoutMs: Math.min(item.check.timeoutMs, IN_RUN_CHECK_BUDGET_MS) },
+						}
+					: item;
+				const outcome = await runCheck(check, ctx.cwd, controller.signal);
+				checkDurations.set(item.check.name, outcome.elapsedMs);
+				levelOutcomes.push(outcome);
 			}
 			ctx.ui.setWorkingMessage();
-			if (controller.signal.aborted) return;
+			if (controller.signal.aborted) return undefined;
+			outcomes.push(...levelOutcomes);
+			if (levelOutcomes.some((outcome) => !outcome.passed)) break;
+		}
+		return { outcomes, failed: outcomes.filter((outcome) => !outcome.passed) };
+	}
+
+	/** Ask the escalation model for advice. Returns the message entry, or undefined. */
+	async function escalate(ctx: ExtensionContext, failure: string): Promise<SessionBoundaryDraft | undefined> {
+		const settings = config.escalation;
+		if (run.escalations >= settings.maxCallsPerPrompt || stats.escalations >= settings.maxCallsPerSession) {
+			return undefined;
+		}
+		const [provider, ...rest] = settings.model.split("/");
+		const model = ctx.modelRegistry.find(provider, rest.join("/"));
+		if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) return undefined;
+		if (ctx.model && model.provider === ctx.model.provider && model.id === ctx.model.id) return undefined;
+		run.escalations++;
+		stats.escalations++;
+		ctx.ui.setWorkingMessage(`Harness: asking ${settings.model} for advice...`);
+		try {
+			const diff = await pi.exec("git", ["diff", "--no-color", "HEAD", "--", ...[...run.allChanged]], {
+				cwd: ctx.cwd,
+				timeout: 10_000,
+				signal: controller.signal,
+			});
+			const advice = await requestAdvice(
+				(context, signal) => ctx.modelRegistry.complete(model, context, { signal }),
+				{
+					request: run.prompt,
+					diff: diff.code === 0 ? diff.stdout : "",
+					failure,
+					attempt: run.lastAssistantText,
+					relevantFiles: index ? [...run.allChanged] : [],
+				},
+				controller.signal,
+			);
+			if (!advice) return undefined;
+			stats.escalationCostUsd += advice.costUsd;
+			telemetry.record({
+				type: "escalation",
+				model: settings.model,
+				costUsd: advice.costUsd,
+				input: advice.inputTokens,
+				output: advice.outputTokens,
+			});
+			return {
+				type: "custom_message",
+				customType: ADVICE_MESSAGE_TYPE,
+				content: formatAdvice(settings.model, advice),
+				display: true,
+			};
+		} catch (error) {
+			telemetry.record({
+				type: "escalation_error",
+				message: error instanceof Error ? error.message : String(error),
+			});
+			return undefined;
+		} finally {
+			ctx.ui.setWorkingMessage();
+		}
+	}
+
+	pi.on("agent_before_settle", async (event, ctx) => {
+		if (!config.enabled || event.outcome !== "completed" || getMidnightStatus().agentMode === "plan") return;
+		let changed = await changedFiles(ctx);
+		// Ending again without changes does not fix a failure: check the same files again.
+		if (changed.length === 0 && run.lastCheckFailed) changed = run.lastChecked;
+		const result = await runLadder(ctx, changed, 3, false);
+		if (result && result.outcomes.length > 0) {
 			stats.checkRuns++;
 			// Changes up to here are checked; later edits in a repair round re-trigger the checks.
 			run.changed.clear();
+			run.changedSinceInRun.clear();
 			run.shellRan = false;
 			run.startedAt = Date.now();
-			const failed = outcomes.filter((outcome) => !outcome.passed);
+			const { outcomes, failed } = result;
+			run.lastChecked = changed;
+			run.lastCheckFailed = failed.length > 0;
 			run.lastCheckSummary = formatCheckSummary(outcomes);
-			if (failed.length > 0) {
+			telemetry.record({ type: "settle_check", passed: failed.length === 0, round: run.repairRound });
+			if (failed.length === 0) {
+				if (on(ctx, "checkpoints")) lastGreen = checkpointStore()?.snapshot("checks passed") ?? lastGreen;
+			} else {
 				stats.checkFailures++;
 				if (run.repairRound >= config.maxRepairRounds) {
 					return {
@@ -394,21 +994,43 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					.join("\0");
 				const repeated = key === run.lastFailedKey;
 				run.lastFailedKey = key;
-				return {
-					entries: [
-						{
-							type: "custom_message",
-							customType: CHECK_MESSAGE_TYPE,
-							content: formatCheckFeedback(outcomes, run.repairRound, config.maxRepairRounds, repeated),
-							display: true,
-						},
-					],
-					continue: true,
-				};
+				const feedback = formatCheckFeedback(outcomes, run.repairRound, config.maxRepairRounds, repeated);
+				const entries: SessionBoundaryDraft[] = [];
+				let rollbackNote = "";
+				if (repeated && on(ctx, "checkpoints") && lastGreen) {
+					const restored = checkpointStore()?.restore(lastGreen);
+					if (restored && restored.paths.length > 0) {
+						stats.rollbacks++;
+						indexDirty = true;
+						for (const path of restored.paths) run.changed.add(path);
+						telemetry.record({ type: "rollback", paths: restored.paths.length });
+						rollbackNote = [
+							"",
+							`The same checks failed twice, so the harness restored ${restored.paths.join(", ")} to the last state where the checks passed. This is the change it reverted; do not repeat it as is:`,
+							"```diff",
+							restored.diff.trimEnd(),
+							"```",
+						].join("\n");
+					}
+				}
+				entries.push({
+					type: "custom_message",
+					customType: CHECK_MESSAGE_TYPE,
+					content: `${feedback}${rollbackNote}`,
+					display: true,
+				});
+				if (on(ctx, "escalation") && (repeated || run.repairRound >= 2)) {
+					const advice = await escalate(
+						ctx,
+						failed.map((outcome) => `${outcome.name}:\n${outcome.output}`).join("\n\n"),
+					);
+					if (advice) entries.push(advice);
+				}
+				return { entries, continue: true };
 			}
 		}
 
-		if (!config.contract || run.contractNudged) return;
+		if (!on(ctx, "contract") || run.contractNudged) return;
 		const contract = latestContract(branchMessages(ctx));
 		if (!contract || openCriteria(contract).length === 0) return;
 		run.contractNudged = true;
@@ -423,23 +1045,54 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("harness", {
-		description: "Show the harness state: checks, protected files, the task contract and context savings",
+		description: "Show the harness state: model class, features, checks, context pack, escalation and savings",
 		handler: async (_args, ctx) => {
 			if (!config.enabled) {
 				ctx.ui.notify("Harness is off (MIDNIGHT_SERVER_HARNESS=0 or enabled: false in harness.json).");
 				return;
 			}
 			const contract = latestContract(branchMessages(ctx));
+			const resolved = features(ctx);
+			const checks = activeChecks();
 			const lines = [
-				`Harness config: ${harnessConfigPath(ctx.cwd)}${ctx.isProjectTrusted() ? "" : " (project not trusted: checks from it are not loaded)"}`,
-				`Checks: ${config.checks.length > 0 ? config.checks.map((check) => check.name).join(", ") : "none configured"}`,
+				`Harness config: ${harnessConfigPath(ctx.cwd)}${ctx.isProjectTrusted() ? "" : " (project not trusted: project checks, detected checks and language servers are off)"}`,
+				`Model class: ${modelClass(ctx)} (${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "no model"})`,
+				`Features on: ${Object.entries(resolved)
+					.filter(([, enabled]) => enabled)
+					.map(([name]) => name)
+					.join(", ")}`,
+				`Checks: ${checks.length > 0 ? checks.map((check) => `${check.name} (level ${check.level ?? 1}${"source" in check ? `, from ${check.source}` : ""})`).join(", ") : "none configured or detected"}`,
 				`Protected: ${["harness.json", ...config.protect].join(", ")}`,
-				`Check runs: ${stats.checkRuns} (${stats.checkFailures} failed, ${stats.repairs} repair rounds); contract reminders: ${stats.contractNudges}`,
-				`Context masking: ${config.masking.enabled ? `${stats.maskBatches} batch(es), ${(stats.elidedBytes / 1024).toFixed(1)} KB elided (~${Math.round(stats.elidedBytes / 4)} tokens per later request)` : "off"}`,
-				`Local profile: ${config.localProfile ? (isLocalModel(ctx) ? "active" : "on (inactive for this model)") : "off"}`,
+				`Check runs: ${stats.checkRuns} (${stats.checkFailures} failed, ${stats.repairs} repair rounds, ${stats.rollbacks} rollbacks); contract reminders: ${stats.contractNudges}`,
+				`Context packs: ${stats.packs} (${(stats.packBytes / 1024).toFixed(1)} KB)`,
+				`Context masking: ${stats.maskBatches} batch(es), ${(stats.elidedBytes / 1024).toFixed(1)} KB elided (~${Math.round(stats.elidedBytes / 4)} tokens per later request)`,
+				`Escalation: ${config.escalation.model}, ${stats.escalations} call(s), $${stats.escalationCostUsd.toFixed(4)}`,
+				`Language servers: ${lsp?.running.join(", ") || "none running"}`,
+				`Events: ${telemetry.summary()}`,
 			];
 			if (contract) lines.push("", formatContract(contract));
 			ctx.ui.notify(lines.join("\n"));
 		},
 	});
+}
+
+function pythonCommand(): string | undefined {
+	const probe = process.platform === "win32" ? "where" : "which";
+	for (const candidate of process.platform === "win32" ? ["python", "py"] : ["python3", "python"]) {
+		if (spawnSync(probe, [candidate], { stdio: "ignore", windowsHide: true }).status === 0) return candidate;
+	}
+	return undefined;
+}
+
+function gitSummary(cwd: string): { branch?: string; changed: string[] } | undefined {
+	const status = spawnSync("git", ["status", "--porcelain=v1", "-z", "--branch"], {
+		cwd,
+		encoding: "utf8",
+		windowsHide: true,
+		timeout: 10_000,
+	});
+	if (status.status !== 0 || typeof status.stdout !== "string") return undefined;
+	const [header, ...rest] = status.stdout.split("\0");
+	const branch = /^## (?:No commits yet on )?([^.\s]+)/.exec(header ?? "")?.[1];
+	return { branch, changed: parsePorcelainZ(rest.join("\0")) };
 }

@@ -20,6 +20,31 @@ const DEFAULT_COMPACTION_TOKEN_SETTINGS: Required<CompactionModelOverride> = {
 	keepRecentTokens: 20000,
 };
 
+/**
+ * Shrink compaction token settings that cannot work in a small context window.
+ *
+ * Problem: the defaults (reserve 16,384, keep 20,000) are sized for 100K+ windows. With an
+ * 8,192-token window the threshold `window - reserve` is negative, so every turn asks for
+ * compaction, and keeping 20,000 recent tokens leaves nothing to summarize, so compaction never
+ * happens and the session overflows. The same happens whenever `keep >= window - reserve`.
+ *
+ * Solution: reserve at most a quarter of the window, and keep at most half of what remains
+ * below the threshold, so a compaction always frees room. Settings that already fit are
+ * returned unchanged (a 128K window keeps the defaults).
+ */
+export function fitCompactionToWindow<T extends { reserveTokens: number; keepRecentTokens: number }>(
+	settings: T,
+	contextWindow: number | undefined,
+): T {
+	if (!contextWindow || contextWindow <= 0) return settings;
+	const fits =
+		settings.reserveTokens <= contextWindow / 2 && settings.keepRecentTokens < contextWindow - settings.reserveTokens;
+	if (fits) return settings;
+	const reserveTokens = Math.min(settings.reserveTokens, Math.floor(contextWindow / 4));
+	const keepRecentTokens = Math.min(settings.keepRecentTokens, Math.floor((contextWindow - reserveTokens) / 2));
+	return { ...settings, reserveTokens, keepRecentTokens };
+}
+
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
 	reserveTokens?: number; // default: 16384
@@ -895,17 +920,25 @@ export class SettingsManager {
 		return this.getCompactionTokenSetting("keepRecentTokens", model);
 	}
 
-	/** Resolve each token setting through model override, ordinary setting, then built-in default. */
-	getCompactionSettings(model?: Pick<Model<string>, "provider" | "id">): {
+	/**
+	 * Resolve each token setting through model override, ordinary setting, then built-in default,
+	 * then fit the result to the model's context window (see `fitCompactionToWindow`).
+	 */
+	getCompactionSettings(model?: Pick<Model<string>, "provider" | "id"> & { contextWindow?: number }): {
 		enabled: boolean;
 		reserveTokens: number;
 		keepRecentTokens: number;
 	} {
-		return {
+		const settings = {
 			enabled: this.getCompactionEnabled(),
 			reserveTokens: this.getCompactionReserveTokens(model),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(model),
 		};
+		// A per-model override was written for that model's window; respect it as given.
+		const hasModelOverride =
+			model !== undefined &&
+			this.settings.compaction?.modelOverrides?.[`${model.provider}/${model.id}`] !== undefined;
+		return hasModelOverride ? settings : fitCompactionToWindow(settings, model?.contextWindow);
 	}
 
 	getBranchSummarySettings(): { reserveTokens: number; skipPrompt: boolean } {

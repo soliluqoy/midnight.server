@@ -20,6 +20,8 @@ export interface SelectedCheck {
 	check: HarnessCheck;
 	/** Changed files that matched `when`; empty for checks without `when`. */
 	files: string[];
+	/** Final argv when the caller already expanded placeholders such as `{tests}`. */
+	argv?: string[];
 }
 
 /** The checks a set of changed files calls for, with `{files}` resolved per check. */
@@ -55,7 +57,7 @@ const CHECK_MAX_OUTPUT_BYTES = 64_000;
  * On Windows `spawnProcess` resolves `.cmd` shims such as `npm` and `npx`.
  */
 export async function runCheck(selected: SelectedCheck, cwd: string, signal: AbortSignal): Promise<CheckOutcome> {
-	const argv = expandCommand(selected.check.command, selected.files);
+	const argv = selected.argv ?? expandCommand(selected.check.command, selected.files);
 	const started = Date.now();
 	const chunks: Buffer[] = [];
 	let bytes = 0;
@@ -68,6 +70,7 @@ export async function runCheck(selected: SelectedCheck, cwd: string, signal: Abo
 			cwd,
 			stdio: ["ignore", "pipe", "pipe"],
 			windowsHide: true,
+			env: selected.check.env ? { ...process.env, ...selected.check.env } : undefined,
 		});
 		const onData = (data: Buffer) => {
 			if (truncated) return;
