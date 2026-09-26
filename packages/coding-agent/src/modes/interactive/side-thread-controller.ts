@@ -334,6 +334,30 @@ export class SideThreadController implements TranscriptDecorations {
 		this.host.requestRender();
 	}
 
+	/** The side-question model, without changing the main session model. */
+	composingModel(): Model<Api> | undefined {
+		return this.mode.type === "composing" ? this.mode.choices[this.mode.choiceIndex]?.model : undefined;
+	}
+
+	selectComposerModel(model: Model<Api>): void {
+		if (this.mode.type !== "composing") return;
+		const session = this.host.session();
+		const kind: SideThreadModelKind =
+			model.provider === LOCAL_PROVIDER_ID
+				? "local"
+				: session.model?.provider === model.provider && session.model.id === model.id
+					? "same"
+					: "other";
+		const index = this.mode.choices.findIndex(
+			(choice) => choice.model.provider === model.provider && choice.model.id === model.id,
+		);
+		if (index < 0) this.mode.choices.push({ model, kind });
+		else this.mode.choices[index] = { model, kind };
+		this.mode.choiceIndex = index < 0 ? this.mode.choices.length - 1 : index;
+		this.lastChoice = { provider: model.provider, id: model.id };
+		this.updateComposerBar();
+	}
+
 	cycleModel(direction: 1 | -1): void {
 		if (this.mode.type !== "composing") return;
 		const count = this.mode.choices.length;
@@ -384,6 +408,14 @@ export class SideThreadController implements TranscriptDecorations {
 		add(this.localModel(), "local");
 		add(session.model, "same");
 		for (const scoped of session.scopedModels) add(scoped.model, "other");
+		if (this.lastChoice) {
+			add(
+				session.modelRuntime
+					.getAvailableSnapshot()
+					.find((model) => model.provider === this.lastChoice?.provider && model.id === this.lastChoice.id),
+				"other",
+			);
+		}
 		return choices;
 	}
 
