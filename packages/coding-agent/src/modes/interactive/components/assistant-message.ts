@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { Container, Markdown, type MarkdownTheme, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
+import { assistantAnchor, assistantAnchorId, type ThreadAnchor } from "../../../core/side-threads.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 
@@ -75,6 +76,15 @@ export class AssistantMessageComponent extends Container {
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
+	}
+
+	getThreadAnchorId(): string | undefined {
+		return this.lastMessage ? assistantAnchorId(this.lastMessage) : undefined;
+	}
+
+	/** Identity and text of this reply for side threads, once it has visible text. */
+	getThreadAnchor(): ThreadAnchor | undefined {
+		return this.lastMessage ? assistantAnchor(this.lastMessage) : undefined;
 	}
 
 	override render(width: number): string[] {

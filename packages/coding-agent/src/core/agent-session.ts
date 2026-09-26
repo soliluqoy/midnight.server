@@ -25,7 +25,14 @@ import type {
 	PrepareNextTurnContext,
 	ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
-import { contentText, getCurrentSystemMessage, retryDelayMs } from "@earendil-works/pi-ai";
+import {
+	type Api,
+	type Context,
+	contentText,
+	getCurrentSystemMessage,
+	type ModelsSimpleStreamOptions,
+	retryDelayMs,
+} from "@earendil-works/pi-ai";
 import type {
 	AssistantMessage,
 	AuthResult,
@@ -231,6 +238,13 @@ function withoutDeletedHeaders(headers: ProviderHeaders | undefined): Record<str
 		: undefined;
 }
 
+/** A model request as the session sent it, including the options the SDK added. */
+export interface SessionModelRequest {
+	model: Model<Api>;
+	context: Context;
+	options: ModelsSimpleStreamOptions;
+}
+
 export interface AgentSessionConfig {
 	agent: Agent;
 	sessionManager: SessionManager;
@@ -246,6 +260,8 @@ export interface AgentSessionConfig {
 	modelRuntime: ModelRuntime;
 	/** Keeps the prompt cache entry of the last session request warm. */
 	cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed">;
+	/** The last session request while the transcript and model still extend it. */
+	getLastSessionRequest?: () => SessionModelRequest | undefined;
 	/** Initial active built-in tool names. Default: [read, bash, edit, write] */
 	initialActiveToolNames?: string[];
 	/** Optional allowlist of tool names. When provided, only these tool names are exposed. */
@@ -415,6 +431,7 @@ export class AgentSession {
 
 	private _modelRuntime: ModelRuntime;
 	private _cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed">;
+	private _getLastSessionRequest?: () => SessionModelRequest | undefined;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -436,6 +453,7 @@ export class AgentSession {
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
 		this._cacheWarmer = config.cacheWarmer;
+		this._getLastSessionRequest = config.getLastSessionRequest;
 		if (this._cacheWarmer) {
 			this._cacheWarmer.onWarmed = (entry) => this._emit({ type: "entry_appended", entry });
 		}
@@ -1219,6 +1237,14 @@ export class AgentSession {
 	/** Full agent state */
 	get state(): AgentState {
 		return this.agent.state;
+	}
+
+	/**
+	 * The last request sent for this session, while the current model and transcript still
+	 * extend it. Side threads append to it so the provider can reuse its cached prefix.
+	 */
+	getLastSessionRequest(): SessionModelRequest | undefined {
+		return this._getLastSessionRequest?.();
 	}
 
 	/** Current cache-warming state and the policy inputs that produced it. */

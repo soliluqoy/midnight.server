@@ -12,7 +12,8 @@
         bytes[i] = binary.charCodeAt(i);
       }
       const data = JSON.parse(new TextDecoder('utf-8').decode(bytes));
-      const { header, entries, leafId: defaultLeafId, systemPrompt, tools, renderedTools } = data;
+      const { header, entries, leafId: defaultLeafId, systemPrompt, tools, renderedTools, sideThreads } = data;
+      const sideThreadMap = new Map((sideThreads || []).map(thread => [thread.anchorId, thread]));
 
       // ============================================================
       // URL PARAMETER HANDLING
@@ -906,6 +907,29 @@
         return out;
       }
 
+      function sideThreadModel(turn) {
+        return turn.model.kind === 'local' ? 'local' : turn.model.id;
+      }
+
+      /** Side thread under a tool call or reply, folded until its label is clicked. */
+      function renderSideThread(anchorId) {
+        const thread = sideThreadMap.get(anchorId);
+        if (!thread || !thread.turns.length) return '';
+        const models = [...new Set(thread.turns.map(sideThreadModel))].join(', ');
+        const count = thread.turns.length === 1 ? '1 side question' : `${thread.turns.length} side questions`;
+        let body = '';
+        for (const turn of thread.turns) {
+          body += `<div><span class="side-thread-who">you</span>${escapeHtml(turn.question)}</div>`;
+          if (turn.answer) {
+            body += `<div><span class="side-thread-who">${escapeHtml(sideThreadModel(turn))}</span><div class="markdown-content">${safeMarkedParse(turn.answer)}</div></div>`;
+          }
+          if (turn.status === 'error') body += `<div class="error-text">${escapeHtml(turn.error || 'failed')}</div>`;
+          else if (turn.status === 'aborted') body += '<div class="side-thread-note">stopped</div>';
+        }
+        if (thread.sentTurns > 0) body += '<div class="side-thread-note">sent to the main agent\'s context</div>';
+        return `<div class="side-thread"><div class="side-thread-label" onclick="this.parentElement.classList.toggle('expanded')">▸ ${count} · ${escapeHtml(models)}</div><div class="side-thread-body">${body}</div></div>`;
+      }
+
       function renderToolCall(call) {
         const result = findToolResult(call.id);
         const isError = result?.isError || false;
@@ -1259,9 +1283,14 @@
               }
             }
 
+            if (msg.content.some(block => block.type === 'text' && block.text.trim())) {
+              html += renderSideThread(`assistant:${msg.timestamp}`);
+            }
+
             for (const block of msg.content) {
               if (block.type === 'toolCall') {
                 html += renderToolCall(block);
+                html += renderSideThread(`tool:${block.id}`);
               }
             }
 

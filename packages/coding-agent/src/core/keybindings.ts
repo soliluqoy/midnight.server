@@ -36,6 +36,12 @@ export interface AppKeybindings {
 	"app.explorer.collapse": true;
 	"app.explorer.preview": true;
 	"app.commandPalette": true;
+	"app.thread.select": true;
+	"app.thread.ask": true;
+	"app.thread.toggle": true;
+	"app.thread.sendToMain": true;
+	"app.thread.delete": true;
+	"app.thread.stop": true;
 	"app.session.new": true;
 	"app.session.tree": true;
 	"app.session.fork": true;
@@ -166,6 +172,18 @@ export const KEYBINDINGS = {
 	},
 	"app.explorer.preview": { defaultKeys: "space", description: "Preview the selected file in the file explorer" },
 	"app.commandPalette": { defaultKeys: "alt+x", description: "Open command palette" },
+	"app.thread.select": {
+		defaultKeys: "alt+t",
+		description: "Select a transcript item to ask a side question about, or leave selection",
+	},
+	"app.thread.ask": { defaultKeys: "enter", description: "Side threads: ask about the selected item" },
+	"app.thread.toggle": { defaultKeys: "space", description: "Side threads: open or fold the selected item's thread" },
+	"app.thread.sendToMain": {
+		defaultKeys: "m",
+		description: "Side threads: send the selected thread to the main agent's context",
+	},
+	"app.thread.delete": { defaultKeys: "d", description: "Side threads: delete the selected thread" },
+	"app.thread.stop": { defaultKeys: "x", description: "Side threads: stop the selected thread's running answer" },
 	"app.session.new": { defaultKeys: [], description: "Start a new session" },
 	"app.session.tree": { defaultKeys: [], description: "Open session tree" },
 	"app.session.fork": { defaultKeys: [], description: "Fork current session" },
