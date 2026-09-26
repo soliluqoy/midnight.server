@@ -33,6 +33,8 @@ export const FEATURE_NAMES = [
 	"diagnostics",
 	/** Ask a stronger model for advice when a fast model is stuck. */
 	"escalation",
+	/** Typed intake and completion-review questions to Laya, a local System One model, when installed. */
+	"decisions",
 	/** Core-tools-only, capped output and greedy decoding for the embedded local model. */
 	"localProfile",
 ] as const;
@@ -71,6 +73,7 @@ const CLASS_DEFAULTS: Record<ModelClass, Record<FeatureName, boolean>> = {
 		lookup: true,
 		diagnostics: true,
 		escalation: true,
+		decisions: true,
 		localProfile: false,
 	},
 	frontier: {
@@ -86,6 +89,7 @@ const CLASS_DEFAULTS: Record<ModelClass, Record<FeatureName, boolean>> = {
 		lookup: true,
 		diagnostics: true,
 		escalation: false,
+		decisions: true,
 		localProfile: false,
 	},
 	local: {
@@ -102,6 +106,8 @@ const CLASS_DEFAULTS: Record<ModelClass, Record<FeatureName, boolean>> = {
 		lookup: false,
 		diagnostics: true,
 		escalation: false,
+		// Laya would compete with the local model's engine for the same CPU.
+		decisions: false,
 		localProfile: true,
 	},
 };

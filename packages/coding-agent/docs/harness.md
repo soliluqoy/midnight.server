@@ -2,7 +2,7 @@
 
 The harness is a built-in extension that makes whatever model runs the session more accurate and cheaper to run. Its principle: a model spends tokens on every turn it takes, so the harness does in code what the model would otherwise do in turns. It explores the workspace before the first request, catches mistakes at the moment they happen, verifies the result with the project's own checks, and asks a stronger model for advice only when a fast one is stuck.
 
-Everything works with any session model. Features switch by model class:
+Everything works with any session model, and nothing the harness adds sends your code anywhere except the escalation advisor, which uses a model you configured. Features switch by model class:
 
 | Class | Which models | Differences |
 | --- | --- | --- |
@@ -70,6 +70,23 @@ Each time the checks pass, the harness snapshots the working tree to a private r
 
 When a fast model is stuck (the same checks failed twice, or it repeated itself three times), the harness asks a stronger model for one piece of advice and hands control back. The advisor gets the request, the current diff (new files included), the failing output and the model's last message, not the transcript. Default advisor: `anthropic/claude-opus-5-5`; it is used only if that model has credentials, and never when it is the session model. Limits: 2 calls per prompt, 6 per session. `/harness` shows the calls and their cost.
 
+## Independent review (Laya, local)
+
+The model that wrote a change should not be the one that decides it is done. When [Laya](https://github.com/NandhaKishorM/laya) is available, the harness asks it narrow typed questions and code applies the answers. Laya is an open-source (Apache 2.0) System One model: a ~400M-parameter encoder that returns calibrated probabilities for yes/no (`noul`), label (`choice`) and rubric (`score`) questions in one forward pass, with no generated text.
+
+- **Review, once per prompt**, before the run settles, when the checks pass or none exist: does the diff do everything the request asks, including what it implies? does it change unrelated things? does the final message claim results the checks do not show? does it weaken tests? Only confident negative answers (P(does what was asked) < 0.3, the others > 0.85, weakened tests > 0.8) give the model one more turn with the reasons. A favorable answer never overrides a failing check, and no answer means no decision, not approval.
+- **Intake**, on the first prompt: whether the request can be read two ways that lead to different code, and how deep it is. The answers only add a short note to the context pack.
+
+The state sent to Laya is compacted for its 512-token (English) or 1,024-token (multilingual) window, most important first: the request, the model's final message, the check results, then the changed lines of the diff.
+
+Everything stays on the machine. The harness talks only to a loopback address and refuses any other URL:
+
+- `MIDNIGHT_SERVER_LAYA_URL=http://127.0.0.1:8000` uses a running `laya-serve` (`MIDNIGHT_SERVER_LAYA_API_KEY` if it requires a key).
+- Otherwise, if `laya-serve` is on PATH (`pip install "laya[serve]"`), the harness starts it on a random loopback port with a per-session key, loads the checkpoint in the background (the first start downloads it from Hugging Face; in offline mode it never downloads), and stops it with the session. Until it answers, reviews are skipped.
+- `MIDNIGHT_SERVER_LAYA_MODEL` picks the checkpoint (`english`, `multilingual`, `typed-decisions`); by default the server picks per request. `MIDNIGHT_SERVER_LAYA=0` turns it off.
+
+Each question and answer is written to the telemetry log as a receipt (question version, state digest, probabilities, latency). The thresholds are starting points, not calibrated values: calibrate them on the eval before relying on them. It is off for the local model, whose engine would compete for the same CPU.
+
 ## Protected files
 
 `edit` and `write` calls on protected paths are blocked with an explanation. `.midnight.server/harness.json` is always protected. List test files or specs you own in `protect`. Shell commands are not inspected.
@@ -110,7 +127,7 @@ When the session model is the embedded MiniCPM model: only core tools stay activ
 - `level` (1-3) places a check on the ladder; configured checks without one are level 1.
 - Unknown keys and unknown feature names are rejected, so a typo does not silently disable anything.
 
-Features: `contextPack`, `parseGate`, `editRepair`, `pathHints`, `loopGuard`, `inRunChecks`, `checkpoints`, `lookup`, `diagnostics`, `escalation`, `masking`, `contract`, `localProfile`.
+Features: `contextPack`, `parseGate`, `editRepair`, `pathHints`, `loopGuard`, `inRunChecks`, `checkpoints`, `lookup`, `diagnostics`, `escalation`, `decisions`, `masking`, `contract`, `localProfile`.
 
 Environment:
 

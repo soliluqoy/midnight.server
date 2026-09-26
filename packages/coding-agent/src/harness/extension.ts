@@ -4,7 +4,9 @@ import { resolve } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { Box, Text } from "@earendil-works/pi-tui";
+import { createTwoFilesPatch } from "diff";
 import { type Static, Type } from "typebox";
+import { CONFIG_DIR_NAME } from "../config.ts";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -44,6 +46,19 @@ import {
 	type TaskContract,
 	updateContract,
 } from "./contract.ts";
+import {
+	compactReviewState,
+	type DecisionBackend,
+	decisionBackendFromEnv,
+	formatReviewFeedback,
+	INTAKE_QUESTIONS,
+	INTAKE_VERSION,
+	intakeNote,
+	REVIEW_QUESTIONS,
+	REVIEW_VERSION,
+	reviewPolicy,
+	stateDigest,
+} from "./decisions.ts";
 import { type DetectedCheck, detectProjectChecks, expandTests, type ProjectFacts } from "./detect-checks.ts";
 import { LoopGuard, notFoundHint, repairIndentation, suggestPaths, type TextEdit } from "./edit-repair.ts";
 import { formatAdvice, requestAdvice } from "./escalate.ts";
@@ -68,6 +83,7 @@ export const CHECK_MESSAGE_TYPE = "harness_check";
 export const CONTRACT_MESSAGE_TYPE = "harness_contract";
 export const CONTEXT_MESSAGE_TYPE = "harness_context";
 export const ADVICE_MESSAGE_TYPE = "harness_advice";
+export const REVIEW_MESSAGE_TYPE = "harness_review";
 export const LOOKUP_TOOL_NAME = "lookup";
 
 const taskParameters = Type.Object({
@@ -198,6 +214,10 @@ interface RunState {
 	/** Files the last settle check covered, and whether it failed. */
 	lastChecked: string[];
 	lastCheckFailed: boolean;
+	/** The independent review ran for this prompt (it runs at most once). */
+	reviewed: boolean;
+	/** Each edited file's content before its first edit in this run (undefined: it did not exist). */
+	originals: Map<string, string | undefined>;
 }
 
 function freshRun(prompt = ""): RunState {
@@ -214,6 +234,8 @@ function freshRun(prompt = ""): RunState {
 		loopEscalated: false,
 		lastChecked: [],
 		lastCheckFailed: false,
+		reviewed: false,
+		originals: new Map(),
 	};
 }
 
@@ -248,6 +270,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	let lsp: LspManager | undefined;
 	let checkpoints: CheckpointStore | undefined;
 	let lastGreen: ReturnType<CheckpointStore["snapshot"]>;
+	let decisions: DecisionBackend | undefined;
 	const checkDurations = new Map<string, number>();
 	const telemetry = new HarnessTelemetry();
 	const stats = {
@@ -262,6 +285,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		rollbacks: 0,
 		packs: 0,
 		packBytes: 0,
+		reviews: 0,
+		revisions: 0,
 	};
 
 	function modelClass(ctx: ExtensionContext): ModelClass {
@@ -386,6 +411,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	pi.registerMessageRenderer(CHECK_MESSAGE_TYPE, renderHarnessMessage("[harness]"));
 	pi.registerMessageRenderer(CONTRACT_MESSAGE_TYPE, renderHarnessMessage("[contract]"));
 	pi.registerMessageRenderer(ADVICE_MESSAGE_TYPE, renderHarnessMessage("[advice]"));
+	pi.registerMessageRenderer(REVIEW_MESSAGE_TYPE, renderHarnessMessage("[review]"));
 
 	/** Load config, feature overrides and detected checks for the current trust state. */
 	function loadState(ctx: ExtensionContext): void {
@@ -404,6 +430,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			if (error instanceof HarnessConfigError) ctx.ui.notify(`Harness config ignored: ${error.message}`, "warning");
 			else throw error;
 		}
+		decisions ??= decisionBackendFromEnv();
 		// Detection reads manifests only; the detected commands run only in trusted projects.
 		facts = detectProjectChecks(ctx.cwd, { python: trusted ? pythonCommand() : undefined });
 		if (!trusted || !config.autoChecks) facts = { ...facts, checks: [] };
@@ -415,12 +442,15 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		indexDirty = true;
 		packSent = false;
 		syncTools(ctx);
+		// A managed Laya server loads its checkpoint in the background; decisions start once it answers.
+		if (on(ctx, "decisions")) decisions?.warmUp?.();
 	});
 
 	pi.on("session_shutdown", () => {
 		controller.abort();
 		void lsp?.dispose();
 		checkpoints?.dispose();
+		decisions?.dispose?.();
 	});
 
 	pi.on("agent_start", () => {
@@ -515,6 +545,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		} catch {
 			before = undefined;
 		}
+		if (rel && !run.originals.has(rel)) run.originals.set(rel, before);
 		if (event.toolName === "edit" && before !== undefined && on(ctx, "editRepair")) {
 			const edits = editsOf(input);
 			for (const edit of edits) {
@@ -683,7 +714,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 
 	// Tools the local profile hid, restored as soon as a different model drives the session.
 	let hiddenTools: string[] = [];
-	pi.on("before_agent_start", (event, ctx) => {
+	pi.on("before_agent_start", async (event, ctx) => {
 		// Trust can be granted during a session; checks and servers follow it.
 		if (ctx.isProjectTrusted() !== trusted || ctx.cwd !== cwd) loadState(ctx);
 		run = freshRun(event.prompt);
@@ -735,6 +766,18 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					budgetTokens: budget,
 				});
 				text = pack?.text;
+				if (pack && decisions && on(ctx, "decisions")) {
+					const intake = await askDecisions(
+						INTAKE_VERSION,
+						{
+							request: event.prompt.slice(0, 6_000),
+							candidates: pack.ranked.slice(0, 8),
+						},
+						INTAKE_QUESTIONS,
+					);
+					const { note } = intake ? intakeNote(intake) : { note: undefined };
+					if (note) text = `${text}\n\n${note}`;
+				}
 				if (pack) {
 					telemetry.record({
 						type: "context_pack",
@@ -910,16 +953,12 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		stats.escalations++;
 		ctx.ui.setWorkingMessage(`Harness: asking ${settings.model} for advice...`);
 		try {
-			const diff = await pi.exec("git", ["diff", "--no-color", "HEAD", "--", ...[...run.allChanged]], {
-				cwd: ctx.cwd,
-				timeout: 10_000,
-				signal: controller.signal,
-			});
+			const diff = await changeDiff(ctx, [...run.allChanged]);
 			const advice = await requestAdvice(
 				(context, signal) => ctx.modelRegistry.complete(model, context, { signal }),
 				{
 					request: run.prompt,
-					diff: diff.code === 0 ? diff.stdout : "",
+					diff,
 					failure,
 					attempt: run.lastAssistantText,
 					relevantFiles: index ? [...run.allChanged] : [],
@@ -950,6 +989,80 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		} finally {
 			ctx.ui.setWorkingMessage();
 		}
+	}
+
+	/** Ask the decision backend and record a receipt. Undefined when unavailable: never approval. */
+	async function askDecisions(
+		version: string,
+		state: unknown,
+		questions: Parameters<DecisionBackend["ask"]>[1],
+	): Promise<
+		Awaited<ReturnType<DecisionBackend["ask"]>> extends infer R
+			? (R extends { answers: infer A } ? A : never) | undefined
+			: never
+	> {
+		if (!decisions) return undefined;
+		const result = await decisions.ask(state, questions, controller.signal).catch(() => undefined);
+		const answers = result?.answers;
+		telemetry.record({
+			type: "decision",
+			version,
+			backend: decisions.name,
+			model: result?.model,
+			digest: stateDigest(state, version),
+			answers,
+			latencyMs: result?.latencyMs,
+			inputTokens: result?.inputTokens,
+			available: result !== undefined,
+		});
+		return answers && Object.keys(answers).length > 0 ? answers : undefined;
+	}
+
+	/**
+	 * The run's change as a bounded diff. Files edited with edit/write diff against their content
+	 * before the run's first edit, so this works without git; files changed only by shell
+	 * commands come from `git diff HEAD` when the workspace is a git repository.
+	 */
+	async function changeDiff(ctx: ExtensionContext, files: readonly string[]): Promise<string> {
+		if (files.length === 0) return "";
+		const parts: string[] = [];
+		const viaGit: string[] = [];
+		for (const path of files) {
+			if (!run.originals.has(path)) {
+				viaGit.push(path);
+				continue;
+			}
+			let current = "";
+			try {
+				current = existsSync(resolve(ctx.cwd, path)) ? readFileSync(resolve(ctx.cwd, path), "utf8") : "";
+			} catch {
+				current = "";
+			}
+			const original = run.originals.get(path);
+			parts.push(
+				createTwoFilesPatch(
+					original === undefined ? "/dev/null" : `a/${path}`,
+					`b/${path}`,
+					original ?? "",
+					current,
+					"",
+					"",
+					{
+						context: 3,
+					},
+				),
+			);
+		}
+		if (viaGit.length > 0) {
+			const tracked = await pi.exec("git", ["diff", "--no-color", "HEAD", "--", ...viaGit], {
+				cwd: ctx.cwd,
+				timeout: 10_000,
+				signal: controller.signal,
+			});
+			if (tracked.code === 0) parts.push(tracked.stdout);
+		}
+		const diff = parts.join("\n");
+		return diff.length > 16_000 ? `${diff.slice(0, 16_000)}\n[... diff truncated ...]` : diff;
 	}
 
 	pi.on("agent_before_settle", async (event, ctx) => {
@@ -1030,6 +1143,41 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			}
 		}
 
+		// An independent review, once per prompt, when the checks pass or there are none: the model
+		// that wrote the change is not the one that judges whether it is done.
+		if (decisions && on(ctx, "decisions") && !run.reviewed && run.allChanged.size > 0 && !run.lastCheckFailed) {
+			run.reviewed = true;
+			const state = compactReviewState({
+				request: run.prompt,
+				final_message: run.lastAssistantText ?? "",
+				change: {
+					files: [...run.allChanged],
+					checks: run.lastCheckSummary ?? "No project checks are configured or detected; nothing was run.",
+					diff: await changeDiff(ctx, [...run.allChanged]),
+				},
+			});
+			const answers = await askDecisions(REVIEW_VERSION, state, REVIEW_QUESTIONS);
+			if (answers) {
+				stats.reviews++;
+				const verdict = reviewPolicy(answers);
+				telemetry.record({ type: "review", action: verdict.action, probabilities: verdict.probabilities });
+				if (verdict.action === "revise") {
+					stats.revisions++;
+					return {
+						entries: [
+							{
+								type: "custom_message",
+								customType: REVIEW_MESSAGE_TYPE,
+								content: formatReviewFeedback(verdict, decisions.name),
+								display: true,
+							},
+						],
+						continue: true,
+					};
+				}
+			}
+		}
+
 		if (!on(ctx, "contract") || run.contractNudged) return;
 		const contract = latestContract(branchMessages(ctx));
 		if (!contract || openCriteria(contract).length === 0) return;
@@ -1067,6 +1215,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 				`Context packs: ${stats.packs} (${(stats.packBytes / 1024).toFixed(1)} KB)`,
 				`Context masking: ${stats.maskBatches} batch(es), ${(stats.elidedBytes / 1024).toFixed(1)} KB elided (~${Math.round(stats.elidedBytes / 4)} tokens per later request)`,
 				`Escalation: ${config.escalation.model}, ${stats.escalations} call(s), $${stats.escalationCostUsd.toFixed(4)}`,
+				`Decisions: ${decisions ? `${decisions.name}, ${stats.reviews} review(s), ${stats.revisions} revision request(s)` : 'off (install Laya with pip install "laya[serve]", or set MIDNIGHT_SERVER_LAYA_URL to a local laya-serve)'}`,
 				`Language servers: ${lsp?.running.join(", ") || "none running"}`,
 				`Events: ${telemetry.summary()}`,
 			];
@@ -1094,5 +1243,7 @@ function gitSummary(cwd: string): { branch?: string; changed: string[] } | undef
 	if (status.status !== 0 || typeof status.stdout !== "string") return undefined;
 	const [header, ...rest] = status.stdout.split("\0");
 	const branch = /^## (?:No commits yet on )?([^.\s]+)/.exec(header ?? "")?.[1];
-	return { branch, changed: parsePorcelainZ(rest.join("\0")) };
+	// The harness's own config directory is not a change the model should look at.
+	const changed = parsePorcelainZ(rest.join("\0")).filter((path) => !path.startsWith(`${CONFIG_DIR_NAME}/`));
+	return { branch, changed };
 }
