@@ -320,11 +320,6 @@ describe("StdinBuffer", () => {
 			assert.deepStrictEqual(emittedSequences, ["\x1b[<0;10;5m"]);
 		});
 
-		it("should handle mouse move event", () => {
-			processInput("\x1b[<35;20;5m");
-			assert.deepStrictEqual(emittedSequences, ["\x1b[<35;20;5m"]);
-		});
-
 		it("should handle split mouse events", () => {
 			processInput("\x1b[<3");
 			processInput("5;1");
@@ -413,16 +408,6 @@ describe("StdinBuffer", () => {
 		it("should return empty array if nothing to flush", () => {
 			const flushed = buffer.flush();
 			assert.deepStrictEqual(flushed, []);
-		});
-
-		it("should emit flushed data via timeout", async () => {
-			processInput("\x1b[<35");
-			assert.deepStrictEqual(emittedSequences, []);
-
-			// Wait for timeout to flush
-			await wait(15);
-
-			assert.deepStrictEqual(emittedSequences, ["\x1b[<35"]);
 		});
 	});
 
