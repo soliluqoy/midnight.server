@@ -47,10 +47,10 @@ describe("local decisions (Laya)", () => {
 		expect(isLoopbackUrl("http://127.0.0.1:8000")).toBe(true);
 		expect(isLoopbackUrl("http://localhost:8000")).toBe(true);
 		expect(isLoopbackUrl("http://[::1]:8000")).toBe(true);
-		expect(isLoopbackUrl("https://api.typesafe.ai")).toBe(false);
+		expect(isLoopbackUrl("https://decisions.example.com")).toBe(false);
 		expect(isLoopbackUrl("http://10.0.0.5:8000")).toBe(false);
 		expect(isLoopbackUrl("http://127.0.0.1.evil.com")).toBe(false);
-		expect(() => new SystemOneClient({ baseUrl: "https://api.typesafe.ai" })).toThrow(/this machine/);
+		expect(() => new SystemOneClient({ baseUrl: "https://decisions.example.com" })).toThrow(/this machine/);
 		expect(decisionBackendFromEnv({ MIDNIGHT_SERVER_LAYA_URL: "https://example.com" })).toBeUndefined();
 		expect(
 			decisionBackendFromEnv({ MIDNIGHT_SERVER_LAYA: "0", MIDNIGHT_SERVER_LAYA_URL: "http://127.0.0.1:1" }),

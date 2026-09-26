@@ -20,7 +20,7 @@ import { killProcessTree } from "../utils/shell.ts";
  *
  * Local only: requests go to `laya-serve` on the loopback interface, never to a remote host,
  * so the request and the diff do not leave the machine. `laya-serve` speaks the `/v1/systemone`
- * protocol (the same shape as TypeSafe's Jev API):
+ * protocol:
  *   request  { state, model, questions: { name: { type, instructions?, criteria? } } }
  *   response { model, answers: { name: { type: "noul", noul } | { type: "choice", choice,
  *              confidence, probabilities } | { type: "score", score, confidence, legend,
