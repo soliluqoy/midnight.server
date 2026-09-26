@@ -22,6 +22,8 @@ export class CustomEditor extends Editor {
 	public onPasteImage?: () => void;
 	/** Handler for extension-registered shortcuts. Returns true if handled. */
 	public onExtensionShortcut?: (data: string) => boolean;
+	/** Sees input before any other handling, e.g. arrows that pick a side-thread item. Returns true if handled. */
+	public interceptInput?: (data: string) => boolean;
 
 	constructor(tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager, options?: CustomEditorOptions) {
 		super(tui, theme, options);
@@ -86,6 +88,8 @@ export class CustomEditor extends Editor {
 	}
 
 	handleInput(data: string): void {
+		if (this.interceptInput?.(data)) return;
+
 		// Check extension-registered shortcuts first
 		if (this.onExtensionShortcut?.(data)) {
 			return;

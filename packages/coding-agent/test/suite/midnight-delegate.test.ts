@@ -123,8 +123,10 @@ describe("hybrid delegation", () => {
 
 		await harness.session.prompt("review the diff");
 
-		expect(requests).toHaveLength(1);
+		// The answer, then the one-token self-check on the same prefix.
+		expect(requests).toHaveLength(2);
 		expect(requests[0].messages[1].content).toContain('<git op="diff">');
+		expect(requests[1].grammar).toBe('root ::= "yes" | "no"');
 		expect(toolText).toContain("completed");
 	});
 });

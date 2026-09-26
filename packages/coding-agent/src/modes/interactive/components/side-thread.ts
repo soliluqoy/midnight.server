@@ -1,7 +1,7 @@
-import { type Component, Markdown, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { type Component, Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { SideThread, SideThreadModelRef, SideThreadTurn } from "../../../core/side-threads.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
-import { keyText } from "./keybinding-hints.ts";
+import { firstKeyText } from "./keybinding-hints.ts";
 
 const INDENT = "  ";
 const BAR = "│ ";
@@ -32,6 +32,7 @@ export function renderFoldedThread(thread: SideThread, width: number): string[] 
 	if (last?.status === "running") summary = theme.fg("warning", ` answering… ${elapsed(last)}`);
 	else if (last?.status === "error") summary = theme.fg("error", ` ${firstLine(last.error ?? "failed", 50)}`);
 	else if (last?.status === "aborted") summary = theme.fg("muted", " stopped");
+	else if (last?.origin === "drift") summary = theme.fg("warning", ` ${firstLine(last.answer, 80)}`);
 	else if (last) summary = theme.fg("muted", ` "${firstLine(last.question, 30)}" → ${firstLine(last.answer, 50)}`);
 	const sent = thread.sentTurns > 0 ? theme.fg("dim", " · sent to main") : "";
 	const line = `${INDENT}${theme.fg("accent", `▸ ${turnWord(thread.turns.length)}`)}${theme.fg("dim", " · ")}${theme.fg("accent", models)}${summary}${sent}`;
@@ -55,7 +56,8 @@ export function renderOpenThread(thread: SideThread, width: number): string[] {
 	const markdownTheme = getMarkdownTheme();
 	for (const [index, turn] of thread.turns.entries()) {
 		if (index > 0) lines.push(bar);
-		for (const line of wrapTextWithAnsi(`${theme.fg("accent", "you")}  ${turn.question}`, innerWidth)) {
+		const asker = turn.origin === "drift" ? theme.fg("warning", "drift watch") : theme.fg("accent", "you");
+		for (const line of wrapTextWithAnsi(`${asker}  ${turn.question}`, innerWidth)) {
 			lines.push(bar + line);
 		}
 		const who = theme.fg("accent", modelRefLabel(turn.model));
@@ -86,28 +88,65 @@ export function renderOpenThread(thread: SideThread, width: number): string[] {
 	return lines.map((line) => truncateToWidth(line, width));
 }
 
-/** Shown above the editor while it holds a side question instead of a prompt. */
+/** Up/down as one compact hint, e.g. `↑↓`. */
+function arrowsText(): string {
+	const up = firstKeyText("tui.select.up");
+	const down = firstKeyText("tui.select.down");
+	return up === "up" && down === "down" ? "↑↓" : `${up}/${down}`;
+}
+
+/**
+ * Room for the item label in a bar: whatever `kept` (the text that must stay visible) leaves,
+ * less the "..." that truncation adds when more hints follow, between 12 and 28 columns. The
+ * hints matter more than the tail of the label.
+ */
+function labelRoom(width: number, kept: string): number {
+	return Math.max(12, Math.min(28, width - visibleWidth(kept) - 3));
+}
+
+/**
+ * One line above the editor while it holds a side question instead of a prompt. When the line
+ * is too narrow for every hint, whole hints are dropped from the least important (`rank`) up,
+ * and the item label takes what is left. Escape (back to the prompt) is left out as the one
+ * key everyone tries first.
+ */
 export class ThreadComposerBar implements Component {
 	anchorLabel = "";
 	modelLabel = "";
 	options = 1;
 
 	render(width: number): string[] {
-		const cycle = ` (${keyText("app.model.cycleForward")} to choose model${this.options > 1 ? `, ${keyText("app.agentMode.toggle")} to cycle` : ""})`;
-		const line = theme.fg("accent", `↳ asking about: ${this.anchorLabel}`);
-		const hint =
-			`${theme.fg("muted", "model:")} ${theme.bold(this.modelLabel)}` +
-			theme.fg(
-				"dim",
-				`${cycle} · ${keyText("tui.input.submit")} send · ${keyText("app.interrupt")} back to your prompt (draft kept)`,
-			);
-		return [truncateToWidth(line, width), truncateToWidth(hint, width)];
+		const cycleKeys = [firstKeyText("app.agentMode.toggle"), firstKeyText("app.thinking.cycle")].filter(Boolean);
+		const searchKey = firstKeyText("app.model.select");
+		const hints = [
+			{ text: `${arrowsText()} item`, rank: 1 },
+			...(this.options > 1 && cycleKeys.length > 0 ? [{ text: `${cycleKeys.join("/")} model`, rank: 0 }] : []),
+			...(searchKey ? [{ text: `${searchKey} search`, rank: 3 }] : []),
+			{ text: `${firstKeyText("app.thread.select")} threads`, rank: 2 },
+		];
+		const head = `↳  · ${this.modelLabel}`;
+		let used = visibleWidth(head) + 12;
+		const kept = new Set<(typeof hints)[number]>();
+		for (const hint of [...hints].sort((a, b) => a.rank - b.rank)) {
+			const cost = visibleWidth(hint.text) + 3;
+			if (used + cost > width) break;
+			kept.add(hint);
+			used += cost;
+		}
+		const shown = hints.filter((hint) => kept.has(hint)).map((hint) => ` · ${hint.text}`);
+		const labelWidth = Math.max(12, Math.min(28, width - visibleWidth(head) - visibleWidth(shown.join(""))));
+		const line =
+			theme.fg("accent", `↳ ${firstLine(this.anchorLabel, labelWidth)}`) +
+			theme.fg("dim", " · ") +
+			theme.bold(this.modelLabel) +
+			theme.fg("dim", shown.join(""));
+		return [truncateToWidth(line, width)];
 	}
 
 	invalidate(): void {}
 }
 
-/** Key hints shown above the editor during thread selection. */
+/** One line of key hints above the editor while managing the selected item's thread. */
 export class ThreadSelectionBar implements Component {
 	selectedLabel = "";
 	hasThread = false;
@@ -120,21 +159,25 @@ export class ThreadSelectionBar implements Component {
 	}
 
 	render(width: number): string[] {
-		const parts = [
-			`${keyText("tui.select.up")}/${keyText("tui.select.down")} move`,
-			`${keyText("app.thread.ask")} ask`,
+		const hints = [
+			`${firstKeyText("app.thread.ask")} ask`,
 			...(this.hasThread
-				? [
-						`${keyText("app.thread.toggle")} open/fold`,
-						`${keyText("app.thread.sendToMain")} send to main`,
-						`${keyText("app.thread.delete")} delete`,
-					]
+				? [`${firstKeyText("app.thread.sendToMain")} send`, `${firstKeyText("app.thread.branch")} branch`]
+				: [`${firstKeyText("app.thread.branch")} branch`]),
+			...(this.running ? [`${firstKeyText("app.thread.stop")} stop`] : []),
+			...(this.hasThread
+				? [`${firstKeyText("app.thread.toggle")} fold`, `${firstKeyText("app.thread.delete")} delete`]
 				: []),
-			...(this.running ? [`${keyText("app.thread.stop")} stop`] : []),
-			`${keyText("tui.select.cancel")} back`,
+			arrowsText(),
+			`${firstKeyText("tui.select.cancel")} back`,
 		];
-		const title = `${theme.fg("accent", theme.bold("THREAD"))} ${theme.fg("text", this.selectedLabel)}`;
-		return [truncateToWidth(title, width), truncateToWidth(theme.fg("dim", parts.join(" · ")), width)];
+		// Keep at least ask, send and branch (the first three hints) visible.
+		const kept = `THREAD  · ${hints.slice(0, 3).join(" · ")}`;
+		const line =
+			theme.fg("accent", theme.bold("THREAD ")) +
+			theme.fg("text", firstLine(this.selectedLabel, labelRoom(width, kept))) +
+			theme.fg("dim", ` · ${hints.join(" · ")}`);
+		return [truncateToWidth(line, width)];
 	}
 
 	invalidate(): void {}

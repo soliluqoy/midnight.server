@@ -1,0 +1,6 @@
+{
+	"description": "Visible bug, visible test. Baseline sanity task.",
+	"checks": [{ "name": "unit", "command": ["node", "test.js"], "when": ["*.js"] }],
+	"protect": ["test.js"],
+	"grade": ["node", "grade.js"]
+}

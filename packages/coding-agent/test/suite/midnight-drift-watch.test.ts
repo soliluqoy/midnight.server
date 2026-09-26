@@ -1,6 +1,7 @@
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { emitSessionShutdownEvent } from "../../src/core/extensions/runner.ts";
+import { sideThreadStoreFor } from "../../src/core/side-threads.ts";
 import { createDriftWatchExtension, type DriftWatchSettings } from "../../src/midnight/drift-watch.ts";
 import type { ChatRequest, ChatResult, LocalEngine } from "../../src/midnight/engine.ts";
 import type { EngineManager } from "../../src/midnight/engine-manager.ts";
@@ -51,11 +52,14 @@ const settings: DriftWatchSettings = {
 	nudgeConfidence: 0.5,
 };
 
-function driftMessage(harness: Harness) {
-	return harness.session.messages.find(
-		(message): message is Extract<typeof message, { role: "custom" }> =>
-			message.role === "custom" && message.customType === "midnight_drift_watch",
-	);
+/** The drift finding, as a side-thread turn; findings never enter the main session. */
+function driftFinding(harness: Harness) {
+	expect(harness.session.messages.some((message) => message.role === "custom")).toBe(false);
+	for (const thread of sideThreadStoreFor(harness.sessionManager).all()) {
+		const turn = thread.turns.find((candidate) => candidate.origin === "drift");
+		if (turn) return { thread, turn };
+	}
+	return undefined;
 }
 
 describe("drift watch", () => {
@@ -95,10 +99,10 @@ describe("drift watch", () => {
 		expect(requests[0].grammar).toContain('"on_track"');
 		expect(requests[0].topLogprobs).toBeGreaterThan(0);
 		expect(requests[0].jsonSchema).toBeUndefined();
-		expect(driftMessage(harness)).toBeUndefined();
+		expect(driftFinding(harness)).toBeUndefined();
 	});
 
-	it("explains a confident drift and injects a reminder on the following turn", async () => {
+	it("explains a confident drift as a side thread on the newest item, without telling the agent", async () => {
 		const { manager, requests } = scriptedManager(
 			gate(0.1, 0.7, 0.2),
 			verdict({ status: "drifting", reason: "lost the original constraint", reminder: "stay on the goal" }),
@@ -108,9 +112,15 @@ describe("drift watch", () => {
 		expect(requests).toHaveLength(2);
 		const schema = requests[1].jsonSchema as { properties: { status: { enum: string[] } } };
 		expect(schema.properties.status.enum).toEqual(["drifting"]);
-		const drift = driftMessage(harness);
-		expect(drift?.details).toMatchObject({ status: "drifting", reminder: "stay on the goal" });
-		expect((drift?.details as { confidence?: { drifting: number } }).confidence?.drifting).toBeCloseTo(0.7);
+		const finding = driftFinding(harness);
+		// The check ran after "step two"; its reply is the newest item.
+		const replies = harness.session.messages.filter((message) => message.role === "assistant");
+		expect(finding?.thread.anchorId).toBe(`assistant:${replies[1]?.timestamp}`);
+		expect(finding?.turn).toMatchObject({ status: "done", model: { provider: "midnight", kind: "local" } });
+		expect(finding?.turn.answer).toBe(
+			"[check: drifting] (90% not on track) lost the original constraint\n\nReminder: stay on the goal",
+		);
+		expect(finding?.thread.sentTurns).toBe(0);
 	});
 
 	it("keeps the gate and explain prompts on a shared cacheable prefix", async () => {
@@ -133,17 +143,16 @@ describe("drift watch", () => {
 		const harness = await runTwoTurnsThenOne(manager);
 
 		expect(requests).toHaveLength(1);
-		expect(driftMessage(harness)).toBeUndefined();
+		expect(driftFinding(harness)).toBeUndefined();
 	});
 
 	it("still nudges with a generic reason when the explain call fails", async () => {
 		const { manager } = scriptedManager(gate(0.1, 0.1, 0.8), { content: "not json" });
 		const harness = await runTwoTurnsThenOne(manager);
 
-		expect(driftMessage(harness)?.details).toMatchObject({
-			status: "off_task",
-			reason: "The local check is 90% confident the assistant is not on track.",
-		});
+		expect(driftFinding(harness)?.turn.answer).toContain(
+			"[check: off task] (90% not on track) The local check is 90% confident the assistant is not on track.",
+		);
 	});
 
 	it("falls back to a single full check when the engine returns no logprobs", async () => {
@@ -156,8 +165,9 @@ describe("drift watch", () => {
 		expect(requests).toHaveLength(2);
 		const schema = requests[1].jsonSchema as { properties: { status: { enum: string[] } } };
 		expect(schema.properties.status.enum).toEqual(["on_track", "drifting", "off_task"]);
-		expect(driftMessage(harness)?.details).toMatchObject({ status: "drifting", reminder: "stay on the goal" });
-		expect((driftMessage(harness)?.details as { confidence?: unknown }).confidence).toBeUndefined();
+		expect(driftFinding(harness)?.turn.answer).toBe(
+			"[check: drifting] lost the original constraint\n\nReminder: stay on the goal",
+		);
 	});
 
 	it("drops a check cancelled by session shutdown without touching the stale ctx", async () => {

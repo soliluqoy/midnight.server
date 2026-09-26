@@ -42,6 +42,7 @@ export interface AppKeybindings {
 	"app.thread.sendToMain": true;
 	"app.thread.delete": true;
 	"app.thread.stop": true;
+	"app.thread.branch": true;
 	"app.session.new": true;
 	"app.session.tree": true;
 	"app.session.fork": true;
@@ -50,6 +51,7 @@ export interface AppKeybindings {
 	"app.tree.unfoldOrDown": true;
 	"app.tree.editLabel": true;
 	"app.tree.toggleLabelTimestamp": true;
+	"app.tree.newSession": true;
 	"app.session.togglePath": true;
 	"app.session.toggleSort": true;
 	"app.session.rename": true;
@@ -174,7 +176,7 @@ export const KEYBINDINGS = {
 	"app.commandPalette": { defaultKeys: "alt+x", description: "Open command palette" },
 	"app.thread.select": {
 		defaultKeys: "alt+t",
-		description: "Select a transcript item to ask a side question about, or leave selection",
+		description: "Ask a side question about the newest transcript item; again to manage its thread; again to leave",
 	},
 	"app.thread.ask": { defaultKeys: "enter", description: "Side threads: ask about the selected item" },
 	"app.thread.toggle": { defaultKeys: "space", description: "Side threads: open or fold the selected item's thread" },
@@ -183,6 +185,10 @@ export const KEYBINDINGS = {
 		description: "Side threads: send the selected thread to the main agent's context",
 	},
 	"app.thread.delete": { defaultKeys: "d", description: "Side threads: delete the selected thread" },
+	"app.thread.branch": {
+		defaultKeys: "b",
+		description: "Side threads: branch the session from before the selected item, with the thread in the editor",
+	},
 	"app.thread.stop": { defaultKeys: "x", description: "Side threads: stop the selected thread's running answer" },
 	"app.session.new": { defaultKeys: [], description: "Start a new session" },
 	"app.session.tree": { defaultKeys: [], description: "Open session tree" },
@@ -203,6 +209,10 @@ export const KEYBINDINGS = {
 	"app.tree.toggleLabelTimestamp": {
 		defaultKeys: "shift+t",
 		description: "Toggle tree label timestamps",
+	},
+	"app.tree.newSession": {
+		defaultKeys: "shift+n",
+		description: "Start a new session from the selected tree entry (fork before a user message, clone at others)",
 	},
 	"app.session.togglePath": {
 		defaultKeys: "ctrl+p",

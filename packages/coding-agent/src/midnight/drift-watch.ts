@@ -4,9 +4,11 @@ import { estimateContextTokens } from "../core/compaction/compaction.ts";
 import { serializeConversation } from "../core/compaction/utils.ts";
 import type { ExtensionAPI, ExtensionFactory } from "../core/extensions/types.ts";
 import { convertToLlm } from "../core/messages.ts";
+import { latestAnchor, sideThreadStoreFor } from "../core/side-threads.ts";
 import type { ChatRequest, ChatResult, TokenLogprob } from "./engine.ts";
 import { type EngineManager, LocalSetupError, LocalStoppedError } from "./engine-manager.ts";
-import { LOCAL_PROVIDER_ID } from "./pins.ts";
+import { labelProbabilities, runLabelGate } from "./gate.ts";
+import { LOCAL_MODEL_ID, LOCAL_PROVIDER_ID } from "./pins.ts";
 import { type DriftWatchState, updateMidnightStatus } from "./status.ts";
 
 /** Minimal engine surface this module needs; mirrors helper.ts's HelperEngine. */
@@ -20,9 +22,9 @@ export interface DriftWatchSettings {
 	turnInterval: number;
 	/** Run a check once context has grown by this many tokens since the last one. */
 	tokenInterval: number;
-	/** Suppress a new visible nudge until this many turns have passed since the last one fired. */
+	/** Suppress a new finding until this many turns have passed since the last one. */
 	cooldownTurns: number;
-	/** Nudge only when the decision gate puts at least this probability (0-1) on not being on track. */
+	/** Report only when the decision gate puts at least this probability (0-1) on not being on track. */
 	nudgeConfidence: number;
 }
 
@@ -65,7 +67,7 @@ type DriftStatus = (typeof DRIFT_STATUSES)[number];
 
 type DriftProbabilities = Record<DriftStatus, number>;
 
-interface DriftVerdict {
+export interface DriftVerdict {
 	status: DriftStatus;
 	reason: string;
 	reminder?: string;
@@ -73,7 +75,7 @@ interface DriftVerdict {
 	confidence?: DriftProbabilities;
 }
 
-/** Tag shown on drift nudges, e.g. `[check: off task]`. */
+/** Tag shown on drift findings, e.g. `[check: off task]`. */
 function checkTag(status: DriftStatus): string {
 	return `[check: ${status.replace("_", " ")}]`;
 }
@@ -129,11 +131,6 @@ const REMINDER_RULE =
 
 const GATE_QUESTION = `Judge whether the assistant above is still on track. Answer with only the status: ${DRIFT_STATUSES.join(", ")}.`;
 
-const GATE_GRAMMAR = `root ::= ${DRIFT_STATUSES.map((status) => JSON.stringify(status)).join(" | ")}`;
-
-/** Alternatives requested for the gate token; the three labels sit well inside this. */
-const GATE_TOP_LOGPROBS = 20;
-
 function driftMessages(transcript: string, question: string): ChatRequest["messages"] {
 	return [
 		{ role: "system", content: DRIFT_SYSTEM_PROMPT },
@@ -148,15 +145,7 @@ function driftMessages(transcript: string, question: string): ChatRequest["messa
  * and the remainder renormalized.
  */
 export function gateProbabilities(top: TokenLogprob["top"]): DriftProbabilities | undefined {
-	const mass: DriftProbabilities = { on_track: 0, drifting: 0, off_task: 0 };
-	for (const alternative of top) {
-		if (!alternative.token) continue;
-		const matches = DRIFT_STATUSES.filter((status) => status.startsWith(alternative.token));
-		if (matches.length === 1) mass[matches[0]] += Math.exp(alternative.logprob);
-	}
-	const total = mass.on_track + mass.drifting + mass.off_task;
-	if (!(total > 0)) return undefined;
-	return { on_track: mass.on_track / total, drifting: mass.drifting / total, off_task: mass.off_task / total };
+	return labelProbabilities(top, DRIFT_STATUSES);
 }
 
 /**
@@ -168,17 +157,7 @@ export async function runDriftGate(
 	transcript: string,
 	signal: AbortSignal,
 ): Promise<DriftProbabilities | undefined> {
-	const result = await engine.chat({
-		messages: driftMessages(transcript, GATE_QUESTION),
-		maxTokens: 8,
-		temperature: 0,
-		enableThinking: false,
-		grammar: GATE_GRAMMAR,
-		topLogprobs: GATE_TOP_LOGPROBS,
-		signal,
-	});
-	const first = result.logprobs?.[0];
-	return first ? gateProbabilities(first.top) : undefined;
+	return runLabelGate(engine, driftMessages(transcript, GATE_QUESTION), DRIFT_STATUSES, signal);
 }
 
 /**
@@ -260,9 +239,23 @@ async function judgeDrift(
 	};
 }
 
+/** The question a drift finding answers in its side thread. */
+export const DRIFT_QUESTION = "Drift check: is the agent still on track?";
+
+/** Side-thread answer for a finding; `m` sends it to the agent as the reminder. */
+export function driftAnswer(verdict: DriftVerdict): string {
+	const reminder = verdict.reminder ?? verdict.reason;
+	const confidence = verdict.confidence
+		? ` (${Math.round((1 - verdict.confidence.on_track) * 100)}% not on track)`
+		: "";
+	return `${checkTag(verdict.status)}${confidence} ${verdict.reason}\n\nReminder: ${reminder}`;
+}
+
 /**
  * Periodically ask the local MiniCPM engine whether the parent model (in `--hybrid`
- * sessions) is still on track, and inject a corrective reminder only when it isn't.
+ * sessions) is still on track. When it isn't, the finding is added as a side thread on
+ * the newest transcript item; the agent sees it only if the user sends it (`m`) or
+ * branches from it (`b`), so a false positive from the 2B checker never steers the agent.
  * Runs in the background: a `turn_end` handler that awaited the check directly would
  * block the agent loop for the duration of a CPU inference call (10-30s, see
  * docs/benchmarks/cpu-i7-8650u.md).
@@ -274,7 +267,7 @@ export function createDriftWatchExtension(manager: EngineManager, settings: Drif
 		let latestMessages: AgentMessage[] = [];
 		let turnsSinceCheck = 0;
 		let tokensAtLastCheck = 0;
-		let turnsSinceNudge = settings.cooldownTurns;
+		let turnsSinceFinding = settings.cooldownTurns;
 		let checking = false;
 		let unavailable = false;
 		let controller: AbortController | undefined;
@@ -291,6 +284,7 @@ export function createDriftWatchExtension(manager: EngineManager, settings: Drif
 			});
 		publish();
 
+		// Sessions from before findings became side threads contain these messages.
 		pi.registerMessageRenderer("midnight_drift_watch", (message, { outputPad }, theme) => {
 			const details = message.details as DriftVerdict | undefined;
 			const box = new Box(outputPad, 1, (t) => theme.bg("customMessageBg", t));
@@ -313,7 +307,7 @@ export function createDriftWatchExtension(manager: EngineManager, settings: Drif
 			// Stopped with /local-stop: skip checks, and do not count turns toward one.
 			if (unavailable || checking || manager.isDisabled || ctx.model?.provider === LOCAL_PROVIDER_ID) return;
 			turnsSinceCheck++;
-			turnsSinceNudge++;
+			turnsSinceFinding++;
 			const currentTokens = estimateContextTokens(latestMessages).tokens;
 			const dueByTurns = turnsSinceCheck >= settings.turnInterval;
 			const dueByTokens = currentTokens - tokensAtLastCheck >= settings.tokenInterval;
@@ -325,6 +319,12 @@ export function createDriftWatchExtension(manager: EngineManager, settings: Drif
 			tokensAtLastCheck = currentTokens;
 
 			const transcript = serializeConversation(convertToLlm(latestMessages));
+			// Resolved now: by the time the check finishes the agent may have moved on.
+			const anchor = latestAnchor(
+				ctx.sessionManager.getBranch().flatMap((entry) => (entry.type === "message" ? [entry.message] : [])),
+			);
+			const store = sideThreadStoreFor(ctx.sessionManager);
+			const startedAt = Date.now();
 			checking = true;
 			publish();
 			controller = new AbortController();
@@ -335,24 +335,18 @@ export function createDriftWatchExtension(manager: EngineManager, settings: Drif
 					manager.touch();
 					const verdict = await judgeDrift(engine, transcript, settings.nudgeConfidence, signal);
 					lastVerdict = verdict?.status ?? lastVerdict;
-					if (!verdict || verdict.status === "on_track") return;
-					if (turnsSinceNudge < settings.cooldownTurns) return;
-					turnsSinceNudge = 0;
-					const reminder = verdict.reminder ?? verdict.reason;
-					pi.sendMessage(
-						{
-							customType: "midnight_drift_watch",
-							content: [
-								{
-									type: "text",
-									text: `${checkTag(verdict.status)} ${verdict.reason}\n\nReminder: ${reminder}`,
-								},
-							],
-							display: true,
-							details: verdict,
-						},
-						{ deliverAs: "nextTurn" },
-					);
+					if (!verdict || verdict.status === "on_track" || !anchor) return;
+					if (turnsSinceFinding < settings.cooldownTurns) return;
+					turnsSinceFinding = 0;
+					store.appendTurn(anchor, {
+						question: DRIFT_QUESTION,
+						answer: driftAnswer(verdict),
+						model: { provider: LOCAL_PROVIDER_ID, id: LOCAL_MODEL_ID, kind: "local" },
+						status: "done",
+						startedAt,
+						finishedAt: Date.now(),
+						origin: "drift",
+					});
 				} catch (error) {
 					// Aborted by session_shutdown: ctx is stale by then, and touching it throws
 					// from this detached task, which crashes the process.

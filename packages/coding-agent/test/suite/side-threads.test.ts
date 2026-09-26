@@ -1,8 +1,10 @@
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { type Component, setKeybindings } from "@earendil-works/pi-tui";
+import { stripVTControlCharacters } from "node:util";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { type Component, setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../../src/core/keybindings.ts";
 import { type ThreadAnchor, toolCallAnchor } from "../../src/core/side-threads.ts";
+import { ThreadComposerBar, ThreadSelectionBar } from "../../src/modes/interactive/components/side-thread.ts";
 import { TranscriptContainer } from "../../src/modes/interactive/components/transcript-container.ts";
 import { SideThreadController, type SideThreadHost } from "../../src/modes/interactive/side-thread-controller.ts";
 import { initTheme } from "../../src/modes/interactive/theme/theme.ts";
@@ -30,7 +32,12 @@ class FakeItem implements Component {
 
 function setup(harness: Harness) {
 	const transcript = new TranscriptContainer();
-	const state = { editorText: "", bar: undefined as Component | undefined, focus: undefined as Component | undefined };
+	const state = {
+		editorText: "",
+		bar: undefined as Component | undefined,
+		focus: undefined as Component | undefined,
+		trees: [] as Array<{ entryId: string; note: string | undefined }>,
+	};
 	const statuses: string[] = [];
 	const host: SideThreadHost = {
 		session: () => harness.session,
@@ -49,6 +56,7 @@ function setup(harness: Harness) {
 		reveal: () => {},
 		showStatus: (message) => statuses.push(message),
 		setRunningStatus: () => {},
+		openTree: (entryId, note) => state.trees.push({ entryId, note }),
 	};
 	const controller = new SideThreadController(host);
 	transcript.decorations = controller;
@@ -150,30 +158,35 @@ describe("side threads", () => {
 		expect(texts).toEqual(["main task", "main answer"]);
 	});
 
-	it("selects items, keeps the main draft while composing, and sends to main only on request", async () => {
+	it("asks from alt+t directly, keeps the main draft, and sends to main only on request", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
 		const { transcript, controller, state, press } = setup(harness);
 		harness.setResponses([fauxAssistantMessage("side answer")]);
 		state.editorText = "my unfinished prompt";
 
+		// alt+t: the question box opens on the newest item; arrows in the empty box pick another.
 		controller.toggleSelection();
-		expect(controller.isSelecting()).toBe(true);
-		expect(controller.selectedAnchorId()).toBe("tool:call-2");
-		press("\x1b[A");
-		expect(controller.selectedAnchorId()).toBe("tool:call-1");
-		expect(transcript.render(80)[0]).toContain("▌ item bash npm run check");
-
-		press("\r");
 		expect(controller.isComposing()).toBe(true);
 		expect(state.editorText).toBe("");
+		expect(controller.selectedAnchorId()).toBe("tool:call-2");
+		expect(controller.handleEditorInput("\x1b[A")).toBe(true);
+		expect(controller.selectedAnchorId()).toBe("tool:call-1");
+		expect(transcript.render(80)[0]).toContain("▌ item bash npm run check");
+		state.editorText = "w";
+		expect(controller.handleEditorInput("\x1b[B")).toBe(false);
 		controller.submitComposer("what failed?");
 		expect(controller.isComposing()).toBe(false);
 		expect(state.editorText).toBe("my unfinished prompt");
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(controller.threads()[0]?.turns[0]?.answer).toBe("side answer");
 
+		// alt+t twice: question box, then thread management on the same item.
 		controller.toggleSelection();
+		controller.toggleSelection();
+		expect(controller.isSelecting()).toBe(true);
+		expect(state.editorText).toBe("my unfinished prompt");
+		press("\x1b[A");
 		expect(controller.selectedAnchorId()).toBe("tool:call-1");
 		press(" ");
 		expect(transcript.render(80).join("\n")).toContain("▸ 1 side question");
@@ -191,17 +204,70 @@ describe("side threads", () => {
 		expect(state.bar).toBeUndefined();
 	});
 
-	it("restores the draft and returns to selection when a question is cancelled", async () => {
+	it("restores the draft on cancel, returning to management only when the question started there", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
 		const { controller, state, press } = setup(harness);
 		state.editorText = "draft";
+		controller.toggleSelection();
+		state.editorText = "half a question";
+		controller.cancelComposer();
+		expect(state.editorText).toBe("draft");
+		expect(controller.isSelecting()).toBe(false);
+		expect(state.bar).toBeUndefined();
+
+		controller.toggleSelection();
 		controller.toggleSelection();
 		press("\r");
 		state.editorText = "half a question";
 		controller.cancelComposer();
 		expect(state.editorText).toBe("draft");
 		expect(controller.isSelecting()).toBe(true);
+	});
+
+	it("keeps a half-typed question while alt+t switches to management and back", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		const { controller, state, press } = setup(harness);
+		state.editorText = "draft";
+		controller.toggleSelection();
+		state.editorText = "why did it";
+		controller.toggleSelection();
+		expect(controller.isSelecting()).toBe(true);
+		expect(state.editorText).toBe("draft");
+		press("\r");
+		expect(state.editorText).toBe("why did it");
+	});
+
+	it("opens the tree before the selected item with the thread as the editor note", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		const { controller, state, statuses, lint, press } = setup(harness);
+		const userId = harness.sessionManager.appendMessage({ role: "user", content: "fix lint", timestamp: 1 });
+		harness.sessionManager.appendMessage(
+			fauxAssistantMessage([fauxToolCall("bash", { command: "npm run check" }, { id: "call-1" })]),
+		);
+
+		// call-2 is only in the transcript, not on the session branch.
+		controller.toggleSelection();
+		controller.toggleSelection();
+		press("b");
+		expect(statuses).toContain("Nothing to branch from before this item");
+		expect(controller.isSelecting()).toBe(true);
+
+		press("\x1b[A");
+		press("b");
+		expect(state.trees).toEqual([{ entryId: userId, note: undefined }]);
+		expect(controller.isSelecting()).toBe(false);
+
+		harness.setResponses([fauxAssistantMessage("Run biome with --write instead.")]);
+		await controller.ask(lint.anchor, "how do I fix it?", controller.resolveModel("same")!);
+		controller.toggleSelection();
+		controller.handleEditorInput("\x1b[A");
+		controller.toggleSelection();
+		press("b");
+		expect(state.trees[1]?.entryId).toBe(userId);
+		expect(state.trees[1]?.note).toContain("Q: how do I fix it?\nA: Run biome with --write instead.");
 	});
 
 	it("folds a thread on click and selects an item on alt+click", async () => {
@@ -248,5 +314,40 @@ describe("side threads", () => {
 		await controller.ask(lint.anchor, "why?", controller.resolveModel("same")!);
 		expect(controller.threads()[0]?.turns[0]).toMatchObject({ status: "error", error: "rate limited" });
 		expect(transcript.render(80).join("\n")).toContain("error: rate limited");
+	});
+});
+
+describe("side thread bars", () => {
+	const plain = (lines: string[]) => stripVTControlCharacters(lines.join("\n"));
+
+	it("shows the model keys and drops whole hints, least important first, when narrow", () => {
+		const bar = new ThreadComposerBar();
+		bar.anchorLabel = 'reply "Done: I disabled the useConst rule and moved on to the logger"';
+		bar.modelLabel = "claude-sonnet-5 (main)";
+		bar.options = 3;
+		expect(plain(bar.render(140))).toContain(
+			"claude-sonnet-5 (main) · ↑↓ item · tab/shift+tab model · ctrl+l search · alt+t threads",
+		);
+
+		const narrow = plain(bar.render(80));
+		expect(narrow).toContain("claude-sonnet-5 (main) · ↑↓ item · tab/shift+tab model");
+		expect(narrow).not.toContain("search");
+		expect(narrow).not.toContain("...");
+		expect(visibleWidth(narrow)).toBeLessThanOrEqual(80);
+
+		// One model: nothing to cycle, but searching still helps.
+		bar.options = 1;
+		expect(plain(bar.render(140))).not.toContain("tab/shift+tab");
+		expect(plain(bar.render(140))).toContain("ctrl+l search");
+	});
+
+	it("keeps ask, send and branch visible on a narrow terminal and cuts the rarer keys", () => {
+		const bar = new ThreadSelectionBar();
+		bar.selectedLabel = 'bash echo "lint: useConst footer.ts:160"';
+		bar.hasThread = true;
+		const text = plain(bar.render(80));
+		expect(text).toContain("enter ask · m send · b branch");
+		expect(text).not.toContain("escape/ctrl+c");
+		expect(plain(bar.render(60))).toContain("enter ask · m send · b branch");
 	});
 });

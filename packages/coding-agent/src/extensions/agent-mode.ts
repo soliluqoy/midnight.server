@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "../core/extensions/types.ts";
 import { getMidnightStatus } from "../midnight/status.ts";
 
 /** Tools that cannot change files or run commands. Extension tools are excluded: their side effects are unknown. */
-export const PLAN_MODE_TOOLS: readonly string[] = ["read", "grep", "find", "ls", "delegate_local"];
+export const PLAN_MODE_TOOLS: readonly string[] = ["read", "grep", "find", "ls", "delegate_local", "task"];
 
 const PLAN_MODE_SECTION = [
 	"Plan mode is on. You can read and search the workspace but cannot edit files or run commands.",

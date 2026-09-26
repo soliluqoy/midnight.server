@@ -35,6 +35,8 @@ const TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES = [
 	"themes",
 	"SYSTEM.md",
 	"APPEND_SYSTEM.md",
+	// Its checks are commands the harness runs after the agent edits files.
+	"harness.json",
 ] as const;
 
 function normalizeCwd(cwd: string): string {

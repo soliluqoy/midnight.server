@@ -1,0 +1,6 @@
+{
+	"description": "Underspecified ('standard CSV'): doubled quotes and empty fields are implied, not stated.",
+	"checks": [{ "name": "unit", "command": ["node", "test.js"], "when": ["*.js"] }],
+	"protect": ["test.js"],
+	"grade": ["node", "grade.js"]
+}

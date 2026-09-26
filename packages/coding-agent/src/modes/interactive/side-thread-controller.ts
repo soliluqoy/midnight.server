@@ -3,14 +3,16 @@ import { type Component, getKeybindings } from "@earendil-works/pi-tui";
 import type { AgentSession } from "../../core/agent-session.ts";
 import {
 	answerText,
+	branchPointFor,
 	buildSideThreadRequest,
+	formatThreadForBranch,
 	formatThreadForMain,
 	runSideThreadTurn,
 	type SideThread,
 	type SideThreadModelKind,
-	SideThreadStore,
+	type SideThreadStore,
 	type SideThreadTurn,
-	sideThreadFileFor,
+	sideThreadStoreFor,
 	type ThreadAnchor,
 } from "../../core/side-threads.ts";
 import { LOCAL_MODEL_ID, LOCAL_PROVIDER_ID, MODEL_LOCK } from "../../midnight/pins.ts";
@@ -40,6 +42,8 @@ export interface SideThreadHost {
 	showStatus(message: string): void;
 	/** Footer text while answers stream, or undefined when none are running. */
 	setRunningStatus(text: string | undefined): void;
+	/** Open the session tree on `entryId`; after navigating, add `note` to the editor. */
+	openTree(entryId: string, note: string | undefined): void;
 }
 
 export interface SideThreadModelChoice {
@@ -69,6 +73,7 @@ const RENDER_THROTTLE_MS = 50;
 export class SideThreadController implements TranscriptDecorations {
 	private readonly host: SideThreadHost;
 	private store: SideThreadStore;
+	private unsubscribe: () => void;
 	private mode: Mode = { type: "idle" };
 	private selectedId: string | undefined;
 	private readonly open = new Set<string>();
@@ -77,12 +82,15 @@ export class SideThreadController implements TranscriptDecorations {
 	private readonly selectionBar = new ThreadSelectionBar();
 	private readonly composerBar = new ThreadComposerBar();
 	private lastChoice: { provider: string; id: string } | undefined;
+	/** A half-typed question kept while alt+t switches from the question box to thread management. */
+	private questionDraft: { anchorId: string; text: string } | undefined;
 	private tickTimer: NodeJS.Timeout | undefined;
 	private renderTimer: NodeJS.Timeout | undefined;
 
 	constructor(host: SideThreadHost) {
 		this.host = host;
-		this.store = new SideThreadStore(sideThreadFileFor(host.session().sessionManager.getSessionFile()));
+		this.store = sideThreadStoreFor(host.session().sessionManager);
+		this.unsubscribe = this.store.subscribe(() => this.onStoreChange());
 		this.selectionBar.onInput = (data) => this.handleSelectionInput(data);
 	}
 
@@ -105,15 +113,23 @@ export class SideThreadController implements TranscriptDecorations {
 		return this.running.size;
 	}
 
-	/** Reload threads when the session file changed (new, resume, fork). */
+	/** Switch stores when the session changed (new, resume, fork). */
 	private syncStore(): void {
-		const file = sideThreadFileFor(this.host.session().sessionManager.getSessionFile());
-		if (file === this.store.file) return;
-		this.store = new SideThreadStore(file);
+		const store = sideThreadStoreFor(this.host.session().sessionManager);
+		if (store === this.store) return;
+		this.unsubscribe();
+		this.store = store;
+		this.unsubscribe = store.subscribe(() => this.onStoreChange());
 		this.open.clear();
 		this.renderCache.clear();
 		this.selectedId = undefined;
 		if (this.mode.type !== "idle") this.exitToIdle();
+	}
+
+	/** Another writer (drift watch) or this controller saved: redraw the threads. */
+	private onStoreChange(): void {
+		if (this.mode.type === "selecting") this.updateSelectionBar();
+		this.host.requestRender();
 	}
 
 	// ------------------------------------------------------- transcript hooks
@@ -121,6 +137,7 @@ export class SideThreadController implements TranscriptDecorations {
 	/** Called once per transcript render, before `renderBelow`. */
 	selectedAnchorId(): string | undefined {
 		this.syncStore();
+		if (this.mode.type === "composing") return this.mode.anchor.id;
 		return this.mode.type === "selecting" ? this.selectedId : undefined;
 	}
 
@@ -143,7 +160,10 @@ export class SideThreadController implements TranscriptDecorations {
 	}
 
 	onAnchorClick(anchorId: string): void {
-		if (this.mode.type === "composing") return;
+		if (this.mode.type === "composing") {
+			this.moveComposerTo(anchorId);
+			return;
+		}
 		if (this.mode.type !== "selecting") this.enterSelection();
 		this.select(anchorId);
 	}
@@ -155,14 +175,63 @@ export class SideThreadController implements TranscriptDecorations {
 
 	// -------------------------------------------------------------- selection
 
-	/** alt+t: enter selection on the newest item, or leave it. */
+	/**
+	 * alt+t: open the question box on the newest item; from there, switch to thread management
+	 * (fold, send, branch, delete) on the same item; from management, leave.
+	 */
 	toggleSelection(): void {
 		if (this.mode.type === "selecting") {
 			this.exitToIdle();
 			return;
 		}
-		if (this.mode.type === "composing") return;
-		this.enterSelection();
+		if (this.mode.type === "composing") {
+			const { anchor, draft } = this.mode;
+			const text = this.host.getEditorText();
+			this.questionDraft = text.trim() ? { anchorId: anchor.id, text } : undefined;
+			this.selectedId = anchor.id;
+			this.mode = { type: "idle" };
+			this.host.setEditorText(draft);
+			if (!this.enterSelection()) this.exitToIdle();
+			return;
+		}
+		const anchor = this.latestAnchor();
+		if (!anchor) {
+			this.host.showStatus("Nothing to ask about yet: side threads attach to tool calls and replies");
+			return;
+		}
+		this.startComposer(anchor);
+	}
+
+	/** Arrows in an empty question box pick another item. Returns true when the key was used. */
+	handleEditorInput(data: string): boolean {
+		if (this.mode.type !== "composing" || this.host.getEditorText() !== "") return false;
+		const keys = getKeybindings();
+		const delta = keys.matches(data, "tui.select.up")
+			? -1
+			: keys.matches(data, "tui.select.down")
+				? 1
+				: keys.matches(data, "tui.select.pageUp")
+					? -5
+					: keys.matches(data, "tui.select.pageDown")
+						? 5
+						: 0;
+		if (delta === 0) return false;
+		const next = this.neighbor(this.mode.anchor.id, delta);
+		if (next) this.moveComposerTo(next);
+		return true;
+	}
+
+	private moveComposerTo(anchorId: string): void {
+		if (this.mode.type !== "composing") return;
+		const anchor = this.host.transcript
+			.anchors()
+			.find((candidate) => candidate.getThreadAnchorId() === anchorId)
+			?.getThreadAnchor();
+		if (!anchor) return;
+		this.mode.anchor = anchor;
+		this.selectedId = anchor.id;
+		this.updateComposerBar();
+		this.host.reveal(anchor.id);
 	}
 
 	private enterSelection(): boolean {
@@ -189,14 +258,19 @@ export class SideThreadController implements TranscriptDecorations {
 	}
 
 	private move(delta: number): void {
+		const next = this.neighbor(this.selectedId, delta);
+		if (next) this.select(next);
+	}
+
+	/** The item `delta` steps from `anchorId` (clamped), or the newest when it is gone. */
+	private neighbor(anchorId: string | undefined, delta: number): string | undefined {
 		const ids = this.host.transcript
 			.anchors()
 			.map((anchor) => anchor.getThreadAnchorId())
 			.filter((id): id is string => !!id);
-		if (ids.length === 0) return;
-		const current = this.selectedId ? ids.indexOf(this.selectedId) : -1;
-		const next = current < 0 ? ids.length - 1 : Math.max(0, Math.min(ids.length - 1, current + delta));
-		this.select(ids[next]!);
+		if (ids.length === 0) return undefined;
+		const current = anchorId ? ids.indexOf(anchorId) : -1;
+		return ids[current < 0 ? ids.length - 1 : Math.max(0, Math.min(ids.length - 1, current + delta))];
 	}
 
 	private selectedAnchor(): ThreadAnchor | undefined {
@@ -225,6 +299,7 @@ export class SideThreadController implements TranscriptDecorations {
 		} else if (keys.matches(data, "app.thread.sendToMain")) void this.sendSelectedToMain();
 		else if (keys.matches(data, "app.thread.delete")) this.deleteSelected();
 		else if (keys.matches(data, "app.thread.stop")) this.stopSelected();
+		else if (keys.matches(data, "app.thread.branch")) this.branchFromSelected();
 		else if (
 			keys.matches(data, "tui.select.cancel") ||
 			keys.matches(data, "app.thread.select") ||
@@ -255,6 +330,23 @@ export class SideThreadController implements TranscriptDecorations {
 
 	private stopSelected(): void {
 		if (this.selectedId) this.running.get(this.selectedId)?.abort();
+	}
+
+	/**
+	 * Redo the selected item: open `/tree` on the entry before it, and put the thread's answers
+	 * in the editor once the user navigates. The thread stays with the item on the old branch.
+	 */
+	private branchFromSelected(): void {
+		const id = this.selectedId;
+		if (!id) return;
+		const entryId = branchPointFor(this.host.session().sessionManager.getBranch(), id);
+		if (!entryId) {
+			this.host.showStatus("Nothing to branch from before this item");
+			return;
+		}
+		const thread = this.store.get(id);
+		this.exitToIdle();
+		this.host.openTree(entryId, thread ? formatThreadForBranch(thread) : undefined);
 	}
 
 	/** Add the thread's unsent answers to the main context as a visible message. No turn starts. */
@@ -311,6 +403,9 @@ export class SideThreadController implements TranscriptDecorations {
 			return;
 		}
 		const draft = this.mode.type === "composing" ? this.mode.draft : this.host.getEditorText();
+		const question = this.questionDraft?.anchorId === anchor.id ? this.questionDraft.text : "";
+		this.questionDraft = undefined;
+		this.selectedId = anchor.id;
 		this.mode = {
 			type: "composing",
 			anchor,
@@ -319,10 +414,11 @@ export class SideThreadController implements TranscriptDecorations {
 			choiceIndex: this.choiceIndex(anchor, choices, preferred),
 			fromSelection,
 		};
-		this.host.setEditorText("");
+		this.host.setEditorText(question);
 		this.updateComposerBar();
 		this.host.setBar(this.composerBar);
 		this.host.setFocus(undefined);
+		this.host.reveal(anchor.id);
 	}
 
 	private updateComposerBar(): void {
@@ -422,8 +518,8 @@ export class SideThreadController implements TranscriptDecorations {
 	private choiceLabel(choice: SideThreadModelChoice): string {
 		const session = this.host.session();
 		const isSession = session.model?.provider === choice.model.provider && session.model.id === choice.model.id;
-		if (choice.kind === "local") return isSession ? "local (session model)" : "local";
-		return isSession ? `${choice.model.id} (same as main)` : choice.model.id;
+		if (choice.kind === "local") return isSession ? "local (main)" : "local";
+		return isSession ? `${choice.model.id} (main)` : choice.model.id;
 	}
 
 	/**

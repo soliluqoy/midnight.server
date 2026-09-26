@@ -21,13 +21,14 @@ The session picker lets you search, rename, and delete sessions. It can also sho
 
 midnight.server stores entries as a tree, so returning to an earlier point does not erase the branch you leave.
 
-| Action | Result | Use it when |
-|---|---|---|
-| `/tree` | Moves within the current session file | Related alternatives should stay together |
-| `/fork` | Creates a new session from an earlier user message | The alternative should become separate work |
-| `/clone` | Copies the active branch into a new session | You want a separate copy of the current state |
+`/tree` (or Escape twice in an empty editor) is the one place to go back. Pick an entry, then:
 
-In `/tree`, select a user message to put its text back in the editor. Edit and submit it to create another branch. Selecting an assistant response or another entry continues after that entry with an empty editor.
+| Key | Result | Use it when |
+|---|---|---|
+| Enter | Continues from that entry in the current session file | Related alternatives should stay together |
+| `shift+n` | Starts a new session from that entry | The alternative should become separate work, or you want a copy of the current state |
+
+On a user message, both put its text back in the editor so you can edit and resubmit it; Enter branches before it in this session, `shift+n` starts a new session that ends just before it (what `/fork` does). On any other entry the editor stays empty; `shift+n` on the newest entry copies the whole branch (what `/clone` does). `/fork` and `/clone` still work when typed. Side threads can open `/tree` for you (`b`, see [Redo an item from a side thread](#redo-an-item-from-a-side-thread)).
 
 When you leave a branch, midnight.server can summarize it and attach that summary to the branch you enter. This preserves relevant work from the abandoned path without including every message from it.
 
@@ -49,9 +50,9 @@ See [Compaction Reference](compaction.md) for thresholds, retained boundaries, b
 
 A side thread is a short question about one item in the transcript, such as a failed command or a reply. The answer appears folded under that item. The main agent never sees it, keeps running while you ask, and your prompt draft is kept.
 
-1. Press `alt+t`. The newest tool call or reply is highlighted. Use up/down to pick another item, or alt+click it.
-2. Press Enter. A line above the editor shows the item and the model. Press `ctrl+p` to search all available models without changing the main session model; Tab in an empty editor cycles the short list instead. Type the question and press Enter. Escape goes back without asking.
-3. The answer streams under the item. With the item selected, Space opens or folds its thread, Enter asks a follow-up, `x` stops a running answer, `d` deletes the thread, and `m` sends the thread to the main agent.
+1. Press `alt+t`. The editor becomes a question box for the newest tool call or reply, which is highlighted; one line above the editor shows the item and the model. While the box is empty, up/down picks another item (or alt+click it). Tab (in the empty box) and Shift+Tab pick the next and previous model from a short list: the local model, the session model, and your `ctrl+p` models. `ctrl+p` and `alt+p` cycle the same list, and `ctrl+l` searches all available models. None of these change the main session model or thinking level while the box is open.
+2. Type the question and press Enter. Escape goes back to your prompt without asking.
+3. The answer streams under the item. To manage threads, press `alt+t` again from the question box (a half-typed question is kept). Then up/down picks an item, Enter asks a follow-up, Space opens or folds its thread, `m` sends it to the main agent, `b` branches from before the item (see below), `d` deletes it, and `x` stops a running answer. `alt+t` or Escape leaves.
 
 `/ask [question]` asks about the newest item without selecting it. Start the question with `@local`, `@same`, or `@provider/model` to choose the model.
 
@@ -66,6 +67,14 @@ The model decides how much context the question carries:
 The default is the local model for tool output when it is installed, otherwise the session model. The model you choose is kept for later questions until you quit.
 
 Threads are saved beside the session file as `<session>.threads.json`, so they come back when you resume. They are not session entries: `/tree`, `/fork`, and compaction ignore them, and a fork starts without threads. `m` is the only way a thread reaches the main agent: it adds the unsent questions and answers as a visible message. If the agent is running, the message is added when the current turn ends. No turn is started.
+
+Drift watch (hybrid mode) reports its findings the same way: a thread from `drift watch` under the newest item when the check ran, shown in the warning color. It is not sent to the agent; use `m` or `b` as with any thread.
+
+### Redo an item from a side thread
+
+When a side thread shows the agent went the wrong way at an item, select the item and press `b`. `/tree` opens on the entry just before it: the prompt that led to the item, or the tool result it followed. Navigate as usual (move the selection first if you want to go back further). After navigating, the thread's answered questions are added to the editor as a note, below the prompt text if you picked a user message. Edit it into guidance and send it to redo the item on a new branch. Press `shift+n` instead of Enter in the tree to redo it in a new session; the note comes along the same way.
+
+The thread stays with the item on the branch you left, and comes back if you navigate there again. If the agent is running, navigating stops it, as in `/tree`.
 
 ## Control session storage
 

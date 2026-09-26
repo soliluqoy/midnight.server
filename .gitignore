@@ -10,3 +10,6 @@ dist/
 .env.*
 !.env.example
 *.log
+
+# Harness eval run output
+evals/harness/results/

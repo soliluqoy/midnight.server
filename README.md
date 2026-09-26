@@ -45,7 +45,7 @@ The first local run downloads the 2.5 GiB model and picks the fastest engine for
 - **Plan and build modes.** Press Tab in an empty editor to switch. Plan mode limits the model to read-only tools (read, grep, find, ls, `delegate_local`) and asks it for a step-by-step plan; build mode restores the full tool set.
 - **Session sidebar.** In fullscreen mode (`/settings` → TUI mode) a sidebar shows the session title, git branch with changed/staged counts and ahead/behind, context usage and cost, the model, the local engine and drift-watch state, and the files changed this session with +/- line counts. It appears automatically on terminals 110+ columns wide; Alt+S toggles it.
 - **File explorer.** Alt+E opens a file tree on the left (fullscreen mode) with git status marks. Enter adds `@path` to the prompt, Space previews the file, Escape goes back. Typing anything else goes straight to the prompt. It shows on its own only on terminals 150+ columns wide.
-- **Side threads.** Alt+T selects a tool call or reply in the transcript; Enter asks a question about it with the local model, the session model, or another model. The answer folds under that item, the main agent never sees it, and it can keep running. `m` sends a thread to the main agent when you want it to know. `/ask` asks about the newest item. [Details](packages/coding-agent/docs/sessions.md#ask-side-questions).
+- **Side threads.** Alt+T turns the editor into a question box about the newest tool call or reply (Up/Down picks another). Ask with the local model, the session model, or another model. The answer folds under that item, the main agent never sees it, and it can keep running. Alt+T again manages threads: `m` sends one to the main agent when you want it to know, `b` redoes the item from before it with the thread in your prompt. Drift-watch findings arrive as threads too. `/ask` asks about the newest item. [Details](packages/coding-agent/docs/sessions.md#ask-side-questions).
 - **Command palette.** Alt+X opens a fuzzy-searchable list of actions and slash commands.
 - **Automatic session titles.** After the first exchange the session model names the session, unless you already named it.
 - **Native Windows.** PowerShell is the default shell tool; no Node.js, Python, WSL, or Git Bash is needed to run it.
@@ -55,7 +55,7 @@ The first local run downloads the 2.5 GiB model and picks the fastest engine for
 
 | Mode | Command | Behavior |
 | --- | --- | --- |
-| Default / Hybrid | `midnight.server` (same as `midnight.server --hybrid`) | Your configured provider leads. It gets a `delegate_local` tool that hands small read-only jobs to the local model, which starts on first use. You can also switch the session to the local model with `/model` (it is listed as "MiniCPM5-2B Q8_0 (local)") and back to your provider the same way. MiniCPM also runs a background drift check every few turns and nudges the parent model if it has lost track of the goal. If no provider is configured at all, the session silently starts on the local model instead — not offline-locked, so `/login` still works afterward. |
+| Default / Hybrid | `midnight.server` (same as `midnight.server --hybrid`) | Your configured provider leads. It gets a `delegate_local` tool that hands small read-only jobs to the local model, which starts on first use. You can also switch the session to the local model with `/model` (it is listed as "MiniCPM5-2B Q8_0 (local)") and back to your provider the same way. MiniCPM also runs a background drift check every few turns and flags it in a side thread if the parent model has lost track of the goal. If no provider is configured at all, the session silently starts on the local model instead — not offline-locked, so `/login` still works afterward. |
 | Local | `midnight.server --local` | Runs the whole session on the embedded MiniCPM5-2B Q8_0, downloading it and the engine automatically on first run if not already installed. Starts offline and **blocks every model request to any other provider** for the session. |
 | Direct helper | `midnight.server helper inspect "question" file.ts` | Runs one helper task locally, no provider needed. |
 
@@ -67,24 +67,24 @@ The engine is llama.cpp `b11166`: the CPU build ships in the release, and a GPU 
 
 **Problem.** In a long agent session, context piles up and the model tends to lose the thread. It drops a constraint you gave early on, reverses a decision it already made, or starts a side quest without saying so. You usually notice several turns later, after the tokens are spent and the diff has grown.
 
-**Example (illustrative).** You ask for a fix to the failing date-parsing test, with *"don't change the public API"*. Eight turns later the model has changed `parseDate`'s exported signature and is reworking the logger. Drift watch runs its check, decides the model is `drifting`, and adds this to the session:
+**Example (illustrative).** You ask for a fix to the failing date-parsing test, with *"don't change the public API"*. Eight turns later the model has changed `parseDate`'s exported signature and is reworking the logger. Drift watch runs its check, decides the model is `drifting`, and adds this as a side thread under the newest item in the transcript:
 
 ```
-[check: drifting] The task said not to change the public API, but parseDate's exported signature was changed.
+[check: drifting] (82% not on track) The task said not to change the public API, but parseDate's exported signature was changed.
 ```
 
-The cloud model receives this reminder with your next prompt and can correct course before it goes further.
+The cloud model does not see it. Press Alt+T, then `m` to send it as a reminder, or `b` to go back to before that item and redo it with the finding in your prompt. A false positive from the 2B checker costs you a glance, not a derailed agent.
 
 **How it works.**
 
 1. **When it runs.** It checks after every 6 assistant turns, or sooner if the context has grown by 4,000 tokens since the last check.
 2. **What it reads.** A read-only copy of the conversation with the middle cut out. It keeps the start (about 1.5 KB, where your goal and constraints usually are) and the most recent activity (about 8.5 KB).
 3. **What it decides.** MiniCPM, running with no tools, returns a schema-checked verdict: `on_track`, `drifting` (a constraint or earlier decision was dropped), or `off_task` (unrelated work). If it returns invalid JSON, it gets one retry.
-4. **What it does.** Nothing when the model is `on_track`. Otherwise it adds a short reminder naming the goal or constraint being missed. After a nudge it stays quiet for at least 4 turns, so it can't nag.
+4. **What it does.** Nothing when the model is `on_track`. Otherwise it adds a side thread with the reason and a short reminder naming the goal or constraint being missed. You can ask the thread follow-up questions like any other. After a finding it stays quiet for at least 4 turns, so it can't nag.
 
 **What it costs.**
 
-- **No cloud tokens for the check.** The check runs on the local model; the only thing added to the cloud model's context is the short reminder, and only when it fires.
+- **No cloud tokens for the check.** The check runs on the local model; nothing is added to the cloud model's context unless you send a finding with `m`.
 - **It never blocks you.** On a CPU laptop a check takes about 10-30 s, so it runs in the background and your session keeps going while it thinks.
 - **Zero setup.** The first check downloads the local model if it isn't installed yet.
 - **It stays out of the way when it can't run.** If the local model can't be set up, drift watch turns itself off for the rest of the session instead of showing errors.
@@ -98,12 +98,12 @@ The cloud model receives this reminder with your next prompt and can correct cou
 | `MIDNIGHT_SERVER_DRIFTWATCH` | `1` | `0` turns it off (`delegate_local` is unaffected) |
 | `MIDNIGHT_SERVER_DRIFTWATCH_TURNS` | `6` | Check after this many assistant turns |
 | `MIDNIGHT_SERVER_DRIFTWATCH_TOKENS` | `4000` | Also check after this much context growth |
-| `MIDNIGHT_SERVER_DRIFTWATCH_COOLDOWN` | `4` | Minimum turns between two nudges |
-| `MIDNIGHT_SERVER_DRIFTWATCH_CONFIDENCE` | `0.5` | How sure the check must be (0-1) that the model is off track before it nudges |
+| `MIDNIGHT_SERVER_DRIFTWATCH_COOLDOWN` | `4` | Minimum turns between two findings |
+| `MIDNIGHT_SERVER_DRIFTWATCH_CONFIDENCE` | `0.5` | How sure the check must be (0-1) that the model is off track before it reports |
 
 **How it decides.** Each check first asks the local model for a single status word and reads how likely each answer was. That takes well under a second once the transcript has been read. Only when the model is not on track with at least the configured confidence does it write the reason and reminder you see, reusing the transcript it already read. The status comes from that first answer; the written step only explains it.
 
-Lower the turn and token values to check more often, for example on long autonomous runs. Raise them if the checks slow your machine down. The 2B model judges drift with a limited view, so treat a nudge as a prompt to look, not a verdict.
+Lower the turn and token values to check more often, for example on long autonomous runs. Raise them if the checks slow your machine down. The 2B model judges drift with a limited view, so treat a finding as a prompt to look, not a verdict.
 
 ## Best way to use it
 
@@ -113,7 +113,7 @@ Lower the turn and token values to check more often, for example on long autonom
 - **`helper` for one-off questions** when a full session is overkill: `midnight.server helper inspect "why does this throw?" src/foo.ts`. No provider needed, and faster than starting an agent loop.
 - **Keep helper inputs small.** It answers best under roughly 6 KB of source per call; a 12 KB file was measured to return a wrong answer instead of escalating (see [implementation status](docs/IMPLEMENTATION_STATUS.md)). Point it at the specific file or function rather than the whole repo.
 - **Treat `patch` output as a proposal.** It's an unapplied diff built from exact-match text edits — read it before applying it yourself; the 2B model can be wrong (see [measurements](docs/benchmarks/cpu-i7-8650u.md)).
-- **Leave drift watch on for long sessions.** Long sessions are where it pays off. When a nudge appears, check the constraint it names before you continue. If it fires too often or too rarely, see [tuning](#drift-watch).
+- **Leave drift watch on for long sessions.** Long sessions are where it pays off. When a finding appears, check the constraint it names, then send it (`m`), redo from before it (`b`), or ignore it. If it fires too often or too rarely, see [tuning](#drift-watch).
 - **Run `doctor --smoke` after install** to confirm the model, engine, and process host all work end to end before relying on it mid-task.
 
 ## Install
@@ -207,8 +207,8 @@ On the CPU, prompt processing is ~25-35 tokens/s and generation ~8-9 tokens/s. I
 | `MIDNIGHT_SERVER_DRIFTWATCH` | `1` | Set to `0` to disable the hybrid-mode drift watcher (the `delegate_local` tool is unaffected) |
 | `MIDNIGHT_SERVER_DRIFTWATCH_TURNS` | `6` | Run a drift check after this many assistant turns since the last one |
 | `MIDNIGHT_SERVER_DRIFTWATCH_TOKENS` | `4000` | Also run a drift check once context has grown by this many tokens since the last one |
-| `MIDNIGHT_SERVER_DRIFTWATCH_COOLDOWN` | `4` | Turns to wait after a nudge before another one can fire |
-| `MIDNIGHT_SERVER_DRIFTWATCH_CONFIDENCE` | `0.5` | Minimum probability (0-1) that the parent model is not on track before a drift nudge fires |
+| `MIDNIGHT_SERVER_DRIFTWATCH_COOLDOWN` | `4` | Turns to wait after a finding before another one can be reported |
+| `MIDNIGHT_SERVER_DRIFTWATCH_CONFIDENCE` | `0.5` | Minimum probability (0-1) that the parent model is not on track before a drift finding is reported |
 
 ## GPU and backends
 
