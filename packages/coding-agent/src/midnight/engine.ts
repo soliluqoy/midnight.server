@@ -37,9 +37,23 @@ export interface ChatRequest {
 	topP?: number;
 	/** JSON schema for grammar-constrained output. */
 	jsonSchema?: Record<string, unknown>;
+	/** GBNF grammar for constrained output (llama-server extension). */
+	grammar?: string;
+	/** Return this many alternatives per generated token, with log probabilities. */
+	topLogprobs?: number;
 	/** Passed to the chat template's `enable_thinking` switch. Omitted: template default (on). */
 	enableThinking?: boolean;
 	signal?: AbortSignal;
+}
+
+/**
+ * One generated token. llama-server reports `top` from the raw softmax of the
+ * logits, before grammar or sampling, so constrained alternatives keep real mass.
+ */
+export interface TokenLogprob {
+	token: string;
+	logprob: number;
+	top: Array<{ token: string; logprob: number }>;
 }
 
 export interface ChatResult {
@@ -50,6 +64,72 @@ export interface ChatResult {
 	completionTokens: number;
 	promptMs?: number;
 	predictedMs?: number;
+	/** Present when the request asked for `topLogprobs`. */
+	logprobs?: TokenLogprob[];
+}
+
+interface ChatPayload {
+	choices?: Array<{
+		message?: { content?: string | null; reasoning_content?: string };
+		finish_reason?: string;
+		logprobs?: {
+			content?: Array<{
+				token?: string;
+				logprob?: number;
+				top_logprobs?: Array<{ token?: string; logprob?: number }>;
+			}>;
+		} | null;
+	}>;
+	usage?: { prompt_tokens?: number; completion_tokens?: number };
+	timings?: { prompt_ms?: number; predicted_ms?: number };
+}
+
+/** Build the llama-server `/v1/chat/completions` body for a request. */
+export function buildChatBody(request: ChatRequest): Record<string, unknown> {
+	const body: Record<string, unknown> = {
+		model: "local",
+		messages: request.messages,
+		max_tokens: request.maxTokens,
+		temperature: request.temperature ?? 1.0,
+		top_p: request.topP ?? 0.95,
+		min_p: 0,
+		stream: false,
+	};
+	if (request.enableThinking !== undefined) {
+		body.chat_template_kwargs = { enable_thinking: request.enableThinking };
+	}
+	if (request.jsonSchema) {
+		body.response_format = { type: "json_schema", json_schema: { name: "result", schema: request.jsonSchema } };
+	}
+	if (request.grammar) body.grammar = request.grammar;
+	if (request.topLogprobs !== undefined) {
+		body.logprobs = true;
+		body.top_logprobs = request.topLogprobs;
+	}
+	return body;
+}
+
+/** Map a llama-server chat completion payload to a `ChatResult`. */
+export function parseChatPayload(payload: ChatPayload): ChatResult {
+	const choice = payload.choices?.[0];
+	const tokens = choice?.logprobs?.content;
+	return {
+		content: choice?.message?.content ?? "",
+		reasoning: choice?.message?.reasoning_content,
+		finishReason: choice?.finish_reason ?? "unknown",
+		promptTokens: payload.usage?.prompt_tokens ?? 0,
+		completionTokens: payload.usage?.completion_tokens ?? 0,
+		promptMs: payload.timings?.prompt_ms,
+		predictedMs: payload.timings?.predicted_ms,
+		logprobs: tokens?.map((entry) => ({
+			token: entry.token ?? "",
+			logprob: entry.logprob ?? Number.NEGATIVE_INFINITY,
+			top: (entry.top_logprobs ?? []).map((alt) => ({
+				token: alt.token ?? "",
+				logprob: alt.logprob ?? Number.NEGATIVE_INFINITY,
+			})),
+		})),
+	};
 }
 
 function positiveIntegerEnv(name: string): number | undefined {
@@ -335,44 +415,15 @@ export class LocalEngine {
 	private async chatNow(request: ChatRequest): Promise<ChatResult> {
 		request.signal?.throwIfAborted();
 		if (!this.running) throw new Error("Local engine is not running");
-		const body: Record<string, unknown> = {
-			model: "local",
-			messages: request.messages,
-			max_tokens: request.maxTokens,
-			temperature: request.temperature ?? 1.0,
-			top_p: request.topP ?? 0.95,
-			min_p: 0,
-			stream: false,
-		};
-		if (request.enableThinking !== undefined) {
-			body.chat_template_kwargs = { enable_thinking: request.enableThinking };
-		}
-		if (request.jsonSchema) {
-			body.response_format = { type: "json_schema", json_schema: { name: "result", schema: request.jsonSchema } };
-		}
 		const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
 			method: "POST",
 			headers: { Authorization: `Bearer ${this.apiKey}`, "Content-Type": "application/json" },
-			body: JSON.stringify(body),
+			body: JSON.stringify(buildChatBody(request)),
 			signal: request.signal,
 		});
 		const text = await response.text();
 		if (!response.ok) throw new Error(`Local engine HTTP ${response.status}: ${text.slice(0, 500)}`);
-		const payload = JSON.parse(text) as {
-			choices?: Array<{ message?: { content?: string | null; reasoning_content?: string }; finish_reason?: string }>;
-			usage?: { prompt_tokens?: number; completion_tokens?: number };
-			timings?: { prompt_ms?: number; predicted_ms?: number };
-		};
-		const choice = payload.choices?.[0];
-		return {
-			content: choice?.message?.content ?? "",
-			reasoning: choice?.message?.reasoning_content,
-			finishReason: choice?.finish_reason ?? "unknown",
-			promptTokens: payload.usage?.prompt_tokens ?? 0,
-			completionTokens: payload.usage?.completion_tokens ?? 0,
-			promptMs: payload.timings?.prompt_ms,
-			predictedMs: payload.timings?.predicted_ms,
-		};
+		return parseChatPayload(JSON.parse(text) as ChatPayload);
 	}
 
 	/** Close the ownership pipe, then force-terminate if the process lingers. Idempotent. */

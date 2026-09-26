@@ -99,6 +99,9 @@ The cloud model receives this reminder with your next prompt and can correct cou
 | `MIDNIGHT_SERVER_DRIFTWATCH_TURNS` | `6` | Check after this many assistant turns |
 | `MIDNIGHT_SERVER_DRIFTWATCH_TOKENS` | `4000` | Also check after this much context growth |
 | `MIDNIGHT_SERVER_DRIFTWATCH_COOLDOWN` | `4` | Minimum turns between two nudges |
+| `MIDNIGHT_SERVER_DRIFTWATCH_CONFIDENCE` | `0.5` | How sure the check must be (0-1) that the model is off track before it nudges |
+
+**How it decides.** Each check first asks the local model for a single status word and reads how likely each answer was. That takes well under a second once the transcript has been read. Only when the model is not on track with at least the configured confidence does it write the reason and reminder you see, reusing the transcript it already read. The status comes from that first answer; the written step only explains it.
 
 Lower the turn and token values to check more often, for example on long autonomous runs. Raise them if the checks slow your machine down. The 2B model judges drift with a limited view, so treat a nudge as a prompt to look, not a verdict.
 
@@ -205,6 +208,7 @@ On the CPU, prompt processing is ~25-35 tokens/s and generation ~8-9 tokens/s. I
 | `MIDNIGHT_SERVER_DRIFTWATCH_TURNS` | `6` | Run a drift check after this many assistant turns since the last one |
 | `MIDNIGHT_SERVER_DRIFTWATCH_TOKENS` | `4000` | Also run a drift check once context has grown by this many tokens since the last one |
 | `MIDNIGHT_SERVER_DRIFTWATCH_COOLDOWN` | `4` | Turns to wait after a nudge before another one can fire |
+| `MIDNIGHT_SERVER_DRIFTWATCH_CONFIDENCE` | `0.5` | Minimum probability (0-1) that the parent model is not on track before a drift nudge fires |
 
 ## GPU and backends
 

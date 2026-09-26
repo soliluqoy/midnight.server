@@ -18,6 +18,7 @@
 - Added `--hybrid` and the `delegate_local` tool: the configured parent model can hand bounded, read-only summarize/classify/inspect/plan/patch tasks to the local helper. Inputs are confined to the workspace, output is schema-validated with line evidence, and patches are returned as unapplied diffs.
 - Added the local MiniCPM model to `/model` in default/hybrid sessions, so you can switch from a cloud provider to the local model and back in the same session. The engine starts when the local model is first used.
 - Added an automatic drift watcher to `--hybrid` mode: MiniCPM periodically judges whether the parent model is still on track and injects a corrective reminder only when it isn't. Checks run in the background (never blocking the agent loop) on a turn-count-or-token-growth cadence with a cooldown between nudges, configurable through `MIDNIGHT_SERVER_DRIFTWATCH*` environment variables and disabled entirely with `MIDNIGHT_SERVER_DRIFTWATCH=0`.
+- Added a decision gate to drift watch: each check first reads one grammar-constrained status token with its logprobs, and writes the reason and reminder only when the probability of not being on track reaches `MIDNIGHT_SERVER_DRIFTWATCH_CONFIDENCE` (default 0.5). The explain call reuses the cached transcript prefix, and nudges carry the gate probabilities in `details.confidence`. Engines that return no logprobs fall back to the previous single check.
 - Added whitelisted, read-only git access to `delegate_local` and `helper`: `status`, `diff`, `log`, `show`, and `blame` run with a fixed argv (never a shell), confined to the workspace, with byte-capped output. The helper still has no shell access; it can only run these five read-only operations, never anything that mutates the repository.
 - Added `model status|verify|fetch`, `engine status|fetch`, `doctor [--smoke]` and `helper <kind>` commands. Model and engine downloads resume, are pinned by SHA-256, and are never used unverified.
 - Added automatic first-run download: `--local`, the no-provider-configured fallback, and the first `delegate_local`/drift-watch call now download the missing model and engine instead of erroring, so a fresh install needs no separate `model fetch`/`engine fetch` step. An explicit `MIDNIGHT_SERVER_MODEL`/`MIDNIGHT_SERVER_ENGINE_DIR` override that points at nothing is still a hard error, never routed around.
@@ -31,6 +32,7 @@
 
 ### Changed
 
+- `delegate_local` and `helper` tasks now decode at temperature 0, and `inspect` thinks by default (summarize/classify still do not). An `inspect` task takes about 50 s instead of 10 s on a laptop CPU, but answers correctly. The helper prompt also states that finding a bug or answering "no" is a completed task, not a reason to escalate.
 - The startup header credits pi: "Built on pi (pi.dev). Ask midnight.server how to use or extend it; it reads its own docs to answer."
 - `MIDNIGHT_SERVER_GPU_LAYERS` now defaults to the selected backend (0 on the CPU, every layer on a GPU), and the engine inherits `PATH` after its own directory so system-wide vendor runtimes load. An engine that exits during startup reports the end of its log in the error.
 - Rebranded user-facing text from Pi to midnight.server: startup header, system prompt, help text, messages, temporary file names, the `AI_AGENT` marker, and the bundled documentation.
@@ -44,6 +46,7 @@
 
 ### Fixed
 
+- Fixed the process crashing with "This extension ctx is stale" when a session ended while a drift-watch check was running, for example at the end of a `-p` run.
 - Fixed the `bash` and `powershell` tool guidelines telling the model to inspect `PI_*` environment variables; the tools export `MIDNIGHT_SERVER_*`.
 
 - Fixed a duplicated footer line (and a stray "Starting local engine..." line) when the local engine started during an interactive session: engine progress was written straight to stderr underneath the TUI. It now shows in the footer and sidebar.

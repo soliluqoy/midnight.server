@@ -4,7 +4,7 @@ import { estimateContextTokens } from "../core/compaction/compaction.ts";
 import { serializeConversation } from "../core/compaction/utils.ts";
 import type { ExtensionAPI, ExtensionFactory } from "../core/extensions/types.ts";
 import { convertToLlm } from "../core/messages.ts";
-import type { ChatRequest, ChatResult } from "./engine.ts";
+import type { ChatRequest, ChatResult, TokenLogprob } from "./engine.ts";
 import { type EngineManager, LocalSetupError } from "./engine-manager.ts";
 import { LOCAL_PROVIDER_ID } from "./pins.ts";
 import { type DriftWatchState, updateMidnightStatus } from "./status.ts";
@@ -22,6 +22,8 @@ export interface DriftWatchSettings {
 	tokenInterval: number;
 	/** Suppress a new visible nudge until this many turns have passed since the last one fired. */
 	cooldownTurns: number;
+	/** Nudge only when the decision gate puts at least this probability (0-1) on not being on track. */
+	nudgeConfidence: number;
 }
 
 function positiveIntegerEnv(name: string): number | undefined {
@@ -29,6 +31,14 @@ function positiveIntegerEnv(name: string): number | undefined {
 	if (!raw) return undefined;
 	const value = Number(raw);
 	if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer`);
+	return value;
+}
+
+function unitIntervalEnv(name: string): number | undefined {
+	const raw = process.env[name];
+	if (!raw) return undefined;
+	const value = Number(raw);
+	if (!Number.isFinite(value) || value < 0 || value > 1) throw new Error(`${name} must be a number from 0 to 1`);
 	return value;
 }
 
@@ -46,16 +56,21 @@ export function resolveDriftWatchSettings(overrides: Partial<DriftWatchSettings>
 		turnInterval: overrides.turnInterval ?? positiveIntegerEnv("MIDNIGHT_SERVER_DRIFTWATCH_TURNS") ?? 6,
 		tokenInterval: overrides.tokenInterval ?? positiveIntegerEnv("MIDNIGHT_SERVER_DRIFTWATCH_TOKENS") ?? 4000,
 		cooldownTurns: overrides.cooldownTurns ?? positiveIntegerEnv("MIDNIGHT_SERVER_DRIFTWATCH_COOLDOWN") ?? 4,
+		nudgeConfidence: overrides.nudgeConfidence ?? unitIntervalEnv("MIDNIGHT_SERVER_DRIFTWATCH_CONFIDENCE") ?? 0.5,
 	};
 }
 
-const DRIFT_STATUSES = ["on_track", "drifting", "off_task"] as const;
+export const DRIFT_STATUSES = ["on_track", "drifting", "off_task"] as const;
 type DriftStatus = (typeof DRIFT_STATUSES)[number];
+
+type DriftProbabilities = Record<DriftStatus, number>;
 
 interface DriftVerdict {
 	status: DriftStatus;
 	reason: string;
 	reminder?: string;
+	/** Decision-gate probabilities; absent when the check fell back to a single explain call. */
+	confidence?: DriftProbabilities;
 }
 
 /** Tag shown on drift nudges, e.g. `[check: off task]`. */
@@ -63,15 +78,18 @@ function checkTag(status: DriftStatus): string {
 	return `[check: ${status.replace("_", " ")}]`;
 }
 
-const DRIFT_SCHEMA = {
-	type: "object",
-	properties: {
-		status: { type: "string", enum: DRIFT_STATUSES },
-		reason: { type: "string" },
-		reminder: { type: "string" },
-	},
-	required: ["status", "reason"],
-} as const;
+/** Verdict schema; `statuses` narrows the enum when the gate has already decided. */
+function verdictSchema(statuses: readonly DriftStatus[]): Record<string, unknown> {
+	return {
+		type: "object",
+		properties: {
+			status: { type: "string", enum: statuses },
+			reason: { type: "string" },
+			reminder: { type: "string" },
+		},
+		required: ["status", "reason"],
+	};
+}
 
 function parseVerdict(content: string): DriftVerdict {
 	const value: unknown = JSON.parse(content);
@@ -95,32 +113,93 @@ function boundTranscript(text: string, maxBytes = MAX_INPUT_BYTES, headBytes = H
 	return `${head}\n\n[...omitted for length...]\n\n${tail}`;
 }
 
+// The system prompt and transcript form a prefix shared by the gate and the explain
+// call, so llama-server's single slot reuses its cache and the explain call only
+// pays for the question that differs.
 const DRIFT_SYSTEM_PROMPT = [
 	"You are midnight.server's local focus checker for a coding assistant.",
 	"You have no tools and cannot edit anything. You only judge whether the assistant in the transcript below is still working its stated goal.",
 	"status=on_track: the assistant is still working the goal, even via a reasonable subtask.",
 	"status=drifting: the assistant is nominally still working but has lost an explicit constraint, contradicted an earlier decision, or wandered without saying so.",
 	"status=off_task: the assistant is doing something unrelated to the stated goal.",
-	"When status is not on_track, reminder must be one or two sentences naming the specific constraint or goal being missed, for the assistant to read next.",
-	"Respond with one JSON object matching the required schema.",
 ].join("\n");
 
+const REMINDER_RULE =
+	"When status is not on_track, reminder must be one or two sentences naming the specific constraint or goal being missed, for the assistant to read next.";
+
+const GATE_QUESTION = `Judge whether the assistant above is still on track. Answer with only the status: ${DRIFT_STATUSES.join(", ")}.`;
+
+const GATE_GRAMMAR = `root ::= ${DRIFT_STATUSES.map((status) => JSON.stringify(status)).join(" | ")}`;
+
+/** Alternatives requested for the gate token; the three labels sit well inside this. */
+const GATE_TOP_LOGPROBS = 20;
+
+function driftMessages(transcript: string, question: string): ChatRequest["messages"] {
+	return [
+		{ role: "system", content: DRIFT_SYSTEM_PROMPT },
+		{ role: "user", content: `<transcript>\n${boundTranscript(transcript)}\n</transcript>\n\n${question}` },
+	];
+}
+
 /**
- * Judge whether the parent model's recent turns still serve the conversation's
- * original goal. Bounded, read-only, no tools: same trust model as the helper.
+ * Turn the gate's first-token alternatives into a distribution over the statuses.
+ * Each label starts with a distinct token, so a token that prefixes exactly one
+ * label carries that label's mass; the rest (text the grammar forbids) is dropped
+ * and the remainder renormalized.
+ */
+export function gateProbabilities(top: TokenLogprob["top"]): DriftProbabilities | undefined {
+	const mass: DriftProbabilities = { on_track: 0, drifting: 0, off_task: 0 };
+	for (const alternative of top) {
+		if (!alternative.token) continue;
+		const matches = DRIFT_STATUSES.filter((status) => status.startsWith(alternative.token));
+		if (matches.length === 1) mass[matches[0]] += Math.exp(alternative.logprob);
+	}
+	const total = mass.on_track + mass.drifting + mass.off_task;
+	if (!(total > 0)) return undefined;
+	return { on_track: mass.on_track / total, drifting: mass.drifting / total, off_task: mass.off_task / total };
+}
+
+/**
+ * System-1 decision: one grammar-constrained status token, read as probabilities.
+ * Returns undefined when the engine gave no usable logprobs.
+ */
+export async function runDriftGate(
+	engine: DriftEngine,
+	transcript: string,
+	signal: AbortSignal,
+): Promise<DriftProbabilities | undefined> {
+	const result = await engine.chat({
+		messages: driftMessages(transcript, GATE_QUESTION),
+		maxTokens: 8,
+		temperature: 0,
+		enableThinking: false,
+		grammar: GATE_GRAMMAR,
+		topLogprobs: GATE_TOP_LOGPROBS,
+		signal,
+	});
+	const first = result.logprobs?.[0];
+	return first ? gateProbabilities(first.top) : undefined;
+}
+
+/**
+ * Written verdict. With `status` the gate has decided and this only explains it;
+ * without, it is the whole check (fallback when the gate is unavailable).
+ * Bounded, read-only, no tools: same trust model as the helper.
  */
 async function runDriftCheck(
 	engine: DriftEngine,
 	transcript: string,
 	signal: AbortSignal,
+	status?: DriftStatus,
 ): Promise<DriftVerdict | undefined> {
-	const messages = [
-		{ role: "system" as const, content: DRIFT_SYSTEM_PROMPT },
-		{
-			role: "user" as const,
-			content: `<transcript>\n${boundTranscript(transcript)}\n</transcript>\n\nJudge whether the assistant above is still on track.`,
-		},
-	];
+	const question = [
+		status
+			? `A first check found status=${status}. Explain why.`
+			: "Judge whether the assistant above is still on track.",
+		REMINDER_RULE,
+		"Respond with one JSON object matching the required schema.",
+	].join(" ");
+	const messages = driftMessages(transcript, question);
 	for (let attempt = 0; attempt < 2; attempt++) {
 		const result = await engine.chat({
 			messages:
@@ -135,7 +214,7 @@ async function runDriftCheck(
 						],
 			maxTokens: 400,
 			enableThinking: false,
-			jsonSchema: DRIFT_SCHEMA,
+			jsonSchema: verdictSchema(status ? [status] : DRIFT_STATUSES),
 			signal,
 		});
 		if (result.finishReason === "length") continue;
@@ -146,6 +225,39 @@ async function runDriftCheck(
 		}
 	}
 	return undefined;
+}
+
+/**
+ * Judge drift in two stages: a cheap gate decides, and only a confident "not on
+ * track" pays for the written explanation. The gate is authoritative: measured on
+ * the real model, the explain call at sampling temperature can call a clearly
+ * on-track transcript off task.
+ */
+async function judgeDrift(
+	engine: DriftEngine,
+	transcript: string,
+	nudgeConfidence: number,
+	signal: AbortSignal,
+): Promise<DriftVerdict | undefined> {
+	let probabilities: DriftProbabilities | undefined;
+	try {
+		probabilities = await runDriftGate(engine, transcript, signal);
+	} catch (error) {
+		if (signal.aborted) throw error;
+	}
+	if (!probabilities) return runDriftCheck(engine, transcript, signal);
+	if (1 - probabilities.on_track < nudgeConfidence) {
+		return { status: "on_track", reason: "", confidence: probabilities };
+	}
+	const status: DriftStatus = probabilities.drifting >= probabilities.off_task ? "drifting" : "off_task";
+	const explained = await runDriftCheck(engine, transcript, signal, status);
+	const percent = Math.round((1 - probabilities.on_track) * 100);
+	return {
+		status,
+		reason: explained?.reason ?? `The local check is ${percent}% confident the assistant is not on track.`,
+		reminder: explained?.reminder,
+		confidence: probabilities,
+	};
 }
 
 /**
@@ -220,7 +332,7 @@ export function createDriftWatchExtension(manager: EngineManager, settings: Drif
 				try {
 					const engine = await manager.get(signal);
 					manager.touch();
-					const verdict = await runDriftCheck(engine, transcript, signal);
+					const verdict = await judgeDrift(engine, transcript, settings.nudgeConfidence, signal);
 					lastVerdict = verdict?.status ?? lastVerdict;
 					if (!verdict || verdict.status === "on_track") return;
 					if (turnsSinceNudge < settings.cooldownTurns) return;
@@ -241,6 +353,9 @@ export function createDriftWatchExtension(manager: EngineManager, settings: Drif
 						{ deliverAs: "nextTurn" },
 					);
 				} catch (error) {
+					// Aborted by session_shutdown: ctx is stale by then, and touching it throws
+					// from this detached task, which crashes the process.
+					if (signal.aborted) return;
 					if (error instanceof LocalSetupError) unavailable = true;
 					else
 						ctx.ui.notify(`[check] failed: ${error instanceof Error ? error.message : String(error)}`, "warning");

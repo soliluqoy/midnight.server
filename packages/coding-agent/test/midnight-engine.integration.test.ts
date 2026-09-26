@@ -3,6 +3,7 @@ import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { DRIFT_STATUSES, runDriftGate } from "../src/midnight/drift-watch.ts";
 import { LocalEngine } from "../src/midnight/engine.ts";
 import { createHelperTask, runHelperTask } from "../src/midnight/helper.ts";
 import { findEngineDir, findHost, findModel } from "../src/midnight/store.ts";
@@ -94,9 +95,41 @@ describe.runIf(enabled)("embedded engine (real model)", () => {
 			}),
 		);
 		expect(result.status).toBe("completed");
+		// Number('abc') is NaN and both range comparisons are false, so nothing throws.
+		expect(result.summary).toMatch(/^no\b|\b(does not|doesn't|not) reject/i);
+		expect(result.summary).not.toMatch(/^yes\b/i);
 		expect(result.checks.find((check) => check.name === "schema-valid")?.passed).toBe(true);
 		expect(result.evidence.every((item) => item.path === "port.ts")).toBe(true);
 	}, 240_000);
+
+	it("tokenizes each drift status label with a distinct first token", async () => {
+		const firstTokens = await Promise.all(
+			DRIFT_STATUSES.map(async (label) => {
+				const response = await fetch(`${engine.baseUrl}/tokenize`, {
+					method: "POST",
+					headers: { Authorization: `Bearer ${engine.apiKey}`, "Content-Type": "application/json" },
+					body: JSON.stringify({ content: label }),
+				});
+				const { tokens } = (await response.json()) as { tokens: number[] };
+				return tokens[0];
+			}),
+		);
+		expect(new Set(firstTokens).size).toBe(DRIFT_STATUSES.length);
+	});
+
+	it("reads drift-gate probabilities from logprobs", async () => {
+		const transcript = [
+			"[User]: Fix the off-by-one bug in parsePort in src/port.ts. Do not touch other files.",
+			'[Assistant tool calls]: read(path="src/port.ts")',
+			"[Tool result]: export function parsePort(v){ const p=Number(v); if(p<0||p>65536) throw new Error('bad'); return p; }",
+			"[Assistant]: The upper bound should be 65535. Editing src/port.ts.",
+		].join("\n\n");
+		const probabilities = await runDriftGate(engine, transcript, new AbortController().signal);
+		expect(probabilities).toBeDefined();
+		const values = Object.values(probabilities ?? {});
+		expect(values.reduce((sum, value) => sum + value, 0)).toBeCloseTo(1);
+		expect(probabilities?.on_track).toBe(Math.max(...values));
+	}, 120_000);
 
 	it("leaves no engine process after stop", async () => {
 		await engine.stop();
