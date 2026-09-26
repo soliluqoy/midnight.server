@@ -3194,14 +3194,9 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.clear", () => this.handleCtrlC());
 		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
 		this.defaultEditor.onAction("app.suspend", () => this.handleCtrlZ());
-		// In the side-question box the model keys act on the question's model, never the main
-		// session: tab/shift+tab and ctrl+p/alt+p cycle it, ctrl+l searches all models.
-		this.defaultEditor.onAction("app.thinking.cycle", () => {
-			if (this.sideThreads.isComposing()) this.sideThreads.cycleModel(-1);
-			else this.cycleThinkingLevel();
-		});
+		this.defaultEditor.onAction("app.thinking.cycle", () => this.cycleThinkingLevel());
 		this.defaultEditor.onAction("app.model.cycleForward", () => {
-			if (this.sideThreads.isComposing()) this.sideThreads.cycleModel(1);
+			if (this.sideThreads.isComposing()) this.showSideThreadModelSelector();
 			else this.cycleModel("forward");
 		});
 		this.defaultEditor.onAction("app.model.cycleBackward", () => {
@@ -3213,10 +3208,7 @@ export class InteractiveMode {
 
 		// Global debug handler on TUI (works regardless of focus)
 		this.ui.onDebug = () => this.handleDebugCommand();
-		this.defaultEditor.onAction("app.model.select", () => {
-			if (this.sideThreads.isComposing()) this.showSideThreadModelSelector();
-			else this.showModelSelector();
-		});
+		this.defaultEditor.onAction("app.model.select", () => this.showModelSelector());
 		this.defaultEditor.onAction("app.tools.expand", () => this.toggleToolOutputExpansion());
 		this.defaultEditor.onAction("app.thinking.toggle", () => this.toggleThinkingBlockVisibility());
 		this.defaultEditor.onAction("app.editor.external", () => void this.handleOpenExternalEditor());

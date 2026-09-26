@@ -105,10 +105,9 @@ function labelRoom(width: number, kept: string): number {
 }
 
 /**
- * One line above the editor while it holds a side question instead of a prompt. When the line
- * is too narrow for every hint, whole hints are dropped from the least important (`rank`) up,
- * and the item label takes what is left. Escape (back to the prompt) is left out as the one
- * key everyone tries first.
+ * One line above the editor while it holds a side question instead of a prompt. Hints are
+ * ordered by importance, so a narrow terminal cuts the least useful ones; Escape (back to the
+ * prompt) is left out as the one key everyone tries first.
  */
 export class ThreadComposerBar implements Component {
 	anchorLabel = "";
@@ -116,30 +115,17 @@ export class ThreadComposerBar implements Component {
 	options = 1;
 
 	render(width: number): string[] {
-		const cycleKeys = [firstKeyText("app.agentMode.toggle"), firstKeyText("app.thinking.cycle")].filter(Boolean);
-		const searchKey = firstKeyText("app.model.select");
 		const hints = [
-			{ text: `${arrowsText()} item`, rank: 1 },
-			...(this.options > 1 && cycleKeys.length > 0 ? [{ text: `${cycleKeys.join("/")} model`, rank: 0 }] : []),
-			...(searchKey ? [{ text: `${searchKey} search`, rank: 3 }] : []),
-			{ text: `${firstKeyText("app.thread.select")} threads`, rank: 2 },
+			`${arrowsText()} item`,
+			...(this.options > 1 ? [`${firstKeyText("app.agentMode.toggle")} model`] : []),
+			`${firstKeyText("app.thread.select")} threads`,
 		];
-		const head = `↳  · ${this.modelLabel}`;
-		let used = visibleWidth(head) + 12;
-		const kept = new Set<(typeof hints)[number]>();
-		for (const hint of [...hints].sort((a, b) => a.rank - b.rank)) {
-			const cost = visibleWidth(hint.text) + 3;
-			if (used + cost > width) break;
-			kept.add(hint);
-			used += cost;
-		}
-		const shown = hints.filter((hint) => kept.has(hint)).map((hint) => ` · ${hint.text}`);
-		const labelWidth = Math.max(12, Math.min(28, width - visibleWidth(head) - visibleWidth(shown.join(""))));
+		const rest = ` · ${this.modelLabel} · ${hints.join(" · ")}`;
 		const line =
-			theme.fg("accent", `↳ ${firstLine(this.anchorLabel, labelWidth)}`) +
+			theme.fg("accent", `↳ ${firstLine(this.anchorLabel, labelRoom(width, `↳ ${rest}`))}`) +
 			theme.fg("dim", " · ") +
 			theme.bold(this.modelLabel) +
-			theme.fg("dim", shown.join(""));
+			theme.fg("dim", ` · ${hints.join(" · ")}`);
 		return [truncateToWidth(line, width)];
 	}
 
