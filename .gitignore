@@ -11,5 +11,5 @@ dist/
 !.env.example
 *.log
 
-# Harness eval run output
-evals/harness/results/
+# Local evaluations
+/evals/
