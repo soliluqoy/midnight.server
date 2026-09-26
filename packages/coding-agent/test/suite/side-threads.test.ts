@@ -156,30 +156,35 @@ describe("side threads", () => {
 		expect(texts).toEqual(["main task", "main answer"]);
 	});
 
-	it("selects items, keeps the main draft while composing, and sends to main only on request", async () => {
+	it("asks from alt+t directly, keeps the main draft, and sends to main only on request", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
 		const { transcript, controller, state, press } = setup(harness);
 		harness.setResponses([fauxAssistantMessage("side answer")]);
 		state.editorText = "my unfinished prompt";
 
+		// alt+t: the question box opens on the newest item; arrows in the empty box pick another.
 		controller.toggleSelection();
-		expect(controller.isSelecting()).toBe(true);
-		expect(controller.selectedAnchorId()).toBe("tool:call-2");
-		press("\x1b[A");
-		expect(controller.selectedAnchorId()).toBe("tool:call-1");
-		expect(transcript.render(80)[0]).toContain("▌ item bash npm run check");
-
-		press("\r");
 		expect(controller.isComposing()).toBe(true);
 		expect(state.editorText).toBe("");
+		expect(controller.selectedAnchorId()).toBe("tool:call-2");
+		expect(controller.handleEditorInput("\x1b[A")).toBe(true);
+		expect(controller.selectedAnchorId()).toBe("tool:call-1");
+		expect(transcript.render(80)[0]).toContain("▌ item bash npm run check");
+		state.editorText = "w";
+		expect(controller.handleEditorInput("\x1b[B")).toBe(false);
 		controller.submitComposer("what failed?");
 		expect(controller.isComposing()).toBe(false);
 		expect(state.editorText).toBe("my unfinished prompt");
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(controller.threads()[0]?.turns[0]?.answer).toBe("side answer");
 
+		// alt+t twice: question box, then thread management on the same item.
 		controller.toggleSelection();
+		controller.toggleSelection();
+		expect(controller.isSelecting()).toBe(true);
+		expect(state.editorText).toBe("my unfinished prompt");
+		press("\x1b[A");
 		expect(controller.selectedAnchorId()).toBe("tool:call-1");
 		press(" ");
 		expect(transcript.render(80).join("\n")).toContain("▸ 1 side question");
@@ -197,17 +202,39 @@ describe("side threads", () => {
 		expect(state.bar).toBeUndefined();
 	});
 
-	it("restores the draft and returns to selection when a question is cancelled", async () => {
+	it("restores the draft on cancel, returning to management only when the question started there", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
 		const { controller, state, press } = setup(harness);
 		state.editorText = "draft";
+		controller.toggleSelection();
+		state.editorText = "half a question";
+		controller.cancelComposer();
+		expect(state.editorText).toBe("draft");
+		expect(controller.isSelecting()).toBe(false);
+		expect(state.bar).toBeUndefined();
+
+		controller.toggleSelection();
 		controller.toggleSelection();
 		press("\r");
 		state.editorText = "half a question";
 		controller.cancelComposer();
 		expect(state.editorText).toBe("draft");
 		expect(controller.isSelecting()).toBe(true);
+	});
+
+	it("keeps a half-typed question while alt+t switches to management and back", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		const { controller, state, press } = setup(harness);
+		state.editorText = "draft";
+		controller.toggleSelection();
+		state.editorText = "why did it";
+		controller.toggleSelection();
+		expect(controller.isSelecting()).toBe(true);
+		expect(state.editorText).toBe("draft");
+		press("\r");
+		expect(state.editorText).toBe("why did it");
 	});
 
 	it("opens the tree before the selected item with the thread as the editor note", async () => {
@@ -221,6 +248,7 @@ describe("side threads", () => {
 
 		// call-2 is only in the transcript, not on the session branch.
 		controller.toggleSelection();
+		controller.toggleSelection();
 		press("b");
 		expect(statuses).toContain("Nothing to branch from before this item");
 		expect(controller.isSelecting()).toBe(true);
@@ -232,6 +260,8 @@ describe("side threads", () => {
 
 		harness.setResponses([fauxAssistantMessage("Run biome with --write instead.")]);
 		await controller.ask(lint.anchor, "how do I fix it?", controller.resolveModel("same")!);
+		controller.toggleSelection();
+		controller.handleEditorInput("\x1b[A");
 		controller.toggleSelection();
 		press("b");
 		expect(state.trees[1]?.entryId).toBe(userId);

@@ -82,6 +82,8 @@ export class SideThreadController implements TranscriptDecorations {
 	private readonly selectionBar = new ThreadSelectionBar();
 	private readonly composerBar = new ThreadComposerBar();
 	private lastChoice: { provider: string; id: string } | undefined;
+	/** A half-typed question kept while alt+t switches from the question box to thread management. */
+	private questionDraft: { anchorId: string; text: string } | undefined;
 	private tickTimer: NodeJS.Timeout | undefined;
 	private renderTimer: NodeJS.Timeout | undefined;
 
@@ -135,6 +137,7 @@ export class SideThreadController implements TranscriptDecorations {
 	/** Called once per transcript render, before `renderBelow`. */
 	selectedAnchorId(): string | undefined {
 		this.syncStore();
+		if (this.mode.type === "composing") return this.mode.anchor.id;
 		return this.mode.type === "selecting" ? this.selectedId : undefined;
 	}
 
@@ -157,7 +160,10 @@ export class SideThreadController implements TranscriptDecorations {
 	}
 
 	onAnchorClick(anchorId: string): void {
-		if (this.mode.type === "composing") return;
+		if (this.mode.type === "composing") {
+			this.moveComposerTo(anchorId);
+			return;
+		}
 		if (this.mode.type !== "selecting") this.enterSelection();
 		this.select(anchorId);
 	}
@@ -169,14 +175,63 @@ export class SideThreadController implements TranscriptDecorations {
 
 	// -------------------------------------------------------------- selection
 
-	/** alt+t: enter selection on the newest item, or leave it. */
+	/**
+	 * alt+t: open the question box on the newest item; from there, switch to thread management
+	 * (fold, send, branch, delete) on the same item; from management, leave.
+	 */
 	toggleSelection(): void {
 		if (this.mode.type === "selecting") {
 			this.exitToIdle();
 			return;
 		}
-		if (this.mode.type === "composing") return;
-		this.enterSelection();
+		if (this.mode.type === "composing") {
+			const { anchor, draft } = this.mode;
+			const text = this.host.getEditorText();
+			this.questionDraft = text.trim() ? { anchorId: anchor.id, text } : undefined;
+			this.selectedId = anchor.id;
+			this.mode = { type: "idle" };
+			this.host.setEditorText(draft);
+			if (!this.enterSelection()) this.exitToIdle();
+			return;
+		}
+		const anchor = this.latestAnchor();
+		if (!anchor) {
+			this.host.showStatus("Nothing to ask about yet: side threads attach to tool calls and replies");
+			return;
+		}
+		this.startComposer(anchor);
+	}
+
+	/** Arrows in an empty question box pick another item. Returns true when the key was used. */
+	handleEditorInput(data: string): boolean {
+		if (this.mode.type !== "composing" || this.host.getEditorText() !== "") return false;
+		const keys = getKeybindings();
+		const delta = keys.matches(data, "tui.select.up")
+			? -1
+			: keys.matches(data, "tui.select.down")
+				? 1
+				: keys.matches(data, "tui.select.pageUp")
+					? -5
+					: keys.matches(data, "tui.select.pageDown")
+						? 5
+						: 0;
+		if (delta === 0) return false;
+		const next = this.neighbor(this.mode.anchor.id, delta);
+		if (next) this.moveComposerTo(next);
+		return true;
+	}
+
+	private moveComposerTo(anchorId: string): void {
+		if (this.mode.type !== "composing") return;
+		const anchor = this.host.transcript
+			.anchors()
+			.find((candidate) => candidate.getThreadAnchorId() === anchorId)
+			?.getThreadAnchor();
+		if (!anchor) return;
+		this.mode.anchor = anchor;
+		this.selectedId = anchor.id;
+		this.updateComposerBar();
+		this.host.reveal(anchor.id);
 	}
 
 	private enterSelection(): boolean {
@@ -203,14 +258,19 @@ export class SideThreadController implements TranscriptDecorations {
 	}
 
 	private move(delta: number): void {
+		const next = this.neighbor(this.selectedId, delta);
+		if (next) this.select(next);
+	}
+
+	/** The item `delta` steps from `anchorId` (clamped), or the newest when it is gone. */
+	private neighbor(anchorId: string | undefined, delta: number): string | undefined {
 		const ids = this.host.transcript
 			.anchors()
 			.map((anchor) => anchor.getThreadAnchorId())
 			.filter((id): id is string => !!id);
-		if (ids.length === 0) return;
-		const current = this.selectedId ? ids.indexOf(this.selectedId) : -1;
-		const next = current < 0 ? ids.length - 1 : Math.max(0, Math.min(ids.length - 1, current + delta));
-		this.select(ids[next]!);
+		if (ids.length === 0) return undefined;
+		const current = anchorId ? ids.indexOf(anchorId) : -1;
+		return ids[current < 0 ? ids.length - 1 : Math.max(0, Math.min(ids.length - 1, current + delta))];
 	}
 
 	private selectedAnchor(): ThreadAnchor | undefined {
@@ -343,6 +403,9 @@ export class SideThreadController implements TranscriptDecorations {
 			return;
 		}
 		const draft = this.mode.type === "composing" ? this.mode.draft : this.host.getEditorText();
+		const question = this.questionDraft?.anchorId === anchor.id ? this.questionDraft.text : "";
+		this.questionDraft = undefined;
+		this.selectedId = anchor.id;
 		this.mode = {
 			type: "composing",
 			anchor,
@@ -351,10 +414,11 @@ export class SideThreadController implements TranscriptDecorations {
 			choiceIndex: this.choiceIndex(anchor, choices, preferred),
 			fromSelection,
 		};
-		this.host.setEditorText("");
+		this.host.setEditorText(question);
 		this.updateComposerBar();
 		this.host.setBar(this.composerBar);
 		this.host.setFocus(undefined);
+		this.host.reveal(anchor.id);
 	}
 
 	private updateComposerBar(): void {

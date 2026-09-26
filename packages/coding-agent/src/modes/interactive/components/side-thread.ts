@@ -88,28 +88,38 @@ export function renderOpenThread(thread: SideThread, width: number): string[] {
 	return lines.map((line) => truncateToWidth(line, width));
 }
 
-/** Shown above the editor while it holds a side question instead of a prompt. */
+/** Up/down as one compact hint, e.g. `↑↓`. */
+function arrowsText(): string {
+	const up = keyText("tui.select.up");
+	const down = keyText("tui.select.down");
+	return up === "up" && down === "down" ? "↑↓" : `${up}/${down}`;
+}
+
+/** One line above the editor while it holds a side question instead of a prompt. */
 export class ThreadComposerBar implements Component {
 	anchorLabel = "";
 	modelLabel = "";
 	options = 1;
 
 	render(width: number): string[] {
-		const cycle = ` (${keyText("app.model.cycleForward")} to choose model${this.options > 1 ? `, ${keyText("app.agentMode.toggle")} to cycle` : ""})`;
-		const line = theme.fg("accent", `↳ asking about: ${this.anchorLabel}`);
-		const hint =
-			`${theme.fg("muted", "model:")} ${theme.bold(this.modelLabel)}` +
-			theme.fg(
-				"dim",
-				`${cycle} · ${keyText("tui.input.submit")} send · ${keyText("app.interrupt")} back to your prompt (draft kept)`,
-			);
-		return [truncateToWidth(line, width), truncateToWidth(hint, width)];
+		const hints = [
+			`${arrowsText()} item`,
+			...(this.options > 1 ? [`${keyText("app.agentMode.toggle")} model`] : []),
+			`${keyText("app.thread.select")} threads`,
+			`${keyText("app.interrupt")} back`,
+		];
+		const line =
+			theme.fg("accent", `↳ ${firstLine(this.anchorLabel, 36)}`) +
+			theme.fg("dim", " · ") +
+			theme.bold(this.modelLabel) +
+			theme.fg("dim", ` · ${hints.join(" · ")}`);
+		return [truncateToWidth(line, width)];
 	}
 
 	invalidate(): void {}
 }
 
-/** Key hints shown above the editor during thread selection. */
+/** One line of key hints above the editor while managing the selected item's thread. */
 export class ThreadSelectionBar implements Component {
 	selectedLabel = "";
 	hasThread = false;
@@ -122,22 +132,25 @@ export class ThreadSelectionBar implements Component {
 	}
 
 	render(width: number): string[] {
-		const parts = [
-			`${keyText("tui.select.up")}/${keyText("tui.select.down")} move`,
+		const hints = [
+			arrowsText(),
 			`${keyText("app.thread.ask")} ask`,
 			...(this.hasThread
 				? [
-						`${keyText("app.thread.toggle")} open/fold`,
-						`${keyText("app.thread.sendToMain")} send to main`,
+						`${keyText("app.thread.toggle")} fold`,
+						`${keyText("app.thread.sendToMain")} send`,
+						`${keyText("app.thread.branch")} branch`,
 						`${keyText("app.thread.delete")} delete`,
 					]
-				: []),
+				: [`${keyText("app.thread.branch")} branch`]),
 			...(this.running ? [`${keyText("app.thread.stop")} stop`] : []),
-			`${keyText("app.thread.branch")} branch before`,
 			`${keyText("tui.select.cancel")} back`,
 		];
-		const title = `${theme.fg("accent", theme.bold("THREAD"))} ${theme.fg("text", this.selectedLabel)}`;
-		return [truncateToWidth(title, width), truncateToWidth(theme.fg("dim", parts.join(" · ")), width)];
+		const line =
+			theme.fg("accent", theme.bold("THREAD ")) +
+			theme.fg("text", firstLine(this.selectedLabel, 36)) +
+			theme.fg("dim", ` · ${hints.join(" · ")}`);
+		return [truncateToWidth(line, width)];
 	}
 
 	invalidate(): void {}

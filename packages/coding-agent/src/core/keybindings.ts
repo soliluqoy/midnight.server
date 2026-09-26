@@ -175,7 +175,7 @@ export const KEYBINDINGS = {
 	"app.commandPalette": { defaultKeys: "alt+x", description: "Open command palette" },
 	"app.thread.select": {
 		defaultKeys: "alt+t",
-		description: "Select a transcript item to ask a side question about, or leave selection",
+		description: "Ask a side question about the newest transcript item; again to manage its thread; again to leave",
 	},
 	"app.thread.ask": { defaultKeys: "enter", description: "Side threads: ask about the selected item" },
 	"app.thread.toggle": { defaultKeys: "space", description: "Side threads: open or fold the selected item's thread" },

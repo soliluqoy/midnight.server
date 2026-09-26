@@ -49,9 +49,9 @@ See [Compaction Reference](compaction.md) for thresholds, retained boundaries, b
 
 A side thread is a short question about one item in the transcript, such as a failed command or a reply. The answer appears folded under that item. The main agent never sees it, keeps running while you ask, and your prompt draft is kept.
 
-1. Press `alt+t`. The newest tool call or reply is highlighted. Use up/down to pick another item, or alt+click it.
-2. Press Enter. A line above the editor shows the item and the model. Press `ctrl+p` to search all available models without changing the main session model; Tab in an empty editor cycles the short list instead. Type the question and press Enter. Escape goes back without asking.
-3. The answer streams under the item. With the item selected, Space opens or folds its thread, Enter asks a follow-up, `x` stops a running answer, `d` deletes the thread, `m` sends the thread to the main agent, and `b` branches from before the item (see below).
+1. Press `alt+t`. The editor becomes a question box for the newest tool call or reply, which is highlighted; one line above the editor shows the item and the model. While the box is empty, up/down picks another item (or alt+click it). Tab in the empty box cycles models; `ctrl+p` searches all available models. Neither changes the main session model.
+2. Type the question and press Enter. Escape goes back to your prompt without asking.
+3. The answer streams under the item. To manage threads, press `alt+t` again from the question box (a half-typed question is kept). Then up/down picks an item, Enter asks a follow-up, Space opens or folds its thread, `m` sends it to the main agent, `b` branches from before the item (see below), `d` deletes it, and `x` stops a running answer. `alt+t` or Escape leaves.
 
 `/ask [question]` asks about the newest item without selecting it. Start the question with `@local`, `@same`, or `@provider/model` to choose the model.
 

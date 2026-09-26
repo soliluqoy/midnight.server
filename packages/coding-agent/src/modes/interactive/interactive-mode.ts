@@ -3361,6 +3361,7 @@ export class InteractiveMode {
 			else this.cycleModel("backward");
 		});
 		this.defaultEditor.onAction("app.thread.select", () => this.sideThreads.toggleSelection());
+		this.defaultEditor.interceptInput = (data) => this.sideThreads.handleEditorInput(data);
 
 		// Global debug handler on TUI (works regardless of focus)
 		this.ui.onDebug = () => this.handleDebugCommand();

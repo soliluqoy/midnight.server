@@ -133,8 +133,8 @@ In fullscreen mode, these actions control the transcript and take precedence ove
 | `app.explorer.expand` | `right` | File explorer: expand a folder, or preview a file |
 | `app.explorer.collapse` | `left` | File explorer: collapse a folder, or go to its parent |
 | `app.explorer.preview` | `space` | File explorer: preview the selected file |
-| `app.thread.select` | `alt+t` | Select a transcript item to ask a side question about, or leave selection. See [Sessions](sessions.md#ask-side-questions) |
-| `app.thread.ask` | `enter` | Side threads: ask about the selected item |
+| `app.thread.select` | `alt+t` | Ask a side question about the newest transcript item; again to manage its thread; again to leave. See [Sessions](sessions.md#ask-side-questions) |
+| `app.thread.ask` | `enter` | Side threads: ask about the selected item (while managing threads) |
 | `app.thread.toggle` | `space` | Side threads: open or fold the selected item's thread |
 | `app.thread.sendToMain` | `m` | Side threads: add the selected thread to the main agent's context |
 | `app.thread.delete` | `d` | Side threads: delete the selected thread |
