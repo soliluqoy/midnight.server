@@ -1,6 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { type Component, setKeybindings } from "@earendil-works/pi-tui";
+import { type Component, setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../../src/core/keybindings.ts";
 import { type ThreadAnchor, toolCallAnchor } from "../../src/core/side-threads.ts";
@@ -320,14 +320,25 @@ describe("side threads", () => {
 describe("side thread bars", () => {
 	const plain = (lines: string[]) => stripVTControlCharacters(lines.join("\n"));
 
-	it("shortens the item label so every question-box hint fits 80 columns", () => {
+	it("shows the model keys and drops whole hints, least important first, when narrow", () => {
 		const bar = new ThreadComposerBar();
 		bar.anchorLabel = 'reply "Done: I disabled the useConst rule and moved on to the logger"';
 		bar.modelLabel = "claude-sonnet-5 (main)";
 		bar.options = 3;
-		const lines = bar.render(80);
-		expect(lines).toHaveLength(1);
-		expect(plain(lines)).toContain("↑↓ item · tab model · alt+t threads");
+		expect(plain(bar.render(140))).toContain(
+			"claude-sonnet-5 (main) · ↑↓ item · tab/shift+tab model · ctrl+l search · alt+t threads",
+		);
+
+		const narrow = plain(bar.render(80));
+		expect(narrow).toContain("claude-sonnet-5 (main) · ↑↓ item · tab/shift+tab model");
+		expect(narrow).not.toContain("search");
+		expect(narrow).not.toContain("...");
+		expect(visibleWidth(narrow)).toBeLessThanOrEqual(80);
+
+		// One model: nothing to cycle, but searching still helps.
+		bar.options = 1;
+		expect(plain(bar.render(140))).not.toContain("tab/shift+tab");
+		expect(plain(bar.render(140))).toContain("ctrl+l search");
 	});
 
 	it("keeps ask, send and branch visible on a narrow terminal and cuts the rarer keys", () => {
