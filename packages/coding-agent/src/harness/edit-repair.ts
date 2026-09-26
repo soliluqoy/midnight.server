@@ -206,14 +206,35 @@ export function suggestPaths(requested: string, files: readonly string[], max = 
 	return scored.slice(0, max).map((item) => item.path);
 }
 
+/** Shell tools: their results depend on state the guard cannot see, so identical calls are not loops. */
+const SHELL_TOOLS = new Set(["bash", "powershell"]);
+
+/**
+ * A failure's output with what changes between identical runs removed (numbers such as
+ * timings, the shell tool's truncation note with its temporary file), so the same error
+ * compares equal.
+ */
+export function failureSignature(output: string): string {
+	return output
+		.replace(/\[Showing [^\]]*Full output: [^\]]*\]/g, "")
+		.replace(/\d+(?:\.\d+)?/g, "#")
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(-4_000);
+}
+
 /**
  * Notices repeated identical tool calls and repeated identical failing commands within one
  * run. Weak models loop: they re-read the same file or rerun the same failing command,
  * expecting a different result.
+ *
+ * A fix-and-retest cycle is not a loop: a possible file change (an edit, or a shell command
+ * that succeeded) resets the counters, and a failure counts as repeated only when it fails
+ * with the same error as the time before.
  */
 export class LoopGuard {
 	private readonly calls = new Map<string, number>();
-	private readonly failures = new Map<string, number>();
+	private readonly failures = new Map<string, { count: number; signature: string }>();
 	/** Paths edited since the counters started; re-reading an edited file is not a loop. */
 	private epoch = 0;
 	loops = 0;
@@ -224,15 +245,26 @@ export class LoopGuard {
 		this.loops = 0;
 	}
 
-	/** A file changed: reads of it are new information again. */
+	/** A file changed: reads of it are new information again, and a rerun tests new code. */
 	noteChange(): void {
 		this.epoch++;
+		this.calls.clear();
+		this.failures.clear();
+	}
+
+	/**
+	 * Earlier results left the model's context (masked or compacted): calling again to see
+	 * them is not a loop.
+	 */
+	forgetCalls(): void {
 		this.calls.clear();
 	}
 
 	/** Record a call; returns a note when it repeats an earlier identical call. */
 	call(toolName: string, input: unknown): string | undefined {
-		if (toolName === "task" || toolName === "edit" || toolName === "write") return undefined;
+		if (toolName === "task" || toolName === "edit" || toolName === "write" || SHELL_TOOLS.has(toolName)) {
+			return undefined;
+		}
 		const key = `${this.epoch}\0${toolName}\0${JSON.stringify(input)}`;
 		const count = (this.calls.get(key) ?? 0) + 1;
 		this.calls.set(key, count);
@@ -241,12 +273,17 @@ export class LoopGuard {
 		return `[harness: this is call ${count} of this exact ${toolName} with the same arguments since the last file change; the result is the same as before. Use the earlier result or try a different approach.]`;
 	}
 
-	/** Record a failed shell command; returns a note on the second identical failure. */
-	failure(command: string): string | undefined {
-		const count = (this.failures.get(command) ?? 0) + 1;
-		this.failures.set(command, count);
+	/**
+	 * Record a failed shell command and its output; returns a note when it failed the same way
+	 * the time before, with no file edited in between.
+	 */
+	failure(command: string, output: string): string | undefined {
+		const signature = failureSignature(output);
+		const previous = this.failures.get(command);
+		const count = previous?.signature === signature ? previous.count + 1 : 1;
+		this.failures.set(command, { count, signature });
 		if (count < 2) return undefined;
 		this.loops++;
-		return `[harness: this command has failed ${count} times in this run. Rerunning it unchanged will fail again. Read the error, change the code or the command, or explain the blocker.]`;
+		return `[harness: this command has failed ${count} times in a row with the same error, with no edit or other successful command in between. Rerunning it unchanged will fail again. Read the error, change the code or the command, or explain the blocker.]`;
 	}
 }

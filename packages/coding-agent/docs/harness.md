@@ -32,7 +32,7 @@ Later prompts in the same session get only a new ranking. Indexing is incrementa
 - **Indentation repair.** When `oldText` matches the file in exactly one place once leading whitespace is ignored, the harness rewrites `oldText` to the file's real text and re-indents `newText` line by line to the file's style. Ambiguous or missing matches are left alone.
 - **Closest-match hints.** When an edit's text is not found, the error includes the most similar block of the file with its line numbers, so the model can copy it instead of reading the file again.
 - **Path hints.** A missing path gets "did you mean" suggestions from the workspace (same name elsewhere, near-miss names, other extensions).
-- **Loop notices.** The same call with the same arguments since the last file change, or the same failing command twice, gets a note saying so.
+- **Loop notices.** The same call with the same arguments since the last file change, or the same command failing twice in a row with the same error, gets a note saying so. A fix-and-retest cycle is not a loop: an edit, or a shell command that succeeds, resets the counters. Calling a tool again after masking or compaction removed its earlier result is not a loop either. Repeated shell commands are only noticed when they fail.
 - **Language-server errors.** In trusted projects, if a language server is installed (project `node_modules/.bin` or PATH: `typescript-language-server`, `pyright-langserver`, `gopls`, `rust-analyzer`), errors the edit introduced are appended to the edit result. Errors that existed before the edit are not reported.
 - **Interface repairs**, as before: foreign absolute paths such as `/workspace/math.js` are mapped into the workspace, POSIX null redirects are rewritten for PowerShell, and shell calls without a timeout get one.
 
@@ -64,7 +64,7 @@ Checks run as a ladder: level by level, stopping at the first level that fails, 
 
 ### Rollback
 
-Each time the checks pass, the harness snapshots the working tree to a private ref under `refs/midnight/checkpoints/` (a commit built from a temporary index; the user's index, branches, HEAD and stash are never touched). When the same checks fail twice in a row, the harness restores the last passing snapshot and shows the model the change it reverted, so the next attempt starts from working code with the failed idea in view. Refs are deleted when the session ends. Workspaces that are not git repositories have no snapshots.
+Each time the checks pass, the harness snapshots the working tree to a private ref under `refs/midnight/checkpoints/` (a commit built from a temporary index; the user's index, branches, HEAD and stash are never touched). When the same checks fail twice in a row, the harness restores the files the agent edited to the last passing snapshot and shows the model the change it reverted, so the next attempt starts from working code with the failed idea in view. Only files the agent changed with `edit` or `write` in the current request are restored; everything else, such as the user's own edits, is left alone. A snapshot from an earlier request is never used: each request starts without one. Refs are deleted when the session ends. Workspaces that are not git repositories have no snapshots.
 
 ## Escalation
 

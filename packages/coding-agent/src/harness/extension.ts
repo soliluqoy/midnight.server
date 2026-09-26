@@ -441,6 +441,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		index = undefined;
 		indexDirty = true;
 		packSent = false;
+		lastGreen = undefined;
 		syncTools(ctx);
 		// A managed Laya server loads its checkpoint in the background; decisions start once it answers.
 		if (on(ctx, "decisions")) decisions?.warmUp?.();
@@ -651,7 +652,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			if ((event.toolName === "bash" || event.toolName === "powershell") && on(ctx, "loopGuard")) {
 				const command = (event.input as { command?: unknown }).command;
 				if (typeof command === "string") {
-					const note = run.loopGuard.failure(command);
+					const note = run.loopGuard.failure(command, message);
 					if (note) {
 						extra.push(note);
 						telemetry.record({ type: "loop_note", tool: event.toolName });
@@ -663,6 +664,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		if (event.toolName === "bash" || event.toolName === "powershell") {
 			run.shellRan = true;
 			indexDirty = true;
+			// A command that succeeded may have changed files: rereads and reruns are new information.
+			if (!event.isError) run.loopGuard.noteChange();
 		}
 		const capped =
 			on(ctx, "localProfile") && isLocalModel(ctx) && event.toolName !== TASK_TOOL_NAME
@@ -719,6 +722,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		if (ctx.isProjectTrusted() !== trusted || ctx.cwd !== cwd) loadState(ctx);
 		run = freshRun(event.prompt);
 		run.startedAt = Date.now();
+		// A passing state from an earlier request predates whatever the user did since.
+		lastGreen = undefined;
 		if (!config.enabled) {
 			delete event.systemPromptOptions.sections.project_files;
 			return;
@@ -821,6 +826,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 				stats.elidedBytes += plan.elidedBytes;
 				telemetry.record({ type: "mask_batch", bytes: plan.elidedBytes, results: plan.edits.length });
 				entries.push(...plan.edits);
+				// The stubs tell the model to call again for elided content; that is not a loop.
+				run.loopGuard.forgetCalls();
 			}
 		}
 		const continuing =
@@ -864,6 +871,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 
 	// Compaction drops the task tool results from context; restore the contract as a message.
 	pi.on("session_compact", (_event, ctx) => {
+		// Compaction removed earlier results from context: reading them again is not a loop.
+		run.loopGuard.forgetCalls();
 		if (!on(ctx, "contract")) return;
 		const contract = latestContract(branchMessages(ctx));
 		if (!contract) return;
@@ -1111,15 +1120,20 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 				const entries: SessionBoundaryDraft[] = [];
 				let rollbackNote = "";
 				if (repeated && on(ctx, "checkpoints") && lastGreen) {
-					const restored = checkpointStore()?.restore(lastGreen);
+					// Only files the agent edited in this prompt: others may hold the user's own work.
+					const restored = checkpointStore()?.restore(
+						lastGreen,
+						[...run.allChanged].map((path) => resolve(ctx.cwd, path)),
+					);
 					if (restored && restored.paths.length > 0) {
+						const paths = restored.paths.map((path) => workspaceRelative(ctx.cwd, path) ?? path);
 						stats.rollbacks++;
 						indexDirty = true;
-						for (const path of restored.paths) run.changed.add(path);
-						telemetry.record({ type: "rollback", paths: restored.paths.length });
+						for (const path of paths) run.changed.add(path);
+						telemetry.record({ type: "rollback", paths: paths.length });
 						rollbackNote = [
 							"",
-							`The same checks failed twice, so the harness restored ${restored.paths.join(", ")} to the last state where the checks passed. This is the change it reverted; do not repeat it as is:`,
+							`The same checks failed twice, so the harness restored ${paths.join(", ")} to the last state in this request where the checks passed. This is the change it reverted; do not repeat it as is:`,
 							"```diff",
 							restored.diff.trimEnd(),
 							"```",

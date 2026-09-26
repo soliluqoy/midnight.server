@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 /**
  * Snapshots of the working tree in private git refs, and restoring one.
@@ -10,9 +10,9 @@ import { dirname, join } from "node:path";
  * first two instead of reconsidering. The files drift further from any working state.
  *
  * Solution: each time the checks pass, the harness snapshots the working tree. When the same
- * checks then fail twice in a row, it restores the last passing snapshot and shows the model
- * the change it reverted, so the next attempt starts from working code with the failed idea
- * in view.
+ * checks then fail twice in a row, it restores the files the agent changed to the last passing
+ * snapshot and shows the model the change it reverted, so the next attempt starts from working
+ * code with the failed idea in view. Files the agent did not change are left alone.
  *
  * A snapshot is a commit under `refs/midnight/checkpoints/`, built with a temporary index
  * file. The user's index, branches, HEAD and stash are never touched. Refs are deleted when
@@ -90,24 +90,31 @@ export class CheckpointStore {
 	}
 
 	/**
-	 * Restore the working tree to `checkpoint` for every path that differs from it. Returns
-	 * the reverted change as a bounded diff (checkpoint -> state before restoring), or
-	 * undefined when nothing differed or git failed.
+	 * Restore the working tree to `checkpoint` for the paths in `only` (absolute) that differ
+	 * from it. Other paths are never touched: a snapshot covers the whole repository, and the
+	 * user may have changed files the agent did not. Returns the reverted change as a bounded
+	 * diff (checkpoint -> state before restoring) and the restored paths as given in `only`,
+	 * or undefined when nothing differed or git failed.
 	 */
-	restore(checkpoint: Checkpoint): { diff: string; paths: string[] } | undefined {
+	restore(checkpoint: Checkpoint, only: readonly string[]): { diff: string; paths: string[] } | undefined {
+		const allowed = new Map(only.map((path) => [pathKey(path), path]));
+		if (allowed.size === 0) return undefined;
 		const root = repoRoot(this.cwd);
 		const current = writeWorkingTree(this.cwd);
 		if (!root || !current || current === checkpoint.tree) return undefined;
 		const names = git(root, ["diff", "--name-status", "-z", "--no-renames", checkpoint.tree, current]);
 		if (!names.ok) return undefined;
-		const diff = git(root, ["diff", "--no-color", "--no-renames", checkpoint.tree, current]);
 		const fields = names.stdout.split("\0").filter(Boolean);
+		const selected: string[] = [];
 		const paths: string[] = [];
 		for (let index = 0; index + 1 < fields.length; index += 2) {
 			const status = fields[index];
 			const path = fields[index + 1];
-			paths.push(path);
 			const target = join(root, path);
+			const requested = allowed.get(pathKey(target));
+			if (requested === undefined) continue;
+			selected.push(path);
+			paths.push(requested);
 			if (status === "A") {
 				rmSync(target, { force: true });
 				continue;
@@ -121,6 +128,17 @@ export class CheckpointStore {
 			mkdirSync(dirname(target), { recursive: true });
 			writeFileSync(target, blob.stdout);
 		}
+		if (selected.length === 0) return undefined;
+		const diff = git(root, [
+			"--literal-pathspecs",
+			"diff",
+			"--no-color",
+			"--no-renames",
+			checkpoint.tree,
+			current,
+			"--",
+			...selected,
+		]);
 		const text = diff.stdout;
 		return {
 			diff: text.length > MAX_DIFF_BYTES ? `${text.slice(0, MAX_DIFF_BYTES)}\n[... diff truncated ...]` : text,
@@ -133,6 +151,25 @@ export class CheckpointStore {
 		for (const checkpoint of this.checkpoints) git(this.cwd, ["update-ref", "-d", checkpoint.ref]);
 		this.checkpoints.length = 0;
 	}
+}
+
+/**
+ * Comparable form of an absolute path: symlinks and Windows short names resolved (git reports
+ * the real repository root), and case folded on Windows. A deleted file resolves through its
+ * directory.
+ */
+function pathKey(path: string): string {
+	let key = resolve(path);
+	try {
+		key = realpathSync.native(key);
+	} catch {
+		try {
+			key = join(realpathSync.native(dirname(key)), basename(key));
+		} catch {
+			// Keep the resolved path.
+		}
+	}
+	return process.platform === "win32" ? key.toLowerCase() : key;
 }
 
 /** Write the working tree to a git tree object through a throwaway index. */

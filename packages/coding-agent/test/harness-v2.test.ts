@@ -420,9 +420,38 @@ describe("edit repair", () => {
 		expect(guard.call("read", { path: "a" })).toContain("call 2");
 		guard.noteChange();
 		expect(guard.call("read", { path: "a" })).toBeUndefined();
-		expect(guard.failure("npm test")).toBeUndefined();
-		expect(guard.failure("npm test")).toContain("failed 2 times");
+		expect(guard.failure("npm test", "FAIL add: expected 3, got 4 (12 ms)")).toBeUndefined();
+		// The same error, with only timings and the truncation note differing, is a repeat.
+		expect(
+			guard.failure(
+				"npm test",
+				"FAIL add: expected 3, got 4 (15 ms)\n\n[Showing lines 1-1 of 1. Full output: /tmp/midnight-server-bash-a1b2.log]",
+			),
+		).toContain("failed 2 times");
 		expect(guard.loops).toBe(2);
+	});
+
+	it("does not count a fix-and-retest cycle as a loop", () => {
+		const guard = new LoopGuard();
+		for (let round = 0; round < 4; round++) {
+			expect(guard.failure("npm test", "FAIL add: expected 3, got 4")).toBeUndefined();
+			guard.noteChange();
+		}
+		// A different error each time means the model is making progress.
+		expect(guard.failure("npm test", "FAIL add: expected 3, got 4")).toBeUndefined();
+		expect(guard.failure("npm test", "FAIL sub: expected 1, got 2")).toBeUndefined();
+		expect(guard.failure("npm test", "SyntaxError: Unexpected token")).toBeUndefined();
+		expect(guard.loops).toBe(0);
+	});
+
+	it("does not treat repeated shell commands or re-reads of masked results as loops", () => {
+		const guard = new LoopGuard();
+		expect(guard.call("bash", { command: "git status" })).toBeUndefined();
+		expect(guard.call("bash", { command: "git status" })).toBeUndefined();
+		expect(guard.call("read", { path: "big.ts" })).toBeUndefined();
+		guard.forgetCalls();
+		expect(guard.call("read", { path: "big.ts" })).toBeUndefined();
+		expect(guard.loops).toBe(0);
 	});
 });
 
@@ -440,6 +469,7 @@ describe.skipIf(!hasCommand("git"))("checkpoints", () => {
 
 	it("snapshots without touching the index and restores changed, added and deleted files", () => {
 		writeFileSync(join(root, "a.js"), "two\n");
+		writeFileSync(join(root, "gone.js"), "keep me\n");
 		const store = new CheckpointStore(root, "test");
 		const checkpoint = store.snapshot("green");
 		expect(checkpoint).toBeDefined();
@@ -448,14 +478,40 @@ describe.skipIf(!hasCommand("git"))("checkpoints", () => {
 
 		writeFileSync(join(root, "a.js"), "three\n");
 		writeFileSync(join(root, "new.js"), "new\n");
-		const restored = store.restore(checkpoint!);
-		expect(restored?.paths.sort()).toEqual(["a.js", "new.js"]);
+		rmSync(join(root, "gone.js"));
+		const only = ["a.js", "new.js", "gone.js"].map((path) => join(root, path));
+		const restored = store.restore(checkpoint!, only);
+		expect(restored?.paths.sort()).toEqual([...only].sort());
 		expect(restored?.diff).toContain("+three");
 		expect(readFileSync(join(root, "a.js"), "utf8")).toBe("two\n");
 		expect(() => readFileSync(join(root, "new.js"))).toThrow();
+		expect(readFileSync(join(root, "gone.js"), "utf8")).toBe("keep me\n");
 		expect(git("for-each-ref", "refs/midnight")).toContain("refs/midnight/checkpoints/test-1");
 		store.dispose();
 		expect(git("for-each-ref", "refs/midnight")).toBe("");
+	});
+
+	it("restores only the given paths and leaves every other change alone", () => {
+		const store = new CheckpointStore(root, "test");
+		const checkpoint = store.snapshot("green");
+		writeFileSync(join(root, "a.js"), "agent change\n");
+		writeFileSync(join(root, "notes.txt"), "user notes\n");
+		mkdirSync(join(root, "docs"));
+		writeFileSync(join(root, "docs", "user.md"), "user doc\n");
+
+		const restored = store.restore(checkpoint!, [join(root, "a.js")]);
+		expect(restored?.paths).toEqual([join(root, "a.js")]);
+		expect(restored?.diff).toContain("+agent change");
+		expect(restored?.diff).not.toContain("user notes");
+		expect(readFileSync(join(root, "a.js"), "utf8")).toBe("one\n");
+		expect(readFileSync(join(root, "notes.txt"), "utf8")).toBe("user notes\n");
+		expect(readFileSync(join(root, "docs", "user.md"), "utf8")).toBe("user doc\n");
+
+		// Nothing to restore among the given paths: nothing happens.
+		expect(store.restore(checkpoint!, [join(root, "a.js"), join(root, "missing.js")])).toBeUndefined();
+		expect(readFileSync(join(root, "notes.txt"), "utf8")).toBe("user notes\n");
+		expect(store.restore(checkpoint!, [])).toBeUndefined();
+		store.dispose();
 	});
 });
 

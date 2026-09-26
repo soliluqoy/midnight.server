@@ -170,9 +170,73 @@ describe("harness v2 in a session", () => {
 			},
 		]);
 		await harness.session.prompt("change value.js");
-		expect(rollbackMessage).toContain("restored value.js to the last state where the checks passed");
+		expect(rollbackMessage).toContain("restored value.js to the last state in this request where the checks passed");
 		expect(rollbackMessage).toContain("-module.exports = 1; // v2");
 		expect(readFileSync(file, "utf8")).toBe("module.exports = 1; // v2\n");
+		expect(harness.getPendingResponseCount()).toBe(0);
+	});
+
+	it("never rolls back to a state from an earlier request or touches files the agent did not edit", async () => {
+		const harness = await setup();
+		writeProject(harness.tempDir);
+		writeFileSync(join(harness.tempDir, "README.md"), "original readme\n");
+		initGit(harness.tempDir);
+		const file = join(harness.tempDir, "value.js");
+		const edit = (from: string, to: string) =>
+			fauxAssistantMessage([fauxToolCall("edit", { path: "value.js", edits: [{ oldText: from, newText: to }] })], {
+				stopReason: "toolUse",
+			});
+		// Request 1: checks pass and the harness snapshots that state.
+		harness.setResponses([edit("module.exports = 1;", "module.exports = 1; // v2"), fauxAssistantMessage("done")]);
+		await harness.session.prompt("comment value.js");
+
+		// The user works between requests.
+		writeFileSync(join(harness.tempDir, "notes.txt"), "user notes\n");
+		writeFileSync(join(harness.tempDir, "README.md"), "user edited readme\n");
+
+		// Request 2: the same check fails twice, with no passing state in this request.
+		let feedback = "";
+		harness.setResponses([
+			edit("module.exports = 1; // v2", "module.exports = 2;"),
+			fauxAssistantMessage("done"),
+			edit("module.exports = 2;", "module.exports = 3;"),
+			fauxAssistantMessage("done again"),
+			(context) => {
+				feedback = contextText(context);
+				return fauxAssistantMessage("understood");
+			},
+		]);
+		await harness.session.prompt("set value to 2");
+		expect(feedback).toContain("Harness checks");
+		expect(feedback).not.toContain("restored");
+		expect(readFileSync(file, "utf8")).toBe("module.exports = 3;\n");
+		expect(readFileSync(join(harness.tempDir, "notes.txt"), "utf8")).toBe("user notes\n");
+		expect(readFileSync(join(harness.tempDir, "README.md"), "utf8")).toBe("user edited readme\n");
+	});
+
+	it("rolls back only the files the agent edited", async () => {
+		const harness = await setup();
+		writeProject(harness.tempDir);
+		initGit(harness.tempDir);
+		const edit = (from: string, to: string) =>
+			fauxAssistantMessage([fauxToolCall("edit", { path: "value.js", edits: [{ oldText: from, newText: to }] })], {
+				stopReason: "toolUse",
+			});
+		harness.setResponses([
+			edit("module.exports = 1;", "module.exports = 1; // v2"),
+			// The user saves a file in their editor while the agent works.
+			() => {
+				writeFileSync(join(harness.tempDir, "notes.txt"), "user notes\n");
+				return edit("module.exports = 1; // v2", "module.exports = 2;");
+			},
+			fauxAssistantMessage("done"),
+			edit("module.exports = 2;", "module.exports = 3;"),
+			fauxAssistantMessage("done again"),
+			fauxAssistantMessage("understood"),
+		]);
+		await harness.session.prompt("change value.js");
+		expect(readFileSync(join(harness.tempDir, "value.js"), "utf8")).toBe("module.exports = 1; // v2\n");
+		expect(readFileSync(join(harness.tempDir, "notes.txt"), "utf8")).toBe("user notes\n");
 		expect(harness.getPendingResponseCount()).toBe(0);
 	});
 
