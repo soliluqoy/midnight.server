@@ -5,7 +5,7 @@ import { serializeConversation } from "../core/compaction/utils.ts";
 import type { ExtensionAPI, ExtensionFactory } from "../core/extensions/types.ts";
 import { convertToLlm } from "../core/messages.ts";
 import type { ChatRequest, ChatResult, TokenLogprob } from "./engine.ts";
-import { type EngineManager, LocalSetupError } from "./engine-manager.ts";
+import { type EngineManager, LocalSetupError, LocalStoppedError } from "./engine-manager.ts";
 import { LOCAL_PROVIDER_ID } from "./pins.ts";
 import { type DriftWatchState, updateMidnightStatus } from "./status.ts";
 
@@ -310,7 +310,8 @@ export function createDriftWatchExtension(manager: EngineManager, settings: Drif
 
 		pi.on("turn_end", (_event, ctx) => {
 			// The local model selected with /model is the parent; there is no separate model to watch.
-			if (unavailable || checking || ctx.model?.provider === LOCAL_PROVIDER_ID) return;
+			// Stopped with /local-stop: skip checks, and do not count turns toward one.
+			if (unavailable || checking || manager.isDisabled || ctx.model?.provider === LOCAL_PROVIDER_ID) return;
 			turnsSinceCheck++;
 			turnsSinceNudge++;
 			const currentTokens = estimateContextTokens(latestMessages).tokens;
@@ -355,7 +356,8 @@ export function createDriftWatchExtension(manager: EngineManager, settings: Drif
 				} catch (error) {
 					// Aborted by session_shutdown: ctx is stale by then, and touching it throws
 					// from this detached task, which crashes the process.
-					if (signal.aborted) return;
+					// Stopped with /local-stop mid-check: the engine was killed under the request.
+					if (signal.aborted || error instanceof LocalStoppedError || manager.isDisabled) return;
 					if (error instanceof LocalSetupError) unavailable = true;
 					else
 						ctx.ui.notify(`[check] failed: ${error instanceof Error ? error.message : String(error)}`, "warning");

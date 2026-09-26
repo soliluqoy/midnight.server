@@ -28,6 +28,13 @@ import {
 
 export class LocalSetupError extends Error {}
 
+/** The user stopped the local model for this session with /local-stop. */
+export class LocalStoppedError extends Error {
+	constructor() {
+		super("The local model was stopped for this session with /local-stop. Run /local-start to use it again.");
+	}
+}
+
 export interface ResolvedModel {
 	modelPath: string;
 	hostPath?: string;
@@ -264,11 +271,15 @@ export async function startSelectedEngine(context: EngineContext): Promise<Local
 /**
  * Owns at most one engine for this process. Starts it on first use, shares the
  * in-flight start between concurrent callers, and stops it after an idle period
- * or on shutdown.
+ * or on shutdown. `disable()` stops it for the rest of the session: every later
+ * `get()` fails until `enable()`.
  */
 export class EngineManager {
 	private engine: LocalEngine | undefined;
 	private starting: Promise<LocalEngine> | undefined;
+	private disabled = false;
+	/** Aborts an in-flight start (including downloads) when the engine is disabled. */
+	private startAbort = new AbortController();
 	private idleTimer: NodeJS.Timeout | undefined;
 	private readonly idleMs: number;
 	private readonly settings: Partial<EngineSettings>;
@@ -286,11 +297,18 @@ export class EngineManager {
 		return this.engine?.running ? this.engine : undefined;
 	}
 
-	async get(signal?: AbortSignal): Promise<LocalEngine> {
+	/** True after `disable()` until `enable()`. */
+	get isDisabled(): boolean {
+		return this.disabled;
+	}
+
+	async get(callerSignal?: AbortSignal): Promise<LocalEngine> {
+		if (this.disabled) throw new LocalStoppedError();
 		this.touch();
 		if (this.engine?.running) return this.engine;
 		if (!this.starting) {
 			updateMidnightStatus({ engine: "starting" });
+			const signal = callerSignal ? AbortSignal.any([callerSignal, this.startAbort.signal]) : this.startAbort.signal;
 			this.starting = (async () => {
 				this.onStatus?.("Preparing local model...");
 				const model = await resolveModel(signal, this.onStatus);
@@ -305,6 +323,7 @@ export class EngineManager {
 				return engine;
 			})()
 				.catch((error: unknown) => {
+					if (this.disabled) throw new LocalStoppedError();
 					updateMidnightStatus({
 						engine: error instanceof LocalSetupError ? "unavailable" : "off",
 						activity: undefined,
@@ -321,7 +340,7 @@ export class EngineManager {
 	/** Keep the engine alive while in use; stop it after `idleMs` without requests. */
 	touch(): void {
 		if (this.idleTimer) clearTimeout(this.idleTimer);
-		if (this.idleMs > 0) {
+		if (this.idleMs > 0 && !this.disabled) {
 			this.idleTimer = setTimeout(() => void this.stop(), this.idleMs);
 			this.idleTimer.unref();
 		}
@@ -333,6 +352,26 @@ export class EngineManager {
 		this.engine = undefined;
 		await engine?.stop();
 		if (engine) updateMidnightStatus({ engine: "off" });
+	}
+
+	/**
+	 * Stop the engine for the rest of the session: cancel a start or download in
+	 * progress, kill the running engine (failing its in-flight requests), and make
+	 * every later `get()` throw `LocalStoppedError` until `enable()`.
+	 */
+	async disable(): Promise<void> {
+		this.disabled = true;
+		this.startAbort.abort(new LocalStoppedError());
+		await this.stop();
+		updateMidnightStatus({ engine: "stopped", activity: undefined });
+	}
+
+	/** Allow the engine to start again on next use. */
+	enable(): void {
+		if (!this.disabled) return;
+		this.disabled = false;
+		this.startAbort = new AbortController();
+		updateMidnightStatus({ engine: "off" });
 	}
 
 	stopSync(): void {

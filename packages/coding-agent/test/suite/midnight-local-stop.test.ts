@@ -1,40 +1,61 @@
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import type { EngineManager } from "../../src/midnight/engine-manager.ts";
-import { createLocalProviderExtension } from "../../src/midnight/extension.ts";
-import { type LocalEngineState, updateMidnightStatus } from "../../src/midnight/status.ts";
+import { EngineManager, LocalStoppedError } from "../../src/midnight/engine-manager.ts";
+import { createDelegateExtension, createLocalProviderExtension } from "../../src/midnight/extension.ts";
+import { getMidnightStatus, updateMidnightStatus } from "../../src/midnight/status.ts";
 import { createHarness, type Harness } from "./harness.ts";
 
-describe("/local-stop", () => {
+describe("/local-stop and /local-start", () => {
 	const harnesses: Harness[] = [];
 	afterEach(() => {
 		while (harnesses.length > 0) harnesses.pop()?.cleanup();
 		updateMidnightStatus({ engine: "off" });
 	});
 
-	async function runLocalStop(engine: LocalEngineState): Promise<{ stops: number; harness: Harness }> {
-		updateMidnightStatus({ engine });
-		let stops = 0;
-		const manager = {
-			stop: async () => {
-				stops++;
-			},
-		} as unknown as EngineManager;
+	async function setup(): Promise<{ manager: EngineManager; harness: Harness }> {
+		const manager = new EngineManager({ idleMs: 0 });
 		const harness = await createHarness({
-			extensionFactories: [createLocalProviderExtension(manager, { localOnly: false, contextSize: 8192 })],
+			extensionFactories: [
+				createLocalProviderExtension(manager, { localOnly: false, contextSize: 8192 }),
+				createDelegateExtension(manager),
+			],
 		});
 		harnesses.push(harness);
-		await harness.session.prompt("/local-stop");
-		return { stops, harness };
+		return { manager, harness };
 	}
 
-	it("stops a running engine without sending a prompt to the model", async () => {
-		const { stops, harness } = await runLocalStop("ready");
-		expect(stops).toBe(1);
+	it("stops the local model for the session without sending a prompt to the model", async () => {
+		const { manager, harness } = await setup();
+		await harness.session.prompt("/local-stop");
 		expect(harness.session.messages).toHaveLength(0);
+		expect(manager.isDisabled).toBe(true);
+		expect(getMidnightStatus().engine).toBe("stopped");
+		// Nothing can start it again: not the provider, delegate_local, nor drift watch.
+		await expect(manager.get()).rejects.toBeInstanceOf(LocalStoppedError);
 	});
 
-	it("does nothing when the engine is not running", async () => {
-		const { stops } = await runLocalStop("off");
-		expect(stops).toBe(0);
+	it("refuses delegate_local while stopped", async () => {
+		const { harness } = await setup();
+		harness.session.setActiveToolsByName([...harness.session.getActiveToolNames(), "delegate_local"]);
+		await harness.session.prompt("/local-stop");
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("delegate_local", { kind: "summarize", instruction: "Summarize" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("go");
+		const toolResult = harness.session.messages.find((message) => message.role === "toolResult");
+		expect(toolResult?.role === "toolResult" && toolResult.isError).toBe(true);
+		expect(JSON.stringify(toolResult)).toContain("/local-stop");
+		expect(getMidnightStatus().engine).toBe("stopped");
+	});
+
+	it("/local-start allows the engine to start again", async () => {
+		const { manager, harness } = await setup();
+		await harness.session.prompt("/local-stop");
+		await harness.session.prompt("/local-start");
+		expect(manager.isDisabled).toBe(false);
+		expect(getMidnightStatus().engine).toBe("off");
 	});
 });

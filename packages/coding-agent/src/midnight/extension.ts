@@ -14,7 +14,6 @@ import {
 } from "./helper.ts";
 import { getMidnightHome } from "./paths.ts";
 import { LOCAL_MODEL_ID, LOCAL_PROVIDER_ID } from "./pins.ts";
-import { getMidnightStatus } from "./status.ts";
 
 /**
  * Register the engine as the `midnight` provider. Each request gets the engine
@@ -66,15 +65,29 @@ export function createLocalProviderExtension(
 			],
 		});
 		pi.registerCommand("local-stop", {
-			description: "Stop the local model engine and free its memory (it restarts on next use)",
+			description:
+				"Stop the local model engine for this session and free its memory (nothing uses it until /local-start)",
 			handler: async (_args, ctx) => {
-				const { engine } = getMidnightStatus();
-				if (engine !== "ready" && engine !== "starting") {
-					ctx.ui.notify("Local model is not running.");
+				if (manager.isDisabled) {
+					ctx.ui.notify("Local model is already stopped. Run /local-start to use it again.");
 					return;
 				}
-				await manager.stop();
-				ctx.ui.notify("Local model stopped.");
+				await manager.disable();
+				const usingLocal = ctx.model?.provider === LOCAL_PROVIDER_ID;
+				ctx.ui.notify(
+					`Local model stopped for this session.${usingLocal ? " The session model is the local model; switch with /model or run /local-start." : " Run /local-start to use it again."}`,
+				);
+			},
+		});
+		pi.registerCommand("local-start", {
+			description: "Allow the local model to run again after /local-stop (it starts on next use)",
+			handler: async (_args, ctx) => {
+				if (!manager.isDisabled) {
+					ctx.ui.notify("Local model is not stopped.");
+					return;
+				}
+				manager.enable();
+				ctx.ui.notify("Local model enabled. It starts the next time it is needed.");
 			},
 		});
 		if (options.localOnly) {
@@ -152,6 +165,11 @@ export function createDelegateExtension(manager: EngineManager): ExtensionFactor
 			parameters: delegateParameters,
 			executionMode: "sequential",
 			async execute(toolCallId, params: Static<typeof delegateParameters>, signal, onUpdate, ctx) {
+				if (manager.isDisabled) {
+					throw new Error(
+						"The user stopped the local helper for this session (/local-stop). Do this task yourself; do not call delegate_local again.",
+					);
+				}
 				onUpdate?.({ content: [{ type: "text", text: "Starting local helper..." }], details: undefined });
 				const engine = await manager.get(signal);
 				onUpdate?.({
@@ -171,6 +189,9 @@ export function createDelegateExtension(manager: EngineManager): ExtensionFactor
 					signal,
 					artifactDir: join(getMidnightHome(), "artifacts"),
 				});
+				if (manager.isDisabled) {
+					throw new Error("The user stopped the local helper (/local-stop) while it ran. Do this task yourself.");
+				}
 				manager.touch();
 				if (result.status === "failed") throw new Error(formatHelperResult(result));
 				return { content: [{ type: "text", text: formatHelperResult(result) }], details: result };

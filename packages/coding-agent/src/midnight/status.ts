@@ -8,8 +8,11 @@
 /** `hybrid`: a cloud provider leads. `local`: --local. `fallback`: no provider configured, local model leads. */
 export type MidnightSessionMode = "hybrid" | "local" | "fallback";
 
-/** `off`: not started (it starts on first use). `unavailable`: setup failed; features that need it are disabled. */
-export type LocalEngineState = "off" | "starting" | "ready" | "unavailable";
+/**
+ * `off`: not started (it starts on first use). `unavailable`: setup failed; features that need it are disabled.
+ * `stopped`: stopped with /local-stop; nothing starts it again until /local-start.
+ */
+export type LocalEngineState = "off" | "starting" | "ready" | "unavailable" | "stopped";
 
 export type DriftVerdictStatus = "on_track" | "drifting" | "off_task";
 

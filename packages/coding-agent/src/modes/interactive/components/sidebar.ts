@@ -35,6 +35,7 @@ export function describeSessionMode(mode: MidnightStatus["mode"]): string | unde
 export function describeEngine(engine: MidnightStatus["engine"]): string {
 	if (engine === "off") return "idle";
 	if (engine === "starting") return "starting…";
+	if (engine === "stopped") return "stopped (/local-start)";
 	return engine;
 }
 

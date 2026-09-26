@@ -450,7 +450,8 @@ export class SideThreadController implements TranscriptDecorations {
 			if (index >= 0) return index;
 		}
 		const localIndex = choices.findIndex((choice) => choice.kind === "local");
-		const localReady = getMidnightStatus().engine === "ready" || findModel(MODEL_LOCK) !== undefined;
+		const engine = getMidnightStatus().engine;
+		const localReady = engine === "ready" || (engine !== "stopped" && findModel(MODEL_LOCK) !== undefined);
 		if (anchor.id.startsWith("tool:") && localIndex >= 0 && localReady) return localIndex;
 		const sessionIndex = choices.findIndex((choice) => choice.kind === "same");
 		return sessionIndex >= 0 ? sessionIndex : 0;
