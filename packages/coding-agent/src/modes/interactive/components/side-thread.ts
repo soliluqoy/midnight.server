@@ -1,4 +1,4 @@
-import { type Component, Markdown, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { type Component, Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { SideThread, SideThreadModelRef, SideThreadTurn } from "../../../core/side-threads.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { firstKeyText } from "./keybinding-hints.ts";
@@ -95,8 +95,14 @@ function arrowsText(): string {
 	return up === "up" && down === "down" ? "↑↓" : `${up}/${down}`;
 }
 
-/** Longest item label in a bar; the hints after it matter more than its tail. */
-const BAR_LABEL_MAX = 28;
+/**
+ * Room for the item label in a bar: whatever `kept` (the text that must stay visible) leaves,
+ * less the "..." that truncation adds when more hints follow, between 12 and 28 columns. The
+ * hints matter more than the tail of the label.
+ */
+function labelRoom(width: number, kept: string): number {
+	return Math.max(12, Math.min(28, width - visibleWidth(kept) - 3));
+}
 
 /**
  * One line above the editor while it holds a side question instead of a prompt. Hints are
@@ -114,8 +120,9 @@ export class ThreadComposerBar implements Component {
 			...(this.options > 1 ? [`${firstKeyText("app.agentMode.toggle")} model`] : []),
 			`${firstKeyText("app.thread.select")} threads`,
 		];
+		const rest = ` · ${this.modelLabel} · ${hints.join(" · ")}`;
 		const line =
-			theme.fg("accent", `↳ ${firstLine(this.anchorLabel, BAR_LABEL_MAX)}`) +
+			theme.fg("accent", `↳ ${firstLine(this.anchorLabel, labelRoom(width, `↳ ${rest}`))}`) +
 			theme.fg("dim", " · ") +
 			theme.bold(this.modelLabel) +
 			theme.fg("dim", ` · ${hints.join(" · ")}`);
@@ -150,9 +157,11 @@ export class ThreadSelectionBar implements Component {
 			arrowsText(),
 			`${firstKeyText("tui.select.cancel")} back`,
 		];
+		// Keep at least ask, send and branch (the first three hints) visible.
+		const kept = `THREAD  · ${hints.slice(0, 3).join(" · ")}`;
 		const line =
 			theme.fg("accent", theme.bold("THREAD ")) +
-			theme.fg("text", firstLine(this.selectedLabel, BAR_LABEL_MAX)) +
+			theme.fg("text", firstLine(this.selectedLabel, labelRoom(width, kept))) +
 			theme.fg("dim", ` · ${hints.join(" · ")}`);
 		return [truncateToWidth(line, width)];
 	}

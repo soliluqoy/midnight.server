@@ -320,22 +320,23 @@ describe("side threads", () => {
 describe("side thread bars", () => {
 	const plain = (lines: string[]) => stripVTControlCharacters(lines.join("\n"));
 
-	it("keeps every question-box hint on one 100-column line", () => {
+	it("shortens the item label so every question-box hint fits 80 columns", () => {
 		const bar = new ThreadComposerBar();
 		bar.anchorLabel = 'reply "Done: I disabled the useConst rule and moved on to the logger"';
 		bar.modelLabel = "claude-sonnet-5 (main)";
 		bar.options = 3;
-		const lines = bar.render(100);
+		const lines = bar.render(80);
 		expect(lines).toHaveLength(1);
 		expect(plain(lines)).toContain("↑↓ item · tab model · alt+t threads");
 	});
 
-	it("puts ask, send and branch first so a narrow terminal cuts the rarer keys", () => {
+	it("keeps ask, send and branch visible on a narrow terminal and cuts the rarer keys", () => {
 		const bar = new ThreadSelectionBar();
 		bar.selectedLabel = 'bash echo "lint: useConst footer.ts:160"';
 		bar.hasThread = true;
 		const text = plain(bar.render(80));
 		expect(text).toContain("enter ask · m send · b branch");
 		expect(text).not.toContain("escape/ctrl+c");
+		expect(plain(bar.render(60))).toContain("enter ask · m send · b branch");
 	});
 });
