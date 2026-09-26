@@ -1,0 +1,1 @@
+In loadConfig (config.js), command-line flags must always win over environment variables and the config file. Right now they don't.

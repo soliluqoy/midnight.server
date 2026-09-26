@@ -1,0 +1,1 @@
+Orders can now be in USD, EUR, GBP or JPY (order.currency). Every price we show must use the order's currency symbol ($, €, £, ¥). JPY has no decimals.

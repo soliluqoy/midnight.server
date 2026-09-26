@@ -1,0 +1,22 @@
+{
+	"description": "Parts must sum exactly to the total in cents; remainder distributed one cent at a time.",
+	"category": "implied-requirements",
+	"split": "holdout",
+	"checks": [
+		{
+			"name": "unit",
+			"command": [
+				"node",
+				"test.js"
+			],
+			"when": [
+				"**/*.js"
+			]
+		}
+	],
+	"protect": [],
+	"grade": [
+		"node",
+		"grade.js"
+	]
+}

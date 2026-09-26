@@ -82,7 +82,11 @@ const RULES: Record<Exclude<Language, "other">, Rule[]> = {
 			container: true,
 		},
 		{ pattern: /^(?:export\s+)?(?:declare\s+)?(?:interface|type|enum)\s+([A-Za-z_$][\w$]*)/, kind: "type" },
-		{ pattern: /^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*[:=]/, kind: "variable" },
+		// Not `const x = require(...)`: an import, not a declaration worth listing.
+		{
+			pattern: /^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*[:=](?!\s*(?:require|await\s+import)\s*\()/,
+			kind: "variable",
+		},
 		{ pattern: /^module\.exports\.([A-Za-z_$][\w$]*)\s*=/, kind: "variable" },
 		{ pattern: /^exports\.([A-Za-z_$][\w$]*)\s*=/, kind: "variable" },
 		{

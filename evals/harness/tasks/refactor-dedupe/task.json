@@ -1,0 +1,22 @@
+{
+	"description": "Extract one helper; outputs identical on many dates; the duplication must be gone.",
+	"category": "refactor",
+	"split": "dev",
+	"checks": [
+		{
+			"name": "unit",
+			"command": [
+				"node",
+				"test.js"
+			],
+			"when": [
+				"**/*.js"
+			]
+		}
+	],
+	"protect": [],
+	"grade": [
+		"node",
+		"grade.js"
+	]
+}

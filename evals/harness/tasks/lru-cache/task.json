@@ -1,0 +1,22 @@
+{
+	"description": "No failing test given: get must refresh recency; set on an existing key must update value and recency.",
+	"category": "hidden-bug",
+	"split": "dev",
+	"checks": [
+		{
+			"name": "unit",
+			"command": [
+				"node",
+				"test.js"
+			],
+			"when": [
+				"**/*.js"
+			]
+		}
+	],
+	"protect": [],
+	"grade": [
+		"node",
+		"grade.js"
+	]
+}

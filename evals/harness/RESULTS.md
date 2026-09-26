@@ -1,5 +1,14 @@
 # Harness eval results
 
+## 2026-09-26: harness v2 and the 27-task set, not yet measured on a model
+
+The harness was rebuilt (context pack, syntax gate, edit repair, language-server errors, `lookup`, detected checks as a ladder, in-run checks, rollback, escalation; the task contract is off by default) and the task set grew from 4 to 27 tasks with categories and a dev/holdout split. No cloud or local model was available in the build environment, so there are no pass rates for them yet. What was verified:
+
+- `node scripts/harness-eval-validate.mjs`: 27 of 27 tasks valid (the start fails the hidden grader, the reference passes it and the visible checks).
+- The full pipeline (CLI in `--mode json`, harness telemetry, grading, report) ran against a scripted OpenAI-compatible model on `add-bug` in three variants (`bare`, `harness`, `no-pack=-contextPack`): all passed; the harness variant's first request carried the context pack with `math.js` inlined, and the model got "checks pass" after its edit instead of running the tests itself.
+
+Next: run `--split dev --repeat 5` for the target fast models and the strong reference, bare and harness, then the ablations; judge on `--split holdout`.
+
 Runs of `scripts/harness-eval.mjs` on the four starter tasks. `harness` is the harness on; `bare` is `MIDNIGHT_SERVER_HARNESS=0`. Grading is by hidden tests copied in after the agent exits. Raw results are not committed (`evals/harness/results/` is ignored).
 
 ## 2026-09-27: cloud models, 3 repeats, thinking high

@@ -2,7 +2,7 @@
 
 A coding CLI and terminal UI for Windows, Linux and macOS, built from a modified [Pi](https://github.com/soliluqoy/pi), with the MiniCPM5-2B Q8_0 model running on the same machine as a local model and helper.
 
-Its headline feature is **[drift watch](#drift-watch)**: while a cloud model does the work, the local model keeps checking, at no token cost, that it is still doing what you asked. When it isn't, the local model steps in with a short reminder.
+Its headline feature is **[the harness](packages/coding-agent/docs/harness.md)**: it does in code what a model would otherwise spend turns and tokens on, so fast, cheap models solve more and waste less. Before the first request it hands the model the files that matter; at every edit it catches broken syntax, bad paths and mismatched text in the same turn; after edits it runs the project's own checks, cheapest first, and rolls back to the last passing state when a fix keeps failing; and when a fast model is stuck it asks a stronger one for advice.
 
 **Status: pre-release.** Local mode, hybrid delegation, automatic GPU/CPU engine selection, the Windows build and the offline package work and were verified on one Windows 10 laptop (CPU and Intel integrated GPU) and on Linux under WSL. Releases are built for Windows x64, Linux x64 (`.deb` and tarball) and macOS (Apple Silicon and Intel). The Linux and macOS builds are checked in CI (install, engine start, a local-model task, and that the engine exits when the CLI is killed) but not yet on user machines. The quality evaluation, the CUDA/ROCm/SYCL/OpenVINO/Metal backends on real hardware, code signing and clean-VM qualification are not done. See [implementation status](docs/IMPLEMENTATION_STATUS.md).
 
@@ -31,10 +31,11 @@ The first local run downloads the 2.5 GiB model and picks the fastest engine for
 
 ## Features
 
-- **Drift watch.** The local model keeps an eye on your cloud model during long sessions. It catches the model dropping a constraint you set, reversing an earlier decision, or wandering off task, and adds a one- or two-sentence correction. It runs in the background, is on by default, and uses no cloud tokens. [How it works](#drift-watch).
+- **Harness.** A context pack before the first request (environment, ranked files, their contents), a syntax gate and edit repairs at every action, language-server errors with each edit, a `lookup` tool for definitions and references, the project's checks (configured or detected) run as a ladder during and after the run, rollback to the last passing state, and advice from a stronger model when a fast one is stuck. [Details](packages/coding-agent/docs/harness.md).
+- **Drift watch (with `--hybrid`).** The local model keeps an eye on your cloud model during long sessions. It catches the model dropping a constraint you set, reversing an earlier decision, or wandering off task, and adds a one- or two-sentence correction. [How it works](#drift-watch).
 - **Local model.** MiniCPM5-2B Q8_0 runs entirely on your machine through a SHA-256-pinned llama.cpp engine. No account or network required after the first download.
 - **GPU when it helps.** Every official llama.cpp build (CPU, Vulkan, CUDA, ROCm, SYCL, OpenVINO, Metal, ...) is pinned. On first start midnight.server runs the model on your GPU and CPU and keeps whichever is faster; no GPU is needed. [Details](#gpu-and-backends).
-- **Hybrid delegation.** Your configured provider stays in charge and gets a `delegate_local` tool to hand small, bounded, read-only jobs to the local model, so it doesn't spend cloud tokens on cheap lookups.
+- **Hybrid delegation (with `--hybrid`).** Your configured provider stays in charge and gets a `delegate_local` tool to hand small, bounded, read-only jobs to the local model, so it doesn't spend cloud tokens on cheap lookups.
 - **Direct helper command.** `midnight.server helper <summarize|classify|inspect|plan|patch> "question" file...` runs one task locally, with no provider configured at all.
 - **Workspace-confined, read-only.** The helper only reads files it is explicitly given, resolved and confined to the workspace (symlinks, junctions, `..`, other drives and UNC paths all rejected). It has no shell tool and cannot write.
 - **Read-only git context.** The helper can run `status`, `diff`, `log`, `show`, or `blame` itself, with a fixed argv (never a shell) and byte-capped output, to answer questions about history without any write access.
@@ -55,7 +56,8 @@ The first local run downloads the 2.5 GiB model and picks the fastest engine for
 
 | Mode | Command | Behavior |
 | --- | --- | --- |
-| Default / Hybrid | `midnight.server` (same as `midnight.server --hybrid`) | Your configured provider leads. It gets a `delegate_local` tool that hands small read-only jobs to the local model, which starts on first use. You can also switch the session to the local model with `/model` (it is listed as "MiniCPM5-2B Q8_0 (local)") and back to your provider the same way. MiniCPM also runs a background drift check every few turns and flags it in a side thread if the parent model has lost track of the goal. If no provider is configured at all, the session silently starts on the local model instead — not offline-locked, so `/login` still works afterward. |
+| Default | `midnight.server` | Your configured provider leads, with the harness. The local model is not used unless you switch the session to it with `/model` (it is listed as "MiniCPM5-2B Q8_0 (local)"). If no provider is configured at all, the session silently starts on the local model instead — not offline-locked, so `/login` still works afterward. |
+| Hybrid | `midnight.server --hybrid` | As default, plus a `delegate_local` tool that hands small read-only jobs to the local model (which starts on first use), and a background drift check every few turns that flags in a side thread when the parent model has lost track of the goal. |
 | Local | `midnight.server --local` | Runs the whole session on the embedded MiniCPM5-2B Q8_0, downloading it and the engine automatically on first run if not already installed. Starts offline and **blocks every model request to any other provider** for the session. |
 | Direct helper | `midnight.server helper inspect "question" file.ts` | Runs one helper task locally, no provider needed. |
 
@@ -107,13 +109,13 @@ Lower the turn and token values to check more often, for example on long autonom
 
 ## Best way to use it
 
-- **Default (hybrid) for daily coding.** Just run `midnight.server`. Your configured provider leads and automatically gets `delegate_local` and the drift watcher — there is nothing to opt into.
+- **Default for daily coding.** Just run `midnight.server`. Your configured provider leads, with the harness; there is nothing to opt into. Add `--hybrid` for `delegate_local` and drift watch; on a laptop CPU each local call takes 10-50 s.
 - **`--local` when you want zero network calls**: offline, air-gapped, or reviewing code you don't want leaving the machine. It's a 2B model, so expect it to be slower and weaker than a cloud model on multi-step work.
 - **First run needs one network trip.** If the model (2.5 GiB) isn't installed yet, the first `--local` run, first no-provider session, or first `delegate_local`/helper call downloads and verifies it automatically — expect that one run to take a while. Run `midnight.server model fetch` ahead of time if you want to do that download on your own schedule, or on a fully offline machine, use the `-offline.zip` release, which already includes the model.
 - **`helper` for one-off questions** when a full session is overkill: `midnight.server helper inspect "why does this throw?" src/foo.ts`. No provider needed, and faster than starting an agent loop.
 - **Keep helper inputs small.** It answers best under roughly 6 KB of source per call; a 12 KB file was measured to return a wrong answer instead of escalating (see [implementation status](docs/IMPLEMENTATION_STATUS.md)). Point it at the specific file or function rather than the whole repo.
 - **Treat `patch` output as a proposal.** It's an unapplied diff built from exact-match text edits — read it before applying it yourself; the 2B model can be wrong (see [measurements](docs/benchmarks/cpu-i7-8650u.md)).
-- **Leave drift watch on for long sessions.** Long sessions are where it pays off. When a finding appears, check the constraint it names, then send it (`m`), redo from before it (`b`), or ignore it. If it fires too often or too rarely, see [tuning](#drift-watch).
+- **Use `--hybrid` drift watch for long sessions.** Long sessions are where it pays off. When a finding appears, check the constraint it names, then send it (`m`), redo from before it (`b`), or ignore it. If it fires too often or too rarely, see [tuning](#drift-watch).
 - **Run `doctor --smoke` after install** to confirm the model, engine, and process host all work end to end before relying on it mid-task.
 
 ## Install

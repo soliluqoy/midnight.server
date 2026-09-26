@@ -1,6 +1,24 @@
 {
 	"description": "Implied requirements: the prompt never lists the invalid cases. Tests intent understanding.",
-	"checks": [{ "name": "unit", "command": ["node", "test.js"], "when": ["*.js"] }],
-	"protect": ["test.js"],
-	"grade": ["node", "grade.js"]
+	"category": "implied-requirements",
+	"split": "holdout",
+	"checks": [
+		{
+			"name": "unit",
+			"command": [
+				"node",
+				"test.js"
+			],
+			"when": [
+				"*.js"
+			]
+		}
+	],
+	"protect": [
+		"test.js"
+	],
+	"grade": [
+		"node",
+		"grade.js"
+	]
 }
