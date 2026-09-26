@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-midnight.server is a native Windows coding CLI/TUI built as a source derivative of the Pi monorepo (`@earendil-works/*` packages, still named that way). It adds a local MiniCPM5-2B Q8_0 model served by a SHA-256-pinned prebuilt llama.cpp `llama-server`. The cloud provider leads; the local model does delegated read-only jobs (`delegate_local`), background drift checks, and session titles. `README.md` describes user-facing behavior; `docs/IMPLEMENTATION_STATUS.md` records what is verified, deviations from `IMPLEMENTATION_PLAN.md`, and known failing tests.
+midnight.server is a native Windows coding CLI/TUI built as a source derivative of the Pi monorepo (`@earendil-works/*` packages, still named that way). It adds a local MiniCPM5-2B Q8_0 model served by a SHA-256-pinned prebuilt llama.cpp `llama-server`. The cloud provider leads; the local model does delegated read-only jobs (`delegate_local`) and background drift checks. `README.md` describes user-facing behavior; `docs/IMPLEMENTATION_STATUS.md` records what is verified, deviations from `IMPLEMENTATION_PLAN.md`, and known failing tests.
 
 ## Commands
 
@@ -47,7 +47,7 @@ The local-model integration is kept in this directory (not separate packages) to
 - `engine-manager.ts`: lazy start, idle stop, and first-use fetch of model and engine. `backend.ts`: `auto` GPU vs CPU probe, saved per engine release, with CPU fallback.
 - `extension.ts`: registers provider `midnight` / model `minicpm5-2b-q8_0` (openai-completions) and the `delegate_local` tool.
 - `helper.ts`: typed helper tasks (summarize/classify/inspect/plan/patch), workspace confinement via realpath, byte budget (~6 KB), schema-constrained output with one repair, evidence validation, fixed-argv read-only git ops. Patches are exact `oldText`/`newText` edits rendered as an unapplied diff.
-- `drift-watch.ts`, `session-title.ts`: background local-model checks in cloud-led sessions.
+- `drift-watch.ts`: background local-model checks in cloud-led sessions. `session-title.ts`: names the session with the session model after the first exchange.
 - `status.ts`: shared status store read by the UI (sidebar, footer) and `extensions/agent-mode.ts` (plan/build mode tool swap).
 
 Built-in extensions are registered in `src/extensions/index.ts` (`llama.cpp` server provider, `agent-mode`). Product identity (`APP_NAME`, config dir `.midnight.server`) comes from `piConfig` in `packages/coding-agent/package.json` via `src/config.ts`.

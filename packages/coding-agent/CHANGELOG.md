@@ -13,7 +13,7 @@
 - Added an opencode-style session sidebar in fullscreen mode with the session title, git branch and working-tree status (changed/staged counts, ahead/behind), context usage and cost, the model, local engine and drift-watch state, and files changed this session with line counts. The `sidebar` setting (`auto`, `always`, `hidden`) and `app.sidebar.toggle` (Alt+S) control it.
 - Added a command palette (`app.commandPalette`, Alt+X) listing actions and slash commands with fuzzy search.
 - Added a file explorer on the left in fullscreen mode. It lists every file and folder, including gitignored ones, `node_modules` and `.git` (shown dimmed but still previewable), loading each folder when it is expanded, with git status marks and a dot on files changed this session. Enter or a double click adds `@path` to the prompt, Space opens a read-only preview, and Escape or any other typing returns to the prompt. The `explorer` setting (`auto` from 150 columns, `always`, `hidden`) and `app.explorer.toggle` (Alt+E) control it.
-- Added automatic session titles: after the first exchange the local model names an unnamed session, without cloud tokens. Skipped when the local model is not installed.
+- Added automatic session titles: after the first exchange the session model names an unnamed session.
 - Added `--local`: runs the session on the embedded MiniCPM5-2B Q8_0 through a bundled llama.cpp engine, forces offline startup, and blocks model requests to every other provider for the session.
 - Added `--hybrid` and the `delegate_local` tool: the configured parent model can hand bounded, read-only summarize/classify/inspect/plan/patch tasks to the local helper. Inputs are confined to the workspace, output is schema-validated with line evidence, and patches are returned as unapplied diffs.
 - Added the local MiniCPM model to `/model` in default/hybrid sessions, so you can switch from a cloud provider to the local model and back in the same session. The engine starts when the local model is first used.
@@ -25,6 +25,7 @@
 - Added a Windows Job Object host (`midnight-host.exe`) so the engine and its descendants exit with the CLI, including after a crash; the engine binds to loopback and requires a per-session key.
 - Added a pinned MiniCPM5-2B Q8_0 model lock and streaming size/SHA-256 verification for local GGUF files.
 - Added `ModelRegistry.restrictRequestProviders()` to limit a session's model requests to specific providers.
+- Added `/local-stop`: stops the local model engine and frees its memory. The engine starts again the next time the local model, `delegate_local` or drift watch need it. Also listed in the command palette (Alt+X).
 
 ### Changed
 

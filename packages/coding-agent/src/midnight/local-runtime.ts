@@ -39,8 +39,8 @@ export function parseMidnightMode(args: string[]): { mode: MidnightMode; rest: s
 	return { mode: local ? "local" : hybrid ? "hybrid" : "default", rest };
 }
 
-function sessionTitleExtension(manager: EngineManager): InlineExtension {
-	return { name: "midnight-session-title", factory: createSessionTitleExtension(manager), hidden: true };
+function sessionTitleExtension(): InlineExtension {
+	return { name: "midnight-session-title", factory: createSessionTitleExtension(), hidden: true };
 }
 
 function localProviderExtension(manager: EngineManager, localOnly: boolean, contextSize: number): InlineExtension {
@@ -67,7 +67,7 @@ function plannedContextSize(): number {
 function hybridExtensions(manager: EngineManager): InlineExtension[] {
 	return [
 		localProviderExtension(manager, false, plannedContextSize()),
-		sessionTitleExtension(manager),
+		sessionTitleExtension(),
 		{ name: "midnight-delegate", factory: createDelegateExtension(manager), hidden: true },
 		{
 			name: "midnight-drift-watch",
@@ -126,7 +126,7 @@ export async function prepareLocalRuntime(
 			],
 			extensionFactories: [
 				localProviderExtension(manager, true, engine.settings.contextSize),
-				sessionTitleExtension(manager),
+				sessionTitleExtension(),
 			],
 			stop: () => manager.stop(),
 		};
@@ -172,7 +172,7 @@ export async function prepareLocalRuntime(
 			],
 			extensionFactories: [
 				localProviderExtension(manager, false, engine.settings.contextSize),
-				sessionTitleExtension(manager),
+				sessionTitleExtension(),
 			],
 			stop: () => manager.stop(),
 		};

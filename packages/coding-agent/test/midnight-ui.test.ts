@@ -1,3 +1,4 @@
+import { fauxAssistantMessage, type StopReason } from "@earendil-works/pi-ai";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
@@ -7,7 +8,7 @@ import { type GitStatusSummary, GitStatusTracker, parseGitStatusPorcelainV2 } fr
 import { collectSessionFileChanges, countPatchLines } from "../src/core/session-file-changes.ts";
 import { type SessionEntry, SessionManager } from "../src/core/session-manager.ts";
 import agentModeExtension, { PLAN_MODE_TOOLS } from "../src/extensions/agent-mode.ts";
-import { cleanSessionTitle, generateSessionTitle } from "../src/midnight/session-title.ts";
+import { cleanSessionTitle, generateSessionTitle, type TitleCompleter } from "../src/midnight/session-title.ts";
 import {
 	getMidnightStatus,
 	onMidnightStatusChange,
@@ -142,16 +143,15 @@ describe("session titles", () => {
 		expect(cleanSessionTitle("x".repeat(80))?.length).toBe(60);
 	});
 
-	it("parses the model's JSON reply and ignores truncated output", async () => {
-		const engine = (content: string, finishReason = "stop") => ({
-			chat: async () => ({ content, finishReason, promptTokens: 1, completionTokens: 1 }),
-		});
+	it("takes the first line of the session model's reply and ignores truncated or failed output", async () => {
+		const model = (text: string, stopReason: StopReason = "stop") =>
+			(async () => fauxAssistantMessage(text, { stopReason })) satisfies TitleCompleter;
 		const signal = new AbortController().signal;
-		expect(await generateSessionTitle(engine('{"title":"Refactor the logger"}'), "u", "a", signal)).toBe(
+		expect(await generateSessionTitle(model('"Refactor the logger."\nThis session...'), "u", "a", signal)).toBe(
 			"Refactor the logger",
 		);
-		expect(await generateSessionTitle(engine('{"title":"Refac', "length"), "u", "a", signal)).toBeUndefined();
-		expect(await generateSessionTitle(engine("not json"), "u", "a", signal)).toBeUndefined();
+		expect(await generateSessionTitle(model("Refac", "length"), "u", "a", signal)).toBeUndefined();
+		expect(await generateSessionTitle(model("", "error"), "u", "a", signal)).toBeUndefined();
 	});
 });
 

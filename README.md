@@ -34,7 +34,7 @@ The first local run downloads the 2.5 GiB model and picks the fastest engine for
 - **File explorer.** Alt+E opens a file tree on the left (fullscreen mode) with git status marks. Enter adds `@path` to the prompt, Space previews the file, Escape goes back. Typing anything else goes straight to the prompt. It shows on its own only on terminals 150+ columns wide.
 - **Side threads.** Alt+T selects a tool call or reply in the transcript; Enter asks a question about it with the local model, the session model, or another model. The answer folds under that item, the main agent never sees it, and it can keep running. `m` sends a thread to the main agent when you want it to know. `/ask` asks about the newest item. [Details](packages/coding-agent/docs/sessions.md#ask-side-questions).
 - **Command palette.** Alt+X opens a fuzzy-searchable list of actions and slash commands.
-- **Automatic session titles.** After the first exchange the local model names the session, at no cloud cost, unless you already named it. It is skipped until the local model is installed.
+- **Automatic session titles.** After the first exchange the session model names the session, unless you already named it.
 - **Native Windows.** PowerShell is the default shell tool; no Node.js, Python, WSL, or Git Bash is needed to run it.
 - **Offline packaging.** The model-included archive needs no network at all once downloaded.
 
