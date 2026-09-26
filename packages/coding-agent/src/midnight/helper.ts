@@ -5,6 +5,7 @@ import { createTwoFilesPatch } from "diff";
 import { spawnProcess, waitForChildProcess } from "../utils/child-process.ts";
 import { killProcessTree } from "../utils/shell.ts";
 import type { ChatMessage, ChatRequest, ChatResult } from "./engine.ts";
+import { runLabelGate } from "./gate.ts";
 
 export const HELPER_KINDS = ["summarize", "classify", "inspect", "plan", "patch"] as const;
 export type HelperKind = (typeof HELPER_KINDS)[number];
@@ -83,6 +84,12 @@ export interface HelperResult {
 	patch?: string;
 	patchArtifact?: string;
 	checks: HelperCheck[];
+	/**
+	 * Probability (0-1) the model itself puts on "the answer is supported by the supplied
+	 * material", read from one constrained token. Present for completed inspect/plan tasks
+	 * when the engine returned logprobs. A cheap signal from the same model, not proof.
+	 */
+	confidence?: number;
 	usage: { promptTokens: number; completionTokens: number; elapsedMs: number; attempts: number };
 }
 
@@ -331,6 +338,17 @@ function buildMessages(task: HelperTask, inputs: LoadedInput[], git?: GitOpResul
 	];
 }
 
+const SELF_CHECK_LABELS = ["yes", "no"] as const;
+
+/** Below this, the self-check is reported as failed so the caller verifies before relying on the answer. */
+const SELF_CHECK_THRESHOLD = 0.5;
+
+const SELF_CHECK_QUESTION =
+	"Check your answer above against the numbered lines only. Is every claim in it directly supported by them? Answer yes or no.";
+
+/** Kinds whose answers are claims about the files, where a support check is meaningful. */
+const SELF_CHECK_KINDS: readonly HelperKind[] = ["inspect", "plan"];
+
 interface RawOutput {
 	status: "completed" | "needs_escalation";
 	summary: string;
@@ -541,6 +559,7 @@ export async function runHelperTask(
 	const thinking = task.thinking ?? (task.kind !== "summarize" && task.kind !== "classify");
 
 	let output: RawOutput | undefined;
+	let outputContent = "";
 	let lastProblem = "";
 	for (let attempt = 0; attempt < 2 && !output; attempt++) {
 		usage.attempts++;
@@ -579,6 +598,7 @@ export async function runHelperTask(
 		}
 		try {
 			output = parseOutput(result.content, task.kind);
+			outputContent = result.content;
 		} catch (error) {
 			lastProblem = error instanceof Error ? error.message : String(error);
 		}
@@ -606,6 +626,37 @@ export async function runHelperTask(
 		});
 	}
 
+	// The answer's messages are already in the engine's prefix cache, so this pays only for
+	// the answer tokens plus one generated token.
+	let confidence: number | undefined;
+	if (output.status === "completed" && SELF_CHECK_KINDS.includes(task.kind)) {
+		try {
+			const probabilities = await runLabelGate(
+				engine,
+				[
+					...messages,
+					{ role: "assistant", content: outputContent },
+					{ role: "user", content: SELF_CHECK_QUESTION },
+				],
+				SELF_CHECK_LABELS,
+				signal,
+			);
+			confidence = probabilities?.yes;
+		} catch {
+			if (options.signal?.aborted) return fail("cancelled", "Cancelled by the caller.", [], inputRefs);
+			if (timeout.aborted)
+				return fail("failed", `Timed out after ${Math.round(task.budget.timeoutMs / 1000)} s.`, [], inputRefs);
+			// Any other engine error only loses the signal; the answer itself stands.
+		}
+		if (confidence !== undefined) {
+			checks.push({
+				name: "self-check",
+				passed: confidence >= SELF_CHECK_THRESHOLD,
+				detail: `model puts ${Math.round(confidence * 100)}% on "supported by the supplied lines" (same-model signal, not proof)`,
+			});
+		}
+	}
+
 	let status: HelperResult["status"] = output.status;
 	let patch: string | undefined;
 	let patchArtifact: string | undefined;
@@ -631,6 +682,7 @@ export async function runHelperTask(
 		patch,
 		patchArtifact,
 		checks,
+		confidence,
 		usage: { ...usage, elapsedMs: Date.now() - started },
 	};
 }

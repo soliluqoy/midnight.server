@@ -7,6 +7,7 @@ import { convertToLlm } from "../core/messages.ts";
 import { latestAnchor, sideThreadStoreFor } from "../core/side-threads.ts";
 import type { ChatRequest, ChatResult, TokenLogprob } from "./engine.ts";
 import { type EngineManager, LocalSetupError, LocalStoppedError } from "./engine-manager.ts";
+import { labelProbabilities, runLabelGate } from "./gate.ts";
 import { LOCAL_MODEL_ID, LOCAL_PROVIDER_ID } from "./pins.ts";
 import { type DriftWatchState, updateMidnightStatus } from "./status.ts";
 
@@ -130,11 +131,6 @@ const REMINDER_RULE =
 
 const GATE_QUESTION = `Judge whether the assistant above is still on track. Answer with only the status: ${DRIFT_STATUSES.join(", ")}.`;
 
-const GATE_GRAMMAR = `root ::= ${DRIFT_STATUSES.map((status) => JSON.stringify(status)).join(" | ")}`;
-
-/** Alternatives requested for the gate token; the three labels sit well inside this. */
-const GATE_TOP_LOGPROBS = 20;
-
 function driftMessages(transcript: string, question: string): ChatRequest["messages"] {
 	return [
 		{ role: "system", content: DRIFT_SYSTEM_PROMPT },
@@ -149,15 +145,7 @@ function driftMessages(transcript: string, question: string): ChatRequest["messa
  * and the remainder renormalized.
  */
 export function gateProbabilities(top: TokenLogprob["top"]): DriftProbabilities | undefined {
-	const mass: DriftProbabilities = { on_track: 0, drifting: 0, off_task: 0 };
-	for (const alternative of top) {
-		if (!alternative.token) continue;
-		const matches = DRIFT_STATUSES.filter((status) => status.startsWith(alternative.token));
-		if (matches.length === 1) mass[matches[0]] += Math.exp(alternative.logprob);
-	}
-	const total = mass.on_track + mass.drifting + mass.off_task;
-	if (!(total > 0)) return undefined;
-	return { on_track: mass.on_track / total, drifting: mass.drifting / total, off_task: mass.off_task / total };
+	return labelProbabilities(top, DRIFT_STATUSES);
 }
 
 /**
@@ -169,17 +157,7 @@ export async function runDriftGate(
 	transcript: string,
 	signal: AbortSignal,
 ): Promise<DriftProbabilities | undefined> {
-	const result = await engine.chat({
-		messages: driftMessages(transcript, GATE_QUESTION),
-		maxTokens: 8,
-		temperature: 0,
-		enableThinking: false,
-		grammar: GATE_GRAMMAR,
-		topLogprobs: GATE_TOP_LOGPROBS,
-		signal,
-	});
-	const first = result.logprobs?.[0];
-	return first ? gateProbabilities(first.top) : undefined;
+	return runLabelGate(engine, driftMessages(transcript, GATE_QUESTION), DRIFT_STATUSES, signal);
 }
 
 /**

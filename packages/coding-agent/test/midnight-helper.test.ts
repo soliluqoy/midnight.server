@@ -185,6 +185,56 @@ describe("helper protocol", () => {
 	});
 });
 
+describe("self-check", () => {
+	const answer = {
+		content: JSON.stringify({
+			status: "completed",
+			summary: "No: NaN fails both range checks.",
+			evidence: [{ path: "src/port.ts", startLine: 2 }],
+		}),
+	};
+	const gate = (yes: number) => ({
+		content: "yes",
+		logprobs: [
+			{
+				token: "yes",
+				logprob: Math.log(yes),
+				top: [
+					{ token: "yes", logprob: Math.log(yes) },
+					{ token: "no", logprob: Math.log(1 - yes) },
+				],
+			},
+		],
+	});
+
+	it("asks one constrained yes/no question on the answer's prefix and reports the probability", async () => {
+		const engine = scripted(answer, gate(0.9));
+		const result = await runHelperTask(engine, task("inspect", ["src/port.ts"]));
+		expect(result.confidence).toBeCloseTo(0.9);
+		expect(result.checks).toContainEqual(expect.objectContaining({ name: "self-check", passed: true }));
+		const request = engine.requests[1];
+		expect(request.grammar).toBe('root ::= "yes" | "no"');
+		expect(request.messages.slice(0, 2)).toEqual(engine.requests[0].messages);
+		expect(request.messages[2]).toEqual({ role: "assistant", content: answer.content });
+	});
+
+	it("fails the check on low confidence without changing the status", async () => {
+		const result = await runHelperTask(scripted(answer, gate(0.2)), task("inspect", ["src/port.ts"]));
+		expect(result.status).toBe("completed");
+		expect(result.checks).toContainEqual(expect.objectContaining({ name: "self-check", passed: false }));
+		expect(formatHelperResult(result)).toContain("[FAIL] self-check: model puts 20%");
+	});
+
+	it("keeps the answer when the gate call fails, and skips kinds without claims", async () => {
+		const failed = await runHelperTask(scripted(answer, new Error("boom")), task("inspect", ["src/port.ts"]));
+		expect(failed.status).toBe("completed");
+		expect(failed.confidence).toBeUndefined();
+		const engine = scripted(answer);
+		await runHelperTask(engine, task("summarize", ["src/port.ts"]));
+		expect(engine.requests).toHaveLength(1);
+	});
+});
+
 describe("patch proposals", () => {
 	it("turns exact edits into a unified diff without touching the file", async () => {
 		const artifactDir = join(root, "artifacts");
