@@ -156,8 +156,8 @@ export class FooterComponent implements Component {
 		// Replace home directory with ~
 		let pwd = formatCwdForFooter(this.session.sessionManager.getCwd(), process.env.HOME || process.env.USERPROFILE);
 
-		// Add git branch and working-tree summary if available
-		const branch = this.footerData.getGitBranch();
+		// Add git branch and working-tree summary if available; the sidebar already shows them when visible
+		const branch = this.compact() ? null : this.footerData.getGitBranch();
 		if (branch) {
 			pwd = `${pwd}  ⎇ ${branch}`;
 			const status = this.gitStatus?.getStatus();
