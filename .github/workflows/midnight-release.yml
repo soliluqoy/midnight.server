@@ -1,0 +1,174 @@
+name: midnight.server Release
+
+# Builds, verifies and attaches release archives for Windows x64, Linux x64 and
+# macOS (arm64, x64) to a draft GitHub release for a v*-midnight.* tag. Publish
+# the draft after writing its notes. A manual run with publish off builds and
+# verifies any ref (e.g. main) without touching releases.
+on:
+  push:
+    tags:
+      - 'v*-midnight.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v0.87.1-midnight.4), or any ref for a dry run'
+        required: true
+        type: string
+      publish:
+        description: 'Attach the archives to a draft release for this tag'
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: midnight-release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Bootstrap (pinned Bun, npm ci --ignore-scripts)
+        shell: pwsh
+        run: .\scripts\bootstrap.ps1 -Install
+
+      - name: Build, package and verify
+        shell: pwsh
+        run: |
+          .\scripts\build.ps1
+          .\scripts\package.ps1
+          .\scripts\verify-release.ps1 -Package dist\midnight.server-windows-x64.zip
+          Move-Item dist\SHA256SUMS dist\SHA256SUMS-windows-x64
+
+      - name: Upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-windows-x64
+          path: |
+            dist/midnight.server-windows-x64.zip
+            dist/SHA256SUMS-windows-x64
+          if-no-files-found: error
+
+  unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-22.04
+          - platform: darwin-arm64
+            runner: macos-15
+          - platform: darwin-x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Read pinned Bun version
+        id: toolchain
+        run: echo "bun=$(node -p "require('./scripts/toolchain.lock.json').bun.version")" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ steps.toolchain.outputs.bun }}
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Engine host tests
+        working-directory: packages/coding-agent
+        run: node ../../node_modules/vitest/dist/cli.js --run test/midnight-engine-host.test.ts
+
+      - name: Build and package
+        run: |
+          bash scripts/build-unix.sh
+          # A dry run of a branch falls back to the package version.
+          case "$RELEASE_TAG" in v*) bash scripts/package-unix.sh "$RELEASE_TAG" ;; *) bash scripts/package-unix.sh ;; esac
+
+      - name: Cache model
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/model-home/models
+          key: model-${{ hashFiles('models/minicpm5-2b-q8_0.lock.json') }}
+
+      - name: Fetch model
+        run: MIDNIGHT_SERVER_HOME="$PWD/.cache/model-home" "build/dist/midnight.server-${{ matrix.platform }}/midnight.server" model fetch
+
+      - name: Verify (engine smoke and kill test)
+        run: |
+          model="$(ls "$PWD"/.cache/model-home/models/*.gguf | head -n 1)"
+          MIDNIGHT_SERVER_MODEL="$model" node scripts/verify-release.mjs "dist/midnight.server-${{ matrix.platform }}.tar.gz" --smoke
+
+      - name: Verify the .deb installs
+        if: matrix.platform == 'linux-x64'
+        run: |
+          sudo apt-get install -y ./dist/midnight.server-linux-x64.deb
+          midnight.server --version
+          midnight.server engine status
+          sudo apt-get remove -y midnight.server
+
+      - name: Upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ matrix.platform }}
+          path: |
+            dist/midnight.server-${{ matrix.platform }}.*
+            dist/SHA256SUMS-${{ matrix.platform }}
+          if-no-files-found: error
+
+  publish:
+    needs: [windows, unix]
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Attach to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cd dist
+          cat SHA256SUMS-* | sort -k2 > SHA256SUMS
+          rm SHA256SUMS-*
+          cat SHA256SUMS
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --draft --verify-tag --title "midnight.server $RELEASE_TAG" --notes "Release notes pending."
+          fi
+          gh release upload "$RELEASE_TAG" --clobber ./*

@@ -129,6 +129,11 @@ export function engineEnvironment(engineDir: string): NodeJS.ProcessEnv {
 	env.PATH = [engineDir, ...(systemRoot ? [join(systemRoot, "System32")] : []), process.env.PATH ?? process.env.Path]
 		.filter(Boolean)
 		.join(delimiter);
+	// The engine's shared libraries sit beside llama-server. macOS builds find them
+	// through their rpath (DYLD_* would be stripped by /bin/sh under SIP anyway).
+	if (process.platform === "linux") {
+		env.LD_LIBRARY_PATH = [engineDir, process.env.LD_LIBRARY_PATH].filter(Boolean).join(delimiter);
+	}
 	return env;
 }
 
@@ -144,29 +149,48 @@ function logTail(logPath: string, lines = 6): string {
 const delay = (ms: number) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 
 /**
+ * The Linux/macOS counterpart of midnight-host: `sh -c POSIX_HOST <name> <server> <args...>`.
+ * Our stdin is the ownership pipe. It reaches EOF when the CLI closes it or dies,
+ * even from SIGKILL, and the watcher then terminates the engine. SIGTERM to the
+ * wrapper does the same. A non-interactive shell gives background jobs /dev/null
+ * as stdin, so the pipe is passed to the watcher through fd 3.
+ */
+const POSIX_HOST = `exec 3<&0
+"$@" </dev/null &
+pid=$!
+( while IFS= read -r _; do :; done <&3; kill "$pid" 2>/dev/null ) &
+watcher=$!
+exec 3<&-
+trap 'kill "$pid" 2>/dev/null' TERM INT HUP
+wait "$pid"
+status=$?
+wait "$pid" 2>/dev/null
+kill "$watcher" 2>/dev/null
+exit "$status"`;
+
+/** Command line that runs the engine under an owner that stops it when the CLI exits. */
+export function hostedCommand(serverExe: string, args: string[], hostPath: string | undefined): [string, string[]] {
+	if (hostPath) return [hostPath, [serverExe, ...args]];
+	return ["/bin/sh", ["-c", POSIX_HOST, "midnight-host", serverExe, ...args]];
+}
+
+/**
  * A llama-server process owned by this CLI, bound to loopback with a random
- * per-session key. On Windows it runs inside a Job Object host whose lifetime is
- * tied to our stdin pipe, so the engine exits with the CLI even after a crash.
+ * per-session key. It runs under a host whose lifetime is tied to our stdin pipe
+ * (a Job Object on Windows, POSIX_HOST elsewhere), so the engine exits with the
+ * CLI even after a crash.
  */
 export class LocalEngine {
 	readonly baseUrl: string;
 	readonly apiKey: string;
 	readonly settings: EngineSettings;
 	private readonly child: ChildProcess;
-	private readonly hosted: boolean;
 	private exitInfo: { code: number | null; signal: NodeJS.Signals | null } | undefined;
 	private stopped = false;
 	private queue: Promise<unknown> = Promise.resolve();
 
-	private constructor(
-		child: ChildProcess,
-		hosted: boolean,
-		baseUrl: string,
-		apiKey: string,
-		settings: EngineSettings,
-	) {
+	private constructor(child: ChildProcess, baseUrl: string, apiKey: string, settings: EngineSettings) {
 		this.child = child;
-		this.hosted = hosted;
 		this.baseUrl = baseUrl;
 		this.apiKey = apiKey;
 		this.settings = settings;
@@ -222,8 +246,7 @@ export class LocalEngine {
 				String(Math.max(settings.threads, availableParallelism())),
 			];
 			const log = openSync(options.logPath, "a");
-			const command = options.hostPath ?? serverExe;
-			const commandArgs = options.hostPath ? [serverExe, ...args] : args;
+			const [command, commandArgs] = hostedCommand(serverExe, args, options.hostPath);
 			const child = spawn(command, commandArgs, {
 				cwd: keyDir,
 				env: engineEnvironment(options.engineDir),
@@ -232,13 +255,7 @@ export class LocalEngine {
 				windowsHide: true,
 			});
 			closeSync(log);
-			const engine = new LocalEngine(
-				child,
-				options.hostPath !== undefined,
-				`http://127.0.0.1:${port}`,
-				apiKey,
-				settings,
-			);
+			const engine = new LocalEngine(child, `http://127.0.0.1:${port}`, apiKey, settings);
 			try {
 				await engine.waitUntilReady(settings.startupTimeoutMs, options.signal, options.logPath);
 				await engine.assertAuthenticated();
@@ -364,8 +381,7 @@ export class LocalEngine {
 		this.stopped = true;
 		if (this.exitInfo) return;
 		const exited = new Promise<void>((resolveExit) => this.child.once("exit", () => resolveExit()));
-		if (this.hosted) this.child.stdin?.end();
-		else this.child.kill();
+		this.child.stdin?.end();
 		const timedOut = await Promise.race([exited.then(() => false), delay(5000).then(() => true)]);
 		if (timedOut) {
 			this.child.kill();
@@ -377,8 +393,7 @@ export class LocalEngine {
 	stopSync(): void {
 		if (this.stopped) return;
 		this.stopped = true;
-		if (this.hosted) this.child.stdin?.destroy();
-		else this.child.kill();
+		this.child.stdin?.destroy();
 	}
 }
 
