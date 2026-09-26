@@ -50,7 +50,7 @@ See [Compaction Reference](compaction.md) for thresholds, retained boundaries, b
 A side thread is a short question about one item in the transcript, such as a failed command or a reply. The answer appears folded under that item. The main agent never sees it, keeps running while you ask, and your prompt draft is kept.
 
 1. Press `alt+t`. The newest tool call or reply is highlighted. Use up/down to pick another item, or alt+click it.
-2. Press Enter. A line above the editor shows the item and the model. Press `ctrl+p` (or Tab in an empty editor) to switch models, type the question, and press Enter. Escape goes back without asking.
+2. Press Enter. A line above the editor shows the item and the model. Press `ctrl+p` to search all available models without changing the main session model; Tab in an empty editor cycles the short list instead. Type the question and press Enter. Escape goes back without asking.
 3. The answer streams under the item. With the item selected, Space opens or folds its thread, Enter asks a follow-up, `x` stops a running answer, `d` deletes the thread, and `m` sends the thread to the main agent.
 
 `/ask [question]` asks about the newest item without selecting it. Start the question with `@local`, `@same`, or `@provider/model` to choose the model.
@@ -63,7 +63,7 @@ The model decides how much context the question carries:
 | Local model | The item only, clipped to about 6 KB, plus earlier answers in the thread |
 | Another model | The item, recent conversation text, and earlier answers in the thread |
 
-The default is the local model for tool output when it is installed, otherwise the session model. The choice you make with `ctrl+p` is kept for later questions until you quit.
+The default is the local model for tool output when it is installed, otherwise the session model. The model you choose is kept for later questions until you quit.
 
 Threads are saved beside the session file as `<session>.threads.json`, so they come back when you resume. They are not session entries: `/tree`, `/fork`, and compaction ignore them, and a fork starts without threads. `m` is the only way a thread reaches the main agent: it adds the unsent questions and answers as a visible message. If the agent is running, the message is added when the current turn ends. No turn is started.
 

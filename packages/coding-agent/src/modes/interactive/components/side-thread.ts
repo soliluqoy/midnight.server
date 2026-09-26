@@ -93,10 +93,7 @@ export class ThreadComposerBar implements Component {
 	options = 1;
 
 	render(width: number): string[] {
-		const cycle =
-			this.options > 1
-				? ` (${keyText("app.model.cycleForward")} or ${keyText("app.agentMode.toggle")} to switch)`
-				: "";
+		const cycle = ` (${keyText("app.model.cycleForward")} to choose model${this.options > 1 ? `, ${keyText("app.agentMode.toggle")} to cycle` : ""})`;
 		const line = theme.fg("accent", `↳ asking about: ${this.anchorLabel}`);
 		const hint =
 			`${theme.fg("muted", "model:")} ${theme.bold(this.modelLabel)}` +

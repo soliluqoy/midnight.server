@@ -98,6 +98,28 @@ describe("side threads", () => {
 		expect(controller.threads()[0]?.turns[0]).toMatchObject({ status: "done", question: "is it only lint?" });
 	});
 
+	it("keeps a model chosen outside the scoped cycle for the side question only", async () => {
+		const harness = await createHarness({ models: [{ id: "faux-1" }, { id: "side-only" }] });
+		harnesses.push(harness);
+		const { controller, lint, state } = setup(harness);
+		state.editorText = "main draft";
+		controller.startComposer(lint.anchor);
+		const sideModel = harness.session.modelRuntime.getAvailableSnapshot().find((model) => model.id === "side-only")!;
+		expect(controller.modelChoices().some((choice) => choice.model.id === "side-only")).toBe(false);
+		controller.selectComposerModel(sideModel);
+		expect(controller.composingModel()?.id).toBe("side-only");
+		expect(harness.session.model?.id).toBe("faux-1");
+		harness.setResponses([fauxAssistantMessage("side answer")]);
+		controller.submitComposer("why?");
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(controller.threads()[0]?.turns[0]?.model).toMatchObject({ id: "side-only", kind: "other" });
+		expect(state.editorText).toBe("main draft");
+		controller.startComposer(lint.anchor);
+		expect(controller.composingModel()?.id).toBe("side-only");
+		controller.cancelComposer();
+		expect(harness.session.model?.id).toBe("faux-1");
+	});
+
 	it("runs while the main agent streams and leaves its turn unchanged", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);

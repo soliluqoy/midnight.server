@@ -3352,7 +3352,7 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.suspend", () => this.handleCtrlZ());
 		this.defaultEditor.onAction("app.thinking.cycle", () => this.cycleThinkingLevel());
 		this.defaultEditor.onAction("app.model.cycleForward", () => {
-			if (this.sideThreads.isComposing()) this.sideThreads.cycleModel(1);
+			if (this.sideThreads.isComposing()) this.showSideThreadModelSelector();
 			else this.cycleModel("forward");
 		});
 		this.defaultEditor.onAction("app.model.cycleBackward", () => {
@@ -5557,6 +5557,29 @@ export class InteractiveMode {
 				},
 			});
 			return { component: selector, focus: selector };
+		});
+	}
+
+	private showSideThreadModelSelector(): void {
+		const current = this.sideThreads.composingModel();
+		if (!current) return;
+		this.showSelector((done) => {
+			const selector = new ModelSelectorComponent(
+				this.ui,
+				current,
+				this.session.modelRuntime,
+				[],
+				(model) => {
+					this.sideThreads.selectComposerModel(model);
+					done();
+					this.ui.requestRender();
+				},
+				() => {
+					done();
+					this.ui.requestRender();
+				},
+			);
+			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
 
