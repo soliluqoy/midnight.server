@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ENV_AGENT_DIR } from "../src/config.ts";
+import { APP_NAME, ENV_AGENT_DIR } from "../src/config.ts";
 
 const cliPath = resolve(__dirname, "../src/cli.ts");
 const sourceResolverPath = resolve(__dirname, "../src/experimental/source-resolver.ts");
@@ -30,6 +30,8 @@ async function runCli(args: string[], cwd: string, agentDir: string): Promise<{ 
 				...process.env,
 				[ENV_AGENT_DIR]: agentDir,
 				MIDNIGHT_SERVER_OFFLINE: "1",
+				// Point at a missing model so the no-provider local fallback fails closed instead of downloading it.
+				MIDNIGHT_SERVER_MODEL: join(agentDir, "missing.gguf"),
 			},
 			stdio: ["ignore", "ignore", "pipe"],
 		});
@@ -57,7 +59,7 @@ describe("--session invalid file handling", () => {
 		const result = await runCli(["--session", sessionFile, "-p", "hi"], projectDir, agentDir);
 
 		expect(result.code).toBe(1);
-		expect(result.stderr).toContain(`Error: Session file is not a valid pi session: ${sessionFile}`);
+		expect(result.stderr).toContain(`Error: Session file is not a valid ${APP_NAME} session: ${sessionFile}`);
 		expect(result.stderr).not.toContain("SessionManager.open");
 		expect(result.stderr).not.toContain("at ");
 		expect(readFileSync(sessionFile, "utf8")).toBe(originalContent);
