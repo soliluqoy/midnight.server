@@ -1,7 +1,7 @@
 import { type Component, Markdown, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { SideThread, SideThreadModelRef, SideThreadTurn } from "../../../core/side-threads.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
-import { keyText } from "./keybinding-hints.ts";
+import { firstKeyText } from "./keybinding-hints.ts";
 
 const INDENT = "  ";
 const BAR = "│ ";
@@ -90,12 +90,19 @@ export function renderOpenThread(thread: SideThread, width: number): string[] {
 
 /** Up/down as one compact hint, e.g. `↑↓`. */
 function arrowsText(): string {
-	const up = keyText("tui.select.up");
-	const down = keyText("tui.select.down");
+	const up = firstKeyText("tui.select.up");
+	const down = firstKeyText("tui.select.down");
 	return up === "up" && down === "down" ? "↑↓" : `${up}/${down}`;
 }
 
-/** One line above the editor while it holds a side question instead of a prompt. */
+/** Longest item label in a bar; the hints after it matter more than its tail. */
+const BAR_LABEL_MAX = 28;
+
+/**
+ * One line above the editor while it holds a side question instead of a prompt. Hints are
+ * ordered by importance, so a narrow terminal cuts the least useful ones; Escape (back to the
+ * prompt) is left out as the one key everyone tries first.
+ */
 export class ThreadComposerBar implements Component {
 	anchorLabel = "";
 	modelLabel = "";
@@ -104,12 +111,11 @@ export class ThreadComposerBar implements Component {
 	render(width: number): string[] {
 		const hints = [
 			`${arrowsText()} item`,
-			...(this.options > 1 ? [`${keyText("app.agentMode.toggle")} model`] : []),
-			`${keyText("app.thread.select")} threads`,
-			`${keyText("app.interrupt")} back`,
+			...(this.options > 1 ? [`${firstKeyText("app.agentMode.toggle")} model`] : []),
+			`${firstKeyText("app.thread.select")} threads`,
 		];
 		const line =
-			theme.fg("accent", `↳ ${firstLine(this.anchorLabel, 36)}`) +
+			theme.fg("accent", `↳ ${firstLine(this.anchorLabel, BAR_LABEL_MAX)}`) +
 			theme.fg("dim", " · ") +
 			theme.bold(this.modelLabel) +
 			theme.fg("dim", ` · ${hints.join(" · ")}`);
@@ -133,22 +139,20 @@ export class ThreadSelectionBar implements Component {
 
 	render(width: number): string[] {
 		const hints = [
-			arrowsText(),
-			`${keyText("app.thread.ask")} ask`,
+			`${firstKeyText("app.thread.ask")} ask`,
 			...(this.hasThread
-				? [
-						`${keyText("app.thread.toggle")} fold`,
-						`${keyText("app.thread.sendToMain")} send`,
-						`${keyText("app.thread.branch")} branch`,
-						`${keyText("app.thread.delete")} delete`,
-					]
-				: [`${keyText("app.thread.branch")} branch`]),
-			...(this.running ? [`${keyText("app.thread.stop")} stop`] : []),
-			`${keyText("tui.select.cancel")} back`,
+				? [`${firstKeyText("app.thread.sendToMain")} send`, `${firstKeyText("app.thread.branch")} branch`]
+				: [`${firstKeyText("app.thread.branch")} branch`]),
+			...(this.running ? [`${firstKeyText("app.thread.stop")} stop`] : []),
+			...(this.hasThread
+				? [`${firstKeyText("app.thread.toggle")} fold`, `${firstKeyText("app.thread.delete")} delete`]
+				: []),
+			arrowsText(),
+			`${firstKeyText("tui.select.cancel")} back`,
 		];
 		const line =
 			theme.fg("accent", theme.bold("THREAD ")) +
-			theme.fg("text", firstLine(this.selectedLabel, 36)) +
+			theme.fg("text", firstLine(this.selectedLabel, BAR_LABEL_MAX)) +
 			theme.fg("dim", ` · ${hints.join(" · ")}`);
 		return [truncateToWidth(line, width)];
 	}

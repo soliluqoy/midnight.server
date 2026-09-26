@@ -518,8 +518,8 @@ export class SideThreadController implements TranscriptDecorations {
 	private choiceLabel(choice: SideThreadModelChoice): string {
 		const session = this.host.session();
 		const isSession = session.model?.provider === choice.model.provider && session.model.id === choice.model.id;
-		if (choice.kind === "local") return isSession ? "local (session model)" : "local";
-		return isSession ? `${choice.model.id} (same as main)` : choice.model.id;
+		if (choice.kind === "local") return isSession ? "local (main)" : "local";
+		return isSession ? `${choice.model.id} (main)` : choice.model.id;
 	}
 
 	/**

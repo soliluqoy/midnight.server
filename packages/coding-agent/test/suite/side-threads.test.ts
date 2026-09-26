@@ -1,8 +1,10 @@
+import { stripVTControlCharacters } from "node:util";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { type Component, setKeybindings } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../../src/core/keybindings.ts";
 import { type ThreadAnchor, toolCallAnchor } from "../../src/core/side-threads.ts";
+import { ThreadComposerBar, ThreadSelectionBar } from "../../src/modes/interactive/components/side-thread.ts";
 import { TranscriptContainer } from "../../src/modes/interactive/components/transcript-container.ts";
 import { SideThreadController, type SideThreadHost } from "../../src/modes/interactive/side-thread-controller.ts";
 import { initTheme } from "../../src/modes/interactive/theme/theme.ts";
@@ -312,5 +314,28 @@ describe("side threads", () => {
 		await controller.ask(lint.anchor, "why?", controller.resolveModel("same")!);
 		expect(controller.threads()[0]?.turns[0]).toMatchObject({ status: "error", error: "rate limited" });
 		expect(transcript.render(80).join("\n")).toContain("error: rate limited");
+	});
+});
+
+describe("side thread bars", () => {
+	const plain = (lines: string[]) => stripVTControlCharacters(lines.join("\n"));
+
+	it("keeps every question-box hint on one 100-column line", () => {
+		const bar = new ThreadComposerBar();
+		bar.anchorLabel = 'reply "Done: I disabled the useConst rule and moved on to the logger"';
+		bar.modelLabel = "claude-sonnet-5 (main)";
+		bar.options = 3;
+		const lines = bar.render(100);
+		expect(lines).toHaveLength(1);
+		expect(plain(lines)).toContain("↑↓ item · tab model · alt+t threads");
+	});
+
+	it("puts ask, send and branch first so a narrow terminal cuts the rarer keys", () => {
+		const bar = new ThreadSelectionBar();
+		bar.selectedLabel = 'bash echo "lint: useConst footer.ts:160"';
+		bar.hasThread = true;
+		const text = plain(bar.render(80));
+		expect(text).toContain("enter ask · m send · b branch");
+		expect(text).not.toContain("escape/ctrl+c");
 	});
 });
