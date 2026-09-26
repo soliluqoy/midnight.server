@@ -179,7 +179,7 @@ function createFakePi(allTools: string[], active: string[]) {
 }
 
 describe("agent mode extension", () => {
-	const all = ["read", "bash", "edit", "write", "grep", "find", "ls", "delegate_local", "custom"];
+	const all = ["read", "bash", "edit", "write", "grep", "find", "ls", "delegate_local", "task", "custom"];
 
 	it("restricts tools in plan mode and restores the build loadout afterwards", () => {
 		const fake = createFakePi(all, ["read", "bash", "edit", "write", "custom"]);

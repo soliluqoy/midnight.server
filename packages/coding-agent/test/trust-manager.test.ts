@@ -50,6 +50,11 @@ describe("ProjectTrustStore", () => {
 			expect(hasTrustRequiringProjectResources(tempDir)).toBe(true);
 			rmSync(join(tempDir, CONFIG_DIR_NAME, "settings.json"), { force: true });
 
+			// Harness checks are commands run after edits, so a cloned repo must not run them untrusted.
+			writeFileSync(join(tempDir, CONFIG_DIR_NAME, "harness.json"), "{}");
+			expect(hasTrustRequiringProjectResources(tempDir)).toBe(true);
+			rmSync(join(tempDir, CONFIG_DIR_NAME, "harness.json"), { force: true });
+
 			mkdirSync(join(cwd, CONFIG_DIR_NAME), { recursive: true });
 			writeFileSync(join(cwd, CONFIG_DIR_NAME, "settings.json"), "{}");
 			expect(hasTrustRequiringProjectResources(cwd)).toBe(true);

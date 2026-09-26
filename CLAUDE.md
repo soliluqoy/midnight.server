@@ -51,7 +51,11 @@ The local-model integration is kept in this directory (not separate packages) to
 - `drift-watch.ts`: background local-model checks in cloud-led sessions. `session-title.ts`: names the session with the session model after the first exchange.
 - `status.ts`: shared status store read by the UI (sidebar, footer) and `extensions/agent-mode.ts` (plan/build mode tool swap).
 
-Built-in extensions are registered in `src/extensions/index.ts` (`llama.cpp` server provider, `agent-mode`). Product identity (`APP_NAME`, config dir `.midnight.server`) comes from `piConfig` in `packages/coding-agent/package.json` via `src/config.ts`.
+Built-in extensions are registered in `src/extensions/index.ts` (`llama.cpp` server provider, `agent-mode`, `harness`).
+
+### `packages/coding-agent/src/harness/`
+
+Model-agnostic built-in extension (`docs/harness.md`): project checks run before a run settles, with bounded repair rounds; the `task` contract tool and its acceptance-criteria reminder; protected files; batched observation masking via `context_edit`; argument repair (foreign absolute paths, POSIX redirects in PowerShell); and the local-model profile (core tools, 6 KB tool output, context files listed instead of inlined, greedy decoding). Project config is `.midnight.server/harness.json` and requires project trust. `scripts/harness-eval.mjs` measures it with hidden-test tasks in `evals/harness/tasks/`. Product identity (`APP_NAME`, config dir `.midnight.server`) comes from `piConfig` in `packages/coding-agent/package.json` via `src/config.ts`.
 
 ### Tests
 
