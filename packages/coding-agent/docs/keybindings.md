@@ -187,6 +187,7 @@ On native Windows, `app.suspend` has no default because Windows terminals do not
 | `app.tree.unfoldOrDown` | `ctrl+right`, `alt+right` | Unfold current branch segment, or jump to the next segment start or branch end |
 | `app.tree.editLabel` | `shift+l` | Edit the label on the selected tree node |
 | `app.tree.toggleLabelTimestamp` | `shift+t` | Toggle label timestamps in the tree |
+| `app.tree.newSession` | `shift+n` | Start a new session from the selected tree entry (like `/fork` before a user message, `/clone` at others) |
 | `app.tree.filter.default` | `ctrl+d` | Set tree filter to default view |
 | `app.tree.filter.noTools` | `ctrl+t` | Toggle tree filter that hides tool results |
 | `app.tree.filter.userOnly` | `ctrl+u` | Toggle tree filter that shows only user messages |

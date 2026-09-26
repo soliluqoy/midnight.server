@@ -51,6 +51,7 @@ export interface AppKeybindings {
 	"app.tree.unfoldOrDown": true;
 	"app.tree.editLabel": true;
 	"app.tree.toggleLabelTimestamp": true;
+	"app.tree.newSession": true;
 	"app.session.togglePath": true;
 	"app.session.toggleSort": true;
 	"app.session.rename": true;
@@ -208,6 +209,10 @@ export const KEYBINDINGS = {
 	"app.tree.toggleLabelTimestamp": {
 		defaultKeys: "shift+t",
 		description: "Toggle tree label timestamps",
+	},
+	"app.tree.newSession": {
+		defaultKeys: "shift+n",
+		description: "Start a new session from the selected tree entry (fork before a user message, clone at others)",
 	},
 	"app.session.togglePath": {
 		defaultKeys: "ctrl+p",

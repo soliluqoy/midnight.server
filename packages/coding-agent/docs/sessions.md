@@ -21,13 +21,14 @@ The session picker lets you search, rename, and delete sessions. It can also sho
 
 midnight.server stores entries as a tree, so returning to an earlier point does not erase the branch you leave.
 
-| Action | Result | Use it when |
-|---|---|---|
-| `/tree` | Moves within the current session file | Related alternatives should stay together |
-| `/fork` | Creates a new session from an earlier user message | The alternative should become separate work |
-| `/clone` | Copies the active branch into a new session | You want a separate copy of the current state |
+`/tree` (or Escape twice in an empty editor) is the one place to go back. Pick an entry, then:
 
-In `/tree`, select a user message to put its text back in the editor. Edit and submit it to create another branch. Selecting an assistant response or another entry continues after that entry with an empty editor.
+| Key | Result | Use it when |
+|---|---|---|
+| Enter | Continues from that entry in the current session file | Related alternatives should stay together |
+| `shift+n` | Starts a new session from that entry | The alternative should become separate work, or you want a copy of the current state |
+
+On a user message, both put its text back in the editor so you can edit and resubmit it; Enter branches before it in this session, `shift+n` starts a new session that ends just before it (what `/fork` does). On any other entry the editor stays empty; `shift+n` on the newest entry copies the whole branch (what `/clone` does). `/fork` and `/clone` still work when typed. Side threads can open `/tree` for you (`b`, see [Redo an item from a side thread](#redo-an-item-from-a-side-thread)).
 
 When you leave a branch, midnight.server can summarize it and attach that summary to the branch you enter. This preserves relevant work from the abandoned path without including every message from it.
 
@@ -71,7 +72,7 @@ Drift watch (hybrid mode) reports its findings the same way: a thread from `drif
 
 ### Redo an item from a side thread
 
-When a side thread shows the agent went the wrong way at an item, select the item and press `b`. `/tree` opens on the entry just before it: the prompt that led to the item, or the tool result it followed. Navigate as usual (move the selection first if you want to go back further). After navigating, the thread's answered questions are added to the editor as a note, below the prompt text if you picked a user message. Edit it into guidance and send it to redo the item on a new branch.
+When a side thread shows the agent went the wrong way at an item, select the item and press `b`. `/tree` opens on the entry just before it: the prompt that led to the item, or the tool result it followed. Navigate as usual (move the selection first if you want to go back further). After navigating, the thread's answered questions are added to the editor as a note, below the prompt text if you picked a user message. Edit it into guidance and send it to redo the item on a new branch. Press `shift+n` instead of Enter in the tree to redo it in a new session; the note comes along the same way.
 
 The thread stays with the item on the branch you left, and comes back if you navigate there again. If the agent is running, navigating stops it, as in `/tree`.
 

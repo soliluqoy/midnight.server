@@ -300,13 +300,36 @@ describe("TreeSelectorComponent", () => {
 
 			const plainLines = selector.render(30).map(stripVTControlCharacters);
 			const plain = plainLines.join("\n");
+			expect(plain).toContain("continue here");
+			expect(plain).toContain("shift+n new session");
 			expect(plain).toContain("branch");
 			expect(plain).toContain("copy");
-			expect(plain).toContain("filters");
-			expect(plain).toContain("cycle");
-			expect(plain).toContain("label time");
+			expect(plain).toContain("filter");
+			expect(plain).not.toContain("label time");
 			expect(plain).not.toContain("...");
 			expect(plainLines.every((line) => visibleWidth(line) <= 30)).toBe(true);
+		});
+	});
+
+	describe("new session", () => {
+		test("shift+n reports the selected entry instead of navigating to it", () => {
+			const tree = buildTree([userMessage("user-1", null, "hello"), assistantMessage("asst-1", "user-1", "hi")]);
+			const selected: string[] = [];
+			const started: string[] = [];
+			const selector = new TreeSelectorComponent(
+				tree,
+				"asst-1",
+				24,
+				(entryId) => selected.push(entryId),
+				() => {},
+			);
+			selector.onNewSession = (entryId) => started.push(entryId);
+
+			selector.handleInput("\x1b[A");
+			selector.handleInput("N");
+
+			expect(started).toEqual(["user-1"]);
+			expect(selected).toEqual([]);
 		});
 	});
 

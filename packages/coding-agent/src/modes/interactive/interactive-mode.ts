@@ -3090,12 +3090,6 @@ export class InteractiveMode {
 				keywords: "explorer files tree browse",
 			},
 			{
-				id: "action:model",
-				label: "Select model",
-				description: withKey("Choose the model for this session", "app.model.select"),
-				keywords: "model provider",
-			},
-			{
 				id: "action:local-status",
 				label: "Local model status",
 				description: `engine ${describeEngine(status.engine)} · drift ${describeDrift(status)}`,
@@ -3104,10 +3098,14 @@ export class InteractiveMode {
 		];
 		const builtinNames = new Set(BUILTIN_SLASH_COMMANDS.map((command) => command.name));
 		for (const command of BUILTIN_SLASH_COMMANDS) {
+			// /tree's new-session action covers these; the commands still work when typed.
+			if (command.name === "fork" || command.name === "clone") continue;
 			entries.push({
 				id: command.argumentHint ? `insert:/${command.name} ` : `run:/${command.name}`,
 				label: `/${command.name}`,
-				description: command.description,
+				description:
+					command.name === "model" ? withKey(command.description, "app.model.select") : command.description,
+				keywords: command.name === "tree" ? "rewind fork clone branch undo" : undefined,
 			});
 		}
 		for (const template of this.session.promptTemplates) {
@@ -3149,7 +3147,6 @@ export class InteractiveMode {
 		if (id === "action:agent-mode") this.toggleAgentMode();
 		else if (id === "action:sidebar") this.toggleSidebar();
 		else if (id === "action:explorer") this.toggleExplorer();
-		else if (id === "action:model") this.showModelSelector();
 		else if (id === "action:local-status") {
 			const status = getMidnightStatus();
 			this.showStatus(
@@ -5648,6 +5645,27 @@ export class InteractiveMode {
 		}
 	}
 
+	/**
+	 * `/tree`'s new-session action, covering `/fork` and `/clone`: before a user message the new
+	 * session ends just before it and its text returns to the editor; at any other entry the new
+	 * session ends at that entry. `editorNote` (a side thread's answers) is added below.
+	 */
+	private async startSessionFrom(entryId: string, editorNote: string | undefined): Promise<void> {
+		const entry = this.sessionManager.getEntry(entryId);
+		const beforeUserMessage = entry?.type === "message" && entry.message.role === "user";
+		try {
+			const result = await this.runtimeHost.fork(entryId, { position: beforeUserMessage ? "before" : "at" });
+			if (result.cancelled) {
+				this.ui.requestRender();
+				return;
+			}
+			this.editor.setText([result.selectedText, editorNote].filter(Boolean).join("\n\n"));
+			this.showStatus("Started a new session from the selected point");
+		} catch (error: unknown) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
 	/** `editorNote` is appended to the editor after navigating (a side thread's answers when branching from it). */
 	private showTreeSelector(initialSelectedId?: string, editorNote?: string): void {
 		const tree = this.sessionManager.getTree();
@@ -5782,6 +5800,10 @@ export class InteractiveMode {
 				initialSelectedId,
 				initialFilterMode,
 			);
+			selector.onNewSession = (entryId) => {
+				done();
+				void this.startSessionFrom(entryId, editorNote);
+			};
 			selector.onCopy = async (text) => {
 				if (!text) {
 					this.showError("Selected entry has no text to copy");
