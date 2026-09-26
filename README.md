@@ -1,15 +1,28 @@
 # midnight.server
 
-A native Windows coding CLI and terminal UI built from a modified [Pi](https://github.com/soliluqoy/pi), with the MiniCPM5-2B Q8_0 model running on the same machine as a local model and helper.
+A coding CLI and terminal UI for Windows, Linux and macOS, built from a modified [Pi](https://github.com/soliluqoy/pi), with the MiniCPM5-2B Q8_0 model running on the same machine as a local model and helper.
 
 Its headline feature is **[drift watch](#drift-watch)**: while a cloud model does the work, the local model keeps checking, at no token cost, that it is still doing what you asked. When it isn't, the local model steps in with a short reminder.
 
-**Status: pre-release.** Local mode, hybrid delegation, automatic GPU/CPU engine selection, the Windows build and the offline package work and were verified on one Windows 10 laptop (CPU and Intel integrated GPU) and on Linux under WSL. Released binaries are Windows x64 only. The quality evaluation, the CUDA/ROCm/SYCL/OpenVINO/Metal backends on real hardware, Linux and macOS releases, signing and clean-VM qualification are not done. See [implementation status](docs/IMPLEMENTATION_STATUS.md).
+**Status: pre-release.** Local mode, hybrid delegation, automatic GPU/CPU engine selection, the Windows build and the offline package work and were verified on one Windows 10 laptop (CPU and Intel integrated GPU) and on Linux under WSL. Releases are built for Windows x64, Linux x64 (`.deb` and tarball) and macOS (Apple Silicon and Intel). The Linux and macOS builds are checked in CI (install, engine start, a local-model task, and that the engine exits when the CLI is killed) but not yet on user machines. The quality evaluation, the CUDA/ROCm/SYCL/OpenVINO/Metal backends on real hardware, code signing and clean-VM qualification are not done. See [implementation status](docs/IMPLEMENTATION_STATUS.md).
 
 ## Quick start
 
+Windows (PowerShell):
+
 ```powershell
 irm https://raw.githubusercontent.com/soliluqoy/midnight.server/main/scripts/get.ps1 | iex
+```
+
+Linux and macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/soliluqoy/midnight.server/main/scripts/get.sh | sh
+```
+
+Then:
+
+```sh
 midnight.server doctor --smoke    # optional: downloads the model and checks everything works
 midnight.server                   # start a session
 ```
@@ -27,7 +40,7 @@ The first local run downloads the 2.5 GiB model and picks the fastest engine for
 - **Read-only git context.** The helper can run `status`, `diff`, `log`, `show`, or `blame` itself, with a fixed argv (never a shell) and byte-capped output, to answer questions about history without any write access.
 - **Patch proposals, never applied.** `patch` tasks return an exact-match, evidence-backed unified diff for you to review; the helper never writes to disk.
 - **Zero-setup first run.** `--local`, the no-provider-configured fallback, and the first `delegate_local`/drift-watch call all download the model and engine automatically if they're missing — resumable, SHA-256 verified, never used unverified.
-- **Process isolation.** The engine runs under a Windows Job Object owned by the CLI, bound to loopback with a random per-session key, and exits with its descendants when the CLI exits, including after a crash.
+- **Process isolation.** The engine runs under a host owned by the CLI (a Job Object on Windows, a pipe-watching wrapper on Linux and macOS), bound to loopback with a random per-session key, and exits with its descendants when the CLI exits, including after a crash.
 - **Diagnostics.** `doctor [--smoke]`, `model status|verify|fetch`, `engine status|fetch|use|probe` check the install, show and change the engine backend, and, with `--smoke`, start the engine and generate a real reply.
 - **Plan and build modes.** Press Tab in an empty editor to switch. Plan mode limits the model to read-only tools (read, grep, find, ls, `delegate_local`) and asks it for a step-by-step plan; build mode restores the full tool set.
 - **Session sidebar.** In fullscreen mode (`/settings` → TUI mode) a sidebar shows the session title, git branch with changed/staged counts and ahead/behind, context usage and cost, the model, the local engine and drift-watch state, and the files changed this session with +/- line counts. It appears automatically on terminals 110+ columns wide; Alt+S toggles it.
@@ -48,7 +61,7 @@ The first local run downloads the 2.5 GiB model and picks the fastest engine for
 
 The helper (`delegate_local`, `helper`) reads only the workspace files it is given. It has no shell or tools, and it returns a schema-checked result with line evidence. `patch` tasks return a unified diff that is **not applied**. It can also run one read-only git operation itself (`status`, `diff`, `log`, `show`, `blame`) with a fixed argv, never a shell — never anything that mutates the repository.
 
-The engine is llama.cpp `b11166`: the CPU build ships in the release, and a GPU build is downloaded when it is faster on your machine ([GPU and backends](#gpu-and-backends)). It runs as a child process under a Windows Job Object owned by the CLI, bound to `127.0.0.1` and protected by a random per-session key. It exits when the CLI exits, including after a crash.
+The engine is llama.cpp `b11166`: the CPU build ships in the release, and a GPU build is downloaded when it is faster on your machine ([GPU and backends](#gpu-and-backends)). It runs as a child process under a host owned by the CLI (a Job Object on Windows, a pipe-watching shell wrapper on Linux and macOS), bound to `127.0.0.1` and protected by a random per-session key. It exits when the CLI exits, including after a crash.
 
 ## Drift watch
 
@@ -102,6 +115,8 @@ Lower the turn and token values to check more often, for example on long autonom
 
 ## Install
 
+### Windows
+
 In PowerShell:
 
 ```powershell
@@ -144,6 +159,30 @@ Remove-Item -Recurse -Force $app
 Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "midnight.server")   # model and engines (~3 GiB)
 Remove-Item -Recurse -Force "$HOME\.midnight.server"                         # settings, sessions, credentials
 ```
+
+### Linux and macOS
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/soliluqoy/midnight.server/main/scripts/get.sh | sh
+```
+
+This downloads the newest release for your platform, verifies it against `SHA256SUMS`, installs it to `~/.local/lib/midnight.server` and puts a `midnight.server` launcher in `~/.local/bin`. Run it again to upgrade. `MIDNIGHT_SERVER_VERSION`, `MIDNIGHT_SERVER_INSTALL_DIR` and `MIDNIGHT_SERVER_BIN_DIR` override the version and locations.
+
+**Debian and Ubuntu.** Download `midnight.server-linux-x64.deb` from [Releases](https://github.com/soliluqoy/midnight.server/releases) and install it with `sudo apt install ./midnight.server-linux-x64.deb`. It installs to `/opt/midnight.server` with `/usr/bin/midnight.server`, and pulls in `libgomp1`.
+
+Release archives (built by `scripts/build-unix.sh` and `scripts/package-unix.sh`): `midnight.server-linux-x64.tar.gz`, `midnight.server-linux-x64.deb`, `midnight.server-darwin-arm64.tar.gz` (Apple Silicon) and `midnight.server-darwin-x64.tar.gz` (Intel). Each contains the app and the engine; the model downloads on first use.
+
+Requirements: Linux x64 with glibc 2.35 or newer (Ubuntu 22.04, Debian 12 or later), or macOS 13 or newer; 16 GiB RAM recommended (8 GiB works with less headroom); about 3 GiB of disk.
+
+**macOS: "cannot be opened because the developer cannot be verified".** The macOS builds are not signed by Apple. The install script avoids this. If you downloaded the tarball in a browser, clear the quarantine flag once: `xattr -dr com.apple.quarantine ~/path/to/midnight.server`.
+
+| Path | Contents |
+| --- | --- |
+| `~/.local/lib/midnight.server` (or `/opt/midnight.server` for the `.deb`) | The app and bundled engine (replaced on upgrade) |
+| `~/.local/share/midnight.server` | Model, downloaded GPU engines, saved backend choice, engine logs (`MIDNIGHT_SERVER_HOME`) |
+| `~/.midnight.server/agent` | Settings, sessions and provider credentials (`MIDNIGHT_SERVER_CODING_AGENT_DIR`) |
+
+**Uninstall.** `rm -rf ~/.local/lib/midnight.server ~/.local/bin/midnight.server` (or `sudo apt remove midnight.server`), then `rm -rf ~/.local/share/midnight.server` for the model and engines and `rm -rf ~/.midnight.server` for settings, sessions and credentials.
 
 ## Performance (Intel i7-8650U laptop, CPU only)
 
@@ -200,7 +239,7 @@ midnight.server engine fetch vulkan       # download a build ahead of time
 | macOS Apple Silicon | Metal | none | none |
 | macOS Intel | CPU | none | none |
 
-Engines for every platform are pinned, but the released app itself is Windows x64 only so far; on Linux and macOS it currently runs from a source build.
+Engines for every platform are pinned. Released apps are Windows x64, Linux x64 and macOS (arm64, x64); other platforms run from a source build.
 
 `cuda` selects `cuda-12` (works with older NVIDIA drivers); `cuda-13` needs a recent driver. On Linux the CPU and Vulkan builds need `libgomp1` (`sudo apt install libgomp1`) and a Vulkan driver (`mesa-vulkan-drivers` or your GPU vendor's). Only the CPU and Vulkan builds have been run by the maintainers; report results from other backends with `midnight.server doctor --smoke`.
 
@@ -227,6 +266,16 @@ On Windows the default shell tool and the `!` commands use PowerShell. See [Wind
 ```
 
 `build.ps1` compiles the CLI from TypeScript sources with Bun and `native\midnight-host` with the C# compiler included in Windows. It installs the SHA-256-pinned llama.cpp CPU build into `engine\cpu` using the built CLI's own `engine fetch`. `node scripts/generate-engine-pins.mjs <tag>` re-pins every engine build to another llama.cpp release. No Visual Studio or CMake is needed. Building llama.cpp from source is not implemented yet.
+
+On Linux or macOS, with the pinned Bun on PATH and `npm ci --ignore-scripts` done:
+
+```sh
+bash scripts/build-unix.sh               # build/dist/midnight.server-<platform>/
+bash scripts/package-unix.sh             # dist/*.tar.gz (and .deb on Linux x64), SHA256SUMS-<platform>
+node scripts/verify-release.mjs dist/midnight.server-<platform>.tar.gz --smoke
+```
+
+Pushing a `v*-midnight.*` tag runs `.github/workflows/midnight-release.yml`, which builds and verifies every platform and attaches the archives to a draft release.
 
 From a source checkout you can also run `.\pi-test.ps1 <args>`. Set `TSX_TSCONFIG_PATH` to the repo's `tsconfig.json` when running it from another directory.
 
