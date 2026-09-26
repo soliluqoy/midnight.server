@@ -328,7 +328,7 @@ describe("sidebar and footer", () => {
 		const footer = new FooterComponent(createSession(), createFooterData(), gitStatus, () => true);
 		const lines = footer.render(240).map(stripAnsi);
 		expect(lines).toHaveLength(1);
-		expect(lines[0]).toContain("⎇ feature/sidebar");
+		expect(lines[0]).not.toContain("⎇");
 		expect(lines[0]).toContain("claude-sonnet-5 • high");
 		expect(lines[0]).not.toContain("☾");
 	});
