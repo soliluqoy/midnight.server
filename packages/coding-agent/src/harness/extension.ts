@@ -1077,6 +1077,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					config.maxRepairRounds,
 					repeated,
 					on(ctx, "blockerExit"),
+					on(ctx, "adaptiveRepair"),
 				);
 				const entries: SessionBoundaryDraft[] = [];
 				let rollbackNote = "";

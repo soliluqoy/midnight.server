@@ -1,0 +1,138 @@
+[
+  {
+    "name": "swe-agent",
+    "url": "https://arxiv.org/abs/2405.15793",
+    "finalUrl": "https://arxiv.org/abs/2405.15793",
+    "sha256": "1589f706b0380d637196a65970b23cb89037465fe6d883af1007e34a41d8bdbf",
+    "bytes": 43051,
+    "reviewScope": "abstract"
+  },
+  {
+    "name": "agentless",
+    "url": "https://arxiv.org/abs/2407.01489",
+    "finalUrl": "https://arxiv.org/abs/2407.01489",
+    "sha256": "f48c210286c9176c9b9d0abfcc2d12fa1107a0118c94231847ee27f18793f1e5",
+    "bytes": 43874,
+    "reviewScope": "abstract"
+  },
+  {
+    "name": "test-time-compute",
+    "url": "https://arxiv.org/abs/2408.03314",
+    "finalUrl": "https://arxiv.org/abs/2408.03314",
+    "sha256": "c38ea95eb2e29a5154f502608d5abea49cfddaf6b74674bb3cd42a5fd6d16086",
+    "bytes": 44439,
+    "reviewScope": "abstract"
+  },
+  {
+    "name": "self-correction",
+    "url": "https://arxiv.org/abs/2310.01798",
+    "finalUrl": "https://arxiv.org/abs/2310.01798",
+    "sha256": "b9a6cee520360f2c1b86754737bf469c7d9110545b158f1c59a3197a731e78fa",
+    "bytes": 41575,
+    "reviewScope": "abstract"
+  },
+  {
+    "name": "reflexion",
+    "url": "https://arxiv.org/abs/2303.11366",
+    "finalUrl": "https://arxiv.org/abs/2303.11366",
+    "sha256": "b218d29df0a0b750337cbaddef0568f0c9fc209590e8a2e9bbf92b7269a27059",
+    "bytes": 43184,
+    "reviewScope": "abstract"
+  },
+  {
+    "name": "lats",
+    "url": "https://arxiv.org/abs/2310.04406",
+    "finalUrl": "https://arxiv.org/abs/2310.04406",
+    "sha256": "2315ef562bcd0d1897d49ef02bc6d06e19ae71219fe65f654ad9740d6ae7f2ec",
+    "bytes": 43360,
+    "reviewScope": "abstract"
+  },
+  {
+    "name": "swe-search",
+    "url": "https://arxiv.org/abs/2410.20285",
+    "finalUrl": "https://arxiv.org/abs/2410.20285",
+    "sha256": "ef917772bfb2b04eb9d78f239ef2b7f23a4636d2be4cecc80d14f45a1778f9cc",
+    "bytes": 44506,
+    "reviewScope": "abstract"
+  },
+  {
+    "name": "swe-bench",
+    "url": "https://arxiv.org/abs/2310.06770",
+    "finalUrl": "https://arxiv.org/abs/2310.06770",
+    "sha256": "cd170cab3a56f891ee94070d5748d923685f2a84a91201d6336a221436fd0f9f",
+    "bytes": 43179,
+    "reviewScope": "abstract"
+  },
+  {
+    "name": "self-consistency",
+    "url": "https://arxiv.org/abs/2203.11171",
+    "finalUrl": "https://arxiv.org/abs/2203.11171",
+    "sha256": "95733ce30410ce3905b50c2e0d6291184b3ee4cd84816e796b0da8959d84c698",
+    "bytes": 42282,
+    "reviewScope": "abstract"
+  },
+  {
+    "name": "lost-middle",
+    "url": "https://arxiv.org/abs/2307.03172",
+    "finalUrl": "https://arxiv.org/abs/2307.03172",
+    "sha256": "af63ac4b31d2d47748f3ad62081349ff820ca488c577888c8b0289545915c275",
+    "bytes": 41931,
+    "reviewScope": "abstract"
+  },
+  {
+    "name": "dpp",
+    "url": "https://arxiv.org/abs/1207.6083",
+    "finalUrl": "https://arxiv.org/abs/1207.6083",
+    "sha256": "5c84476d75249748698c2b286b8a055fc8e52dc897ceb81f145ef4a345f26bfc",
+    "bytes": 42469,
+    "reviewScope": "abstract"
+  },
+  {
+    "name": "submodular",
+    "url": "https://doi.org/10.1007/BF01588971",
+    "finalUrl": "https://link.springer.com/article/10.1007/BF01588971?error=cookies_not_supported&code=c8bba02f-53c3-4f54-9d5d-093b007c90ba",
+    "sha256": "907b148e893dfec26cc83b560fe91b27806e18224354f938ba60d4c7e9cadc89",
+    "bytes": 253238,
+    "reviewScope": "documentation or publication landing page"
+  },
+  {
+    "name": "swe-bench-readme",
+    "url": "https://raw.githubusercontent.com/SWE-bench/SWE-bench/main/README.md",
+    "finalUrl": "https://raw.githubusercontent.com/SWE-bench/SWE-bench/main/README.md",
+    "sha256": "06841624d7b5130dfe3cc6714642e9a8fd2a608c95c66ae0180e409f12b73aaa",
+    "bytes": 13302,
+    "reviewScope": "documentation or publication landing page"
+  },
+  {
+    "name": "mcp-playwright",
+    "url": "https://raw.githubusercontent.com/microsoft/playwright-mcp/main/README.md",
+    "finalUrl": "https://raw.githubusercontent.com/microsoft/playwright-mcp/main/README.md",
+    "sha256": "39cfd57a182182cc414be873d0917add0471b4fcd1a9e1100290d7c21c409ee7",
+    "bytes": 66661,
+    "reviewScope": "documentation or publication landing page"
+  },
+  {
+    "name": "mcp-context7",
+    "url": "https://raw.githubusercontent.com/upstash/context7/master/README.md",
+    "finalUrl": "https://raw.githubusercontent.com/upstash/context7/master/README.md",
+    "sha256": "c513b9ec9c006a85c63d6ad0c9fe49af3eaa517f8e59b66de0af6029ccafda13",
+    "bytes": 9620,
+    "reviewScope": "documentation or publication landing page"
+  },
+  {
+    "name": "mcp-spec",
+    "url": "https://modelcontextprotocol.io/specification/2025-06-18/basic/security_best_practices",
+    "finalUrl": "https://modelcontextprotocol.io/docs/2025-11-25/tutorials/security/security_best_practices",
+    "sha256": "e9da09b129ae66206df1e632f21528fd042c57457b67fddfb8396f72d1934897",
+    "bytes": 534183,
+    "reviewScope": "documentation or publication landing page"
+  },
+  {
+    "name": "skills-spec",
+    "url": "https://agentskills.io/specification",
+    "finalUrl": "https://agentskills.io/specification",
+    "sha256": "1cb1930a884ac6877e7731817bcd8b9afd4c4dfb21e446be0d88a0671221ffb6",
+    "bytes": 445178,
+    "reviewScope": "documentation or publication landing page"
+  }
+]

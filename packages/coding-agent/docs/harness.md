@@ -88,6 +88,10 @@ Implementation drift is a change that moves away from what was asked toward some
 
 Both are on by default. `evals/drift/` has the drift benchmark, the detector checks and the results (`evals/drift/RESULTS.md`).
 
+## Adaptive repair
+
+When the same checks fail again, `adaptiveRepair` marks the previous approach as rejected, includes diagnostic lines that may have been buried in a long compiler or test log, and requires a materially different repair or an explicit blocker. With checkpoints enabled, the harness restores the last passing state before the next attempt. It is enabled by default and can be disabled for ablation with `-adaptiveRepair`.
+
 ## Escalation
 
 When a fast model is stuck (the same checks failed twice, or it repeated itself three times), the harness asks a stronger model for one piece of advice and hands control back. The advisor gets the request, the current diff (new files included), the failing output and the model's last message, not the transcript. Default advisor: `anthropic/claude-opus-5-5`; it is used only if that model has credentials, and never when it is the session model. Limits: 2 calls per prompt, 6 per session. `/harness` shows the calls and their cost, and each call is written to the telemetry log with its model, tokens and cost. With escalation on, a result is a cascade result: to measure a fast model alone, turn it off (`-escalation`).
@@ -124,7 +128,7 @@ Old, large tool results are replaced with a one-line stub (tool, arguments, size
 - `level` (1-3) places a check on the ladder; configured checks without one are level 1.
 - Unknown keys and unknown feature names are rejected, so a typo does not silently disable anything.
 
-Features: `contextPack`, `parseGate`, `editRepair`, `pathHints`, `loopGuard`, `inRunChecks`, `checkCache`, `checkpoints`, `lookup`, `diagnostics`, `escalation`, `masking`, `driftGuard`, `blockerExit`.
+Features: `contextPack`, `parseGate`, `editRepair`, `pathHints`, `loopGuard`, `inRunChecks`, `checkCache`, `checkpoints`, `lookup`, `diagnostics`, `adaptiveRepair`, `escalation`, `masking`, `driftGuard`, `blockerExit`.
 
 Environment:
 

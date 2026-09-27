@@ -122,6 +122,9 @@ export async function runCheck(selected: SelectedCheck, cwd: string, signal: Abo
 
 const FEEDBACK_HEAD_BYTES = 1_500;
 const FEEDBACK_TAIL_BYTES = 4_500;
+const DIAGNOSTIC_MAX_BYTES = 2_400;
+const DIAGNOSTIC_LINE =
+	/(?:error|fail(?:ed|ure)?|expect(?:ed)?|received|assert|traceback|exception|panic|cannot find|not found|undefined|null)/i;
 
 /**
  * Keep the start (the command's banner and first error) and the end (the summary and the
@@ -132,6 +135,24 @@ export function boundOutput(text: string, head = FEEDBACK_HEAD_BYTES, tail = FEE
 	if (full.length <= head + tail) return full.toString("utf8");
 	const omitted = full.length - head - tail;
 	return `${full.subarray(0, head).toString("utf8")}\n[... ${omitted} bytes omitted ...]\n${full.subarray(full.length - tail).toString("utf8")}`;
+}
+
+/** Extract likely diagnostic lines that may be in the middle of a long test or compiler log. */
+export function diagnosticExcerpt(text: string, maxBytes = DIAGNOSTIC_MAX_BYTES): string {
+	const lines = text
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter((line, index, all) => line.length > 0 && DIAGNOSTIC_LINE.test(line) && all.indexOf(line) === index);
+	if (lines.length === 0) return "";
+	const output: string[] = [];
+	let bytes = 0;
+	for (const line of lines) {
+		const nextBytes = Buffer.byteLength(line, "utf8") + (output.length > 0 ? 1 : 0);
+		if (bytes + nextBytes > maxBytes) break;
+		output.push(line);
+		bytes += nextBytes;
+	}
+	return output.join("\n");
 }
 
 function describeOutcome(outcome: CheckOutcome): string {
@@ -158,13 +179,25 @@ export function formatCheckFeedback(
 	maxRounds: number,
 	repeated: boolean,
 	requestWins = false,
+	adaptiveRepair = true,
 ): string {
 	const lines = [`Harness checks failed after your changes (repair round ${round} of ${maxRounds}).`];
 	for (const outcome of outcomes) {
 		lines.push(describeOutcome(outcome));
-		if (!outcome.passed) lines.push("<output>", boundOutput(outcome.output) || "(no output)", "</output>");
+		if (!outcome.passed) {
+			const output = boundOutput(outcome.output) || "(no output)";
+			lines.push("<output>", output, "</output>");
+			if (Buffer.byteLength(outcome.output, "utf8") > FEEDBACK_HEAD_BYTES + FEEDBACK_TAIL_BYTES) {
+				const diagnostics = diagnosticExcerpt(outcome.output);
+				if (diagnostics) lines.push("<diagnostic-lines>", diagnostics, "</diagnostic-lines>");
+			}
+		}
 	}
-	if (repeated) {
+	if (repeated && adaptiveRepair) {
+		lines.push(
+			"The same checks failed again after your last fix. Treat the previous approach as rejected: do not make a cosmetic edit or repeat the same hypothesis. Before editing, state the most likely root cause and one alternative explanation, then check which one the output supports. Choose a materially different repair or report the blocker.",
+		);
+	} else if (repeated) {
 		lines.push(
 			"The same checks failed again after your last fix. Before editing, state the most likely root cause and one alternative explanation, then check which one the output supports.",
 		);
