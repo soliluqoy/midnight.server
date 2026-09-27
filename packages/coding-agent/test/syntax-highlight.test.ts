@@ -107,7 +107,7 @@ describe("theme syntax highlighting", () => {
 		expect(highlightCode("const re = /foo+/gi;", "javascript")[0]).toContain(
 			"\x1b[38;2;195;232;141m/foo+/gi\x1b[39m",
 		);
-		expect(highlightCode("@decorator", "python")[0]).toBe("\x1b[38;2;130;139;184m@decorator\x1b[39m");
+		expect(highlightCode("@decorator", "python")[0]).toBe("\x1b[38;2;139;143;153m@decorator\x1b[39m");
 		expect(highlightCode("<div></div>", "html")[0]).toContain("\x1b[38;2;192;153;255mdiv\x1b[39m");
 	});
 });

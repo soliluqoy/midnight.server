@@ -49,9 +49,14 @@ export function isGitWorkTree(cwd: string): boolean {
 	return result.ok && result.stdout.trim() === "true";
 }
 
+/**
+ * The repository root, spelled like `cwd`. `--show-toplevel` returns git's canonical long path, so
+ * with an 8.3 short-path cwd on Windows (`C:\Users\RUNNER~1\...`, as TEMP often is) every changed
+ * path mapped back from it would look outside the workspace. `--show-cdup` is relative to `cwd`.
+ */
 function repoRoot(cwd: string): string | undefined {
-	const result = git(cwd, ["rev-parse", "--show-toplevel"]);
-	return result.ok ? result.stdout.trim() : undefined;
+	const result = git(cwd, ["rev-parse", "--show-cdup"]);
+	return result.ok ? resolve(cwd, result.stdout.trim()) : undefined;
 }
 
 export class CheckpointStore {
