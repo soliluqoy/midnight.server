@@ -75,9 +75,9 @@ This downloads the newest release for your platform, verifies it against `SHA256
 
 **Debian and Ubuntu.** `sudo apt install ./midnight.server-linux-x64.deb` installs to `/opt/midnight.server` with `/usr/bin/midnight.server`.
 
-Release archives: `midnight.server-linux-x64.tar.gz`, `midnight.server-linux-x64.deb`, `midnight.server-darwin-arm64.tar.gz` (Apple Silicon) and `midnight.server-darwin-x64.tar.gz` (Intel).
+Release archives: `midnight.server-linux-x64.tar.gz`, `midnight.server-linux-x64.deb`, and `midnight.server-darwin-arm64.tar.gz` (Apple Silicon). Intel Macs are not released; build them from source (see below).
 
-Requirements: Linux x64 with glibc 2.35 or newer (Ubuntu 22.04, Debian 12 or later), or macOS 13 or newer.
+Requirements: Linux x64 with glibc 2.35 or newer (Ubuntu 22.04, Debian 12 or later), or macOS 13 or newer on Apple Silicon (M1 or later).
 
 **macOS: "cannot be opened because the developer cannot be verified".** The macOS builds are not signed by Apple. The install script avoids this. If you downloaded the tarball in a browser, clear the quarantine flag once: `xattr -dr com.apple.quarantine ~/path/to/midnight.server`.
 

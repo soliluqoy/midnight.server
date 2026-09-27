@@ -1,7 +1,7 @@
 name: midnight.server Release
 
 # Builds, verifies and attaches release archives for Windows x64, Linux x64 and
-# macOS (arm64, x64) to a draft GitHub release for a v*-midnight.* tag. Publish
+# macOS arm64 (Apple Silicon) to a draft GitHub release for a v*-midnight.* tag. Publish
 # the draft after writing its notes. A manual run with publish off builds and
 # verifies any ref (e.g. main) without touching releases.
 on:
@@ -75,8 +75,6 @@ jobs:
             runner: ubuntu-22.04
           - platform: darwin-arm64
             runner: macos-15
-          - platform: darwin-x64
-            runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     permissions:
