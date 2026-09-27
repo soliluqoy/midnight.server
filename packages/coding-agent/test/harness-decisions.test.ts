@@ -8,6 +8,7 @@ import {
 	formatReviewFeedback,
 	intakeNote,
 	isLoopbackUrl,
+	layaServeEnv,
 	ManagedLaya,
 	parseSystemOneResponse,
 	REVIEW_QUESTIONS,
@@ -56,6 +57,21 @@ describe("local decisions (Laya)", () => {
 			decisionBackendFromEnv({ MIDNIGHT_SERVER_LAYA: "0", MIDNIGHT_SERVER_LAYA_URL: "http://127.0.0.1:1" }),
 		).toBeUndefined();
 		expect(decisionBackendFromEnv({ MIDNIGHT_SERVER_LAYA_URL: "http://127.0.0.1:1" })?.name).toBe("laya/auto");
+	});
+
+	it("preloads only the checkpoint in use when it starts laya-serve", () => {
+		const env = layaServeEnv({ port: 4321, apiKey: "k", model: undefined, offline: false });
+		expect(env).toMatchObject({
+			LAYA_HOST: "127.0.0.1",
+			LAYA_PORT: "4321",
+			LAYA_API_KEY: "k",
+			LAYA_MODELS: "english",
+		});
+		expect(env.HF_HUB_OFFLINE).toBeUndefined();
+		expect(layaServeEnv({ port: 1, apiKey: "k", model: "multilingual", offline: true })).toMatchObject({
+			LAYA_MODELS: "multilingual",
+			HF_HUB_OFFLINE: "1",
+		});
 	});
 
 	it("parses answers and drops unknown types", () => {

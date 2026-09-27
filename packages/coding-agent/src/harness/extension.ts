@@ -74,7 +74,7 @@ import { remapForeignPath, repairPowerShellCommand, toolNeedsExistingPath } from
 import { capToolOutput, LOCAL_TOOLS, splitContextFiles, withGreedyDefault } from "./local-profile.ts";
 import { LspManager } from "./lsp.ts";
 import { planMasking } from "./masking.ts";
-import { canCheckSyntax, introducedSyntaxError } from "./parse-gate.ts";
+import { canCheckSyntax, introducedSyntaxError, pythonInterpreter } from "./parse-gate.ts";
 import { formatDiagnostics, newErrors, runLookup } from "./semantic.ts";
 import { HarnessTelemetry } from "./telemetry.ts";
 import { buildWorkspaceIndex, testsFor, type WorkspaceIndex } from "./workspace-index.ts";
@@ -432,7 +432,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		}
 		decisions ??= decisionBackendFromEnv();
 		// Detection reads manifests only; the detected commands run only in trusted projects.
-		facts = detectProjectChecks(ctx.cwd, { python: trusted ? pythonCommand() : undefined });
+		facts = detectProjectChecks(ctx.cwd, { python: trusted ? pythonInterpreter() : undefined });
 		if (!trusted || !config.autoChecks) facts = { ...facts, checks: [] };
 	}
 
@@ -1237,14 +1237,6 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			ctx.ui.notify(lines.join("\n"));
 		},
 	});
-}
-
-function pythonCommand(): string | undefined {
-	const probe = process.platform === "win32" ? "where" : "which";
-	for (const candidate of process.platform === "win32" ? ["python", "py"] : ["python3", "python"]) {
-		if (spawnSync(probe, [candidate], { stdio: "ignore", windowsHide: true }).status === 0) return candidate;
-	}
-	return undefined;
 }
 
 function gitSummary(cwd: string): { branch?: string; changed: string[] } | undefined {

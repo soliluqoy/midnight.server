@@ -17,7 +17,8 @@ import { basename, extname, join } from "node:path";
  * the gate only rejects edits that introduce a syntax error.
  *
  * Parsers are the ones the machine already has: the project's own `typescript` for TS/JS,
- * `node --check` for JS without it, Python's `ast`, `gofmt`, `rustfmt`, and JSON.parse.
+ * `node --check` for JS without it, Python's `ast` (see `pythonInterpreter`), `gofmt`,
+ * `rustfmt`, and JSON.parse.
  * When none is available the file is not checked.
  */
 
@@ -123,8 +124,28 @@ const typeScriptChecker: Checker = (content, path, cwd) => {
 	}
 };
 
+let python: string | null | undefined;
+
+/**
+ * A Python interpreter that runs, or undefined. Being on PATH is not enough: on Windows,
+ * `python.exe` and `python3.exe` in WindowsApps are Store placeholders that exit with an
+ * error, and a real install provides `python` and `py` but not `python3`.
+ */
+export function pythonInterpreter(): string | undefined {
+	if (python === undefined) {
+		const candidates = process.platform === "win32" ? ["python", "py", "python3"] : ["python3", "python"];
+		python =
+			candidates.find(
+				(candidate) =>
+					spawnSync(candidate, ["-c", "import ast"], { stdio: "ignore", windowsHide: true, timeout: TIMEOUT_MS })
+						.status === 0,
+			) ?? null;
+	}
+	return python ?? undefined;
+}
+
 const pythonChecker: Checker = (content, path, cwd) => {
-	const python = has("python3") ? "python3" : has("python") ? "python" : undefined;
+	const python = pythonInterpreter();
 	if (!python) return undefined;
 	const script =
 		"import ast,sys\ntry:\n ast.parse(sys.stdin.read(), sys.argv[1])\n print('OK')\nexcept SyntaxError as e:\n print(f'ERR {e.lineno}:{e.offset} {e.msg}')";

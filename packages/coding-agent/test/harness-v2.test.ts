@@ -22,7 +22,7 @@ import { escalationPrompt, formatAdvice, requestAdvice } from "../src/harness/es
 import { classifyModel, parseFeatureOverrides, resolveFeatures } from "../src/harness/features.ts";
 import { fitMaskingToWindow, planMasking } from "../src/harness/masking.ts";
 import { identifierTerms, outlineSource, relativeImports } from "../src/harness/outline.ts";
-import { checkSyntax, introducedSyntaxError } from "../src/harness/parse-gate.ts";
+import { checkSyntax, introducedSyntaxError, pythonInterpreter } from "../src/harness/parse-gate.ts";
 import { declarationBody, formatDiagnostics, newErrors, runLookup } from "../src/harness/semantic.ts";
 import { buildWorkspaceIndex, isTestPath, rankFiles, relatedFiles, testsFor } from "../src/harness/workspace-index.ts";
 
@@ -368,7 +368,7 @@ describe("parse gate", () => {
 		},
 	);
 
-	it.skipIf(!hasCommand("python3"))("reports the Python syntax error location", () => {
+	it.skipIf(!pythonInterpreter())("reports the Python syntax error location", () => {
 		const result = checkSyntax("def f(:\n  pass\n", "a.py", root);
 		expect(result?.ok).toBe(false);
 		expect(result?.error).toMatch(/^1:/);

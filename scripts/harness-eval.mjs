@@ -52,6 +52,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { hasCommand, portableArgv } from "./harness-eval-commands.mjs";
 import { categorizeTurn, classifyToolError, formatReport } from "./harness-eval-stats.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -113,10 +114,6 @@ function parseArgs(argv) {
 	return options;
 }
 
-function hasCommand(command) {
-	return spawnSync(process.platform === "win32" ? "where" : "which", [command], { stdio: "ignore" }).status === 0;
-}
-
 function loadTasks(dir, only, split) {
 	return readdirSync(dir, { withFileTypes: true })
 		.filter((entry) => entry.isDirectory() && (!only || only.includes(entry.name)))
@@ -154,7 +151,10 @@ function prepareWorkspace(task, variant, checksMode) {
 	git(cwd, ["-c", "user.email=eval@example.com", "-c", "user.name=eval", "commit", "-qm", "start"]);
 	if (variant.harness) {
 		mkdirSync(path.join(cwd, ".midnight.server"), { recursive: true });
-		const config = { checks: checksMode === "config" ? (task.spec.checks ?? []) : [], protect: task.spec.protect ?? [] };
+		const config = { checks:
+				checksMode === "config"
+					? (task.spec.checks ?? []).map((check) => ({ ...check, command: portableArgv(check.command) }))
+					: [], protect: task.spec.protect ?? [] };
 		writeFileSync(path.join(cwd, ".midnight.server", "harness.json"), JSON.stringify(config, null, "\t"));
 	}
 	return cwd;
@@ -309,7 +309,7 @@ function grade(task, cwd, originalHashes) {
 		if (sha256(path.join(cwd, file)) !== hash) return { passed: false, reason: `${file} was changed` };
 	}
 	cpSync(path.join(task.root, "hidden"), cwd, { recursive: true });
-	const [command, ...args] = task.spec.grade;
+	const [command, ...args] = portableArgv(task.spec.grade);
 	const result = spawnSync(command, args, {
 		cwd,
 		encoding: "utf8",

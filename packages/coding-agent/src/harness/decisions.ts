@@ -193,6 +193,28 @@ function truthy(value: string | undefined): boolean {
 }
 
 /**
+ * Environment for a managed `laya-serve`. Only the checkpoint in use is preloaded: with no
+ * `LAYA_MODELS`, the server downloads and loads all three (~1.2B parameters, several GB of
+ * RAM), while the harness's English questions route to `english`. A request that needs
+ * another checkpoint still gets it; the server loads it on first use.
+ */
+export function layaServeEnv(options: {
+	port: number;
+	apiKey: string;
+	model: string | undefined;
+	offline: boolean;
+}): Record<string, string> {
+	return {
+		LAYA_HOST: "127.0.0.1",
+		LAYA_PORT: String(options.port),
+		LAYA_API_KEY: options.apiKey,
+		LAYA_PRELOAD: "1",
+		LAYA_MODELS: options.model ?? "english",
+		...(options.offline ? { HF_HUB_OFFLINE: "1" } : {}),
+	};
+}
+
+/**
  * A `laya-serve` process owned by this session: random loopback port, random bearer key,
  * killed with the session. It becomes usable once `/health` answers; until then `ask`
  * returns undefined (no decision), so a slow first start (model download, load) never blocks
@@ -228,14 +250,7 @@ export class ManagedLaya implements DecisionBackend {
 			const apiKey = randomBytes(24).toString("hex");
 			const log = openSync(this.logPath, "a");
 			this.child = spawn("laya-serve", [], {
-				env: {
-					...process.env,
-					LAYA_HOST: "127.0.0.1",
-					LAYA_PORT: String(port),
-					LAYA_API_KEY: apiKey,
-					LAYA_PRELOAD: "1",
-					...(this.offline ? { HF_HUB_OFFLINE: "1" } : {}),
-				},
+				env: { ...process.env, ...layaServeEnv({ port, apiKey, model: this.model, offline: this.offline }) },
 				stdio: ["ignore", log, log],
 				windowsHide: true,
 			});

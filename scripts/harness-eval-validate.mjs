@@ -18,6 +18,7 @@ import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } fr
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { hasCommand, portableArgv } from "./harness-eval-commands.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CATEGORIES = new Set([
@@ -43,11 +44,8 @@ function parseArgs(argv) {
 	return options;
 }
 
-function hasCommand(command) {
-	return spawnSync(process.platform === "win32" ? "where" : "which", [command], { stdio: "ignore" }).status === 0;
-}
-
-function run(argv, cwd) {
+function run(taskArgv, cwd) {
+	const argv = portableArgv(taskArgv);
 	const result = spawnSync(argv[0], argv.slice(1), {
 		cwd,
 		encoding: "utf8",
