@@ -72,7 +72,6 @@ export class FooterComponent implements Component {
 				revision: number;
 				usageTotals: UsageTotals;
 				latestCacheHitRate: number | undefined;
-				sessionName: string | undefined;
 		  }
 		| undefined;
 
@@ -146,7 +145,6 @@ export class FooterComponent implements Component {
 			revision,
 			usageTotals,
 			latestCacheHitRate,
-			sessionName: sessionManager.getSessionName(),
 		};
 		return this.usageStats;
 	}
@@ -160,7 +158,7 @@ export class FooterComponent implements Component {
 
 	render(width: number): string[] {
 		const state = this.session.state;
-		const { usageTotals, latestCacheHitRate, sessionName } = this.getUsageStats();
+		const { usageTotals, latestCacheHitRate } = this.getUsageStats();
 
 		// Calculate context usage from session (handles compaction correctly).
 		// After compaction, tokens are unknown until the next LLM response.
@@ -182,11 +180,6 @@ export class FooterComponent implements Component {
 				if (status.ahead) pwd = `${pwd} ↑${status.ahead}`;
 				if (status.behind) pwd = `${pwd} ↓${status.behind}`;
 			}
-		}
-
-		// Add session name if set
-		if (sessionName) {
-			pwd = `${pwd} • ${sessionName}`;
 		}
 
 		// Build stats line
