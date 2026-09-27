@@ -1,0 +1,23 @@
+{
+	"description": "A crash report names teamLabel; the fix is a guard plus the documented fallback text.",
+	"category": "navigation",
+	"split": "holdout",
+	"checks": [
+		{
+			"name": "tests",
+			"command": [
+				"npm",
+				"test",
+				"--silent"
+			],
+			"when": [
+				"**/*.js"
+			]
+		}
+	],
+	"protect": [],
+	"grade": [
+		"node",
+		"grade.js"
+	]
+}

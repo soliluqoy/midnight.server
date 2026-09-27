@@ -1,0 +1,22 @@
+{
+	"description": "Add the inverse of an existing parser; round trip must hold; quote only when needed.",
+	"category": "feature",
+	"split": "holdout",
+	"checks": [
+		{
+			"name": "unit",
+			"command": [
+				"node",
+				"test.js"
+			],
+			"when": [
+				"**/*.js"
+			]
+		}
+	],
+	"protect": [],
+	"grade": [
+		"node",
+		"grade.js"
+	]
+}

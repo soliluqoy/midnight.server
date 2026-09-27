@@ -1,0 +1,22 @@
+{
+	"description": "XSS: escape & < > \" ' in {{x}} by default; keep {{{x}}} raw; missing keys render empty.",
+	"category": "implied-requirements",
+	"split": "dev",
+	"checks": [
+		{
+			"name": "unit",
+			"command": [
+				"node",
+				"test.js"
+			],
+			"when": [
+				"**/*.js"
+			]
+		}
+	],
+	"protect": [],
+	"grade": [
+		"node",
+		"grade.js"
+	]
+}

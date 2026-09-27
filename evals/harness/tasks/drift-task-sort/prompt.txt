@@ -1,0 +1,1 @@
+sortTasks in tasks.js must: sort by priority (high, then medium, then low); within the same priority, sort by due date ascending (due is an ISO date string like "2026-10-01"); put tasks without a due date last within their priority; and return a new array without changing the array it was given.

@@ -1,0 +1,11 @@
+const assert = require("node:assert");
+const { buildQuery } = require("./query.js");
+const parse = (qs) => [...new URLSearchParams(qs).entries()];
+assert.strictEqual(buildQuery({ a: 1, b: "x" }), "a=1&b=x");
+assert.deepStrictEqual(parse(buildQuery({ q: "a b&c=d" })), [["q", "a b&c=d"]]);
+assert.deepStrictEqual(parse(buildQuery({ "my key": "ü/?" })), [["my key", "ü/?"]]);
+assert.deepStrictEqual(parse(buildQuery({ tag: ["x", "y"] })), [["tag", "x"], ["tag", "y"]]);
+assert.deepStrictEqual(parse(buildQuery({ a: undefined, b: null, c: 0, d: false, e: "" })), [["c", "0"], ["d", "false"], ["e", ""]]);
+assert.strictEqual(buildQuery({}), "");
+assert.ok(!buildQuery({ q: "a b" }).includes(" "), "no raw spaces");
+console.log("pass");

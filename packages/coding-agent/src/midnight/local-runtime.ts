@@ -63,11 +63,19 @@ function plannedContextSize(): number {
 	}
 }
 
-/** The local model stays selectable with /model; the engine starts when it is first used. */
+/**
+ * A cloud-led session: the local model stays selectable with /model and its engine starts
+ * only when first used. Nothing from the local model runs on the default path: at CPU
+ * speed (12-50 s per helper call) it slows a fast cloud model down without a measured gain.
+ */
+function cloudExtensions(manager: EngineManager): InlineExtension[] {
+	return [localProviderExtension(manager, false, plannedContextSize()), sessionTitleExtension()];
+}
+
+/** `--hybrid`: the cloud model can also delegate to the local model, and drift watch runs. */
 function hybridExtensions(manager: EngineManager): InlineExtension[] {
 	return [
-		localProviderExtension(manager, false, plannedContextSize()),
-		sessionTitleExtension(),
+		...cloudExtensions(manager),
 		{ name: "midnight-delegate", factory: createDelegateExtension(manager), hidden: true },
 		{
 			name: "midnight-drift-watch",
@@ -80,8 +88,9 @@ function hybridExtensions(manager: EngineManager): InlineExtension[] {
 /**
  * Local:           start the engine now, select the local model, force offline startup,
  *                  and block model requests to every other provider for the session.
- * Default/Hybrid:  keep the configured provider as the parent; add `delegate_local` and
- *                  the drift watcher, which start the engine on first use. If no provider
+ * Default:         keep the configured provider as the parent; the local model is only a
+ *                  /model choice. Hybrid (--hybrid) also adds `delegate_local` and the
+ *                  drift watcher, which start the engine on first use. If no provider
  *                  is configured at all (no explicit --provider/--model/--models/--api-key
  *                  either), silently drive the session on the local model instead —
  *                  switchable, not offline, so a later /login still works.
@@ -156,7 +165,7 @@ export async function prepareLocalRuntime(
 			// the way an explicit --local does. Fall through to ordinary hybrid behavior and
 			// let main()'s usual "no provider configured" onboarding handle it.
 			updateMidnightStatus({ mode: "hybrid" });
-			return { mode, args: rest, extensionFactories: hybridExtensions(manager), stop: () => manager.stop() };
+			return { mode, args: rest, extensionFactories: extensionsFor(mode, manager), stop: () => manager.stop() };
 		}
 		updateMidnightStatus({ mode: "fallback" });
 		return {
@@ -180,5 +189,9 @@ export async function prepareLocalRuntime(
 
 	const manager = options.manager ?? new EngineManager({ onStatus: options.onStatus });
 	updateMidnightStatus({ mode: "hybrid" });
-	return { mode, args: rest, extensionFactories: hybridExtensions(manager), stop: () => manager.stop() };
+	return { mode, args: rest, extensionFactories: extensionsFor(mode, manager), stop: () => manager.stop() };
+}
+
+function extensionsFor(mode: MidnightMode, manager: EngineManager): InlineExtension[] {
+	return mode === "hybrid" ? hybridExtensions(manager) : cloudExtensions(manager);
 }

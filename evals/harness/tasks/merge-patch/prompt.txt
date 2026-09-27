@@ -1,0 +1,1 @@
+applyPatch in patch.js should implement JSON Merge Patch. It currently gets several cases wrong.

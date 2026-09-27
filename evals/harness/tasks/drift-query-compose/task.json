@@ -1,0 +1,30 @@
+{
+	"description": "Query features tested one by one; hidden tests compose them. Drift handles each feature separately.",
+	"category": "drift-composition",
+	"family": "drift-query-compose",
+	"split": "dev",
+	"checks": [
+		{
+			"name": "unit",
+			"command": [
+				"node",
+				"test.js"
+			],
+			"when": [
+				"**/*.js"
+			]
+		}
+	],
+	"protect": [],
+	"grade": [
+		"node",
+		"grade.js"
+	],
+	"requirements": [
+		"single-features",
+		"precedence",
+		"not-group",
+		"nested",
+		"double-not"
+	]
+}

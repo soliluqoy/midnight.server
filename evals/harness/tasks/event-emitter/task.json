@@ -1,0 +1,22 @@
+{
+	"description": "once listeners fire twice; removing during emit skips the next listener.",
+	"category": "hidden-bug",
+	"split": "dev",
+	"checks": [
+		{
+			"name": "unit",
+			"command": [
+				"node",
+				"test.js"
+			],
+			"when": [
+				"**/*.js"
+			]
+		}
+	],
+	"protect": [],
+	"grade": [
+		"node",
+		"grade.js"
+	]
+}

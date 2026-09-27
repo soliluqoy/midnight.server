@@ -310,7 +310,8 @@ export async function generateBranchSummary(
 
 	// Token budget = context window minus reserved space for prompt + response
 	const contextWindow = model.contextWindow || 128000;
-	const tokenBudget = contextWindow - reserveTokens;
+	// A reserve sized for large windows would leave a small window no budget at all.
+	const tokenBudget = contextWindow - Math.min(reserveTokens, Math.floor(contextWindow / 4));
 
 	const { messages, fileOps } = prepareBranchEntries(entries, tokenBudget);
 

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CONFIG_DIR_NAME } from "../config.ts";
+import { FEATURE_NAMES, type FeatureName } from "./features.ts";
 
 /**
  * One project check the harness runs before a run may settle. `command` is argv, never a
@@ -13,6 +14,14 @@ export interface HarnessCheck {
 	command: string[];
 	when?: string[];
 	timeoutMs: number;
+	/** Extra environment for the check process (detected checks set CI=1 so runners do not watch). */
+	env?: Record<string, string>;
+	/**
+	 * Ladder level: 1 types/lint, 2 related tests, 3 full tests. Lower levels run first and a
+	 * failing level stops the ladder, so a type error is reported without a slow test run.
+	 * Configured checks without a level are level 1.
+	 */
+	level?: 1 | 2 | 3;
 }
 
 export interface MaskingSettings {
@@ -46,7 +55,26 @@ export interface HarnessConfig {
 	 * unbounded command, such as `find /` over a whole disk, otherwise stalls the run. 0 disables.
 	 */
 	shellTimeoutSeconds: number;
+	/** Per-feature switches over the model-class defaults (see features.ts). */
+	features: Partial<Record<FeatureName, boolean>>;
+	/** Checks found from the project's manifests when `checks` is empty (requires project trust). */
+	autoChecks: boolean;
+	escalation: EscalationSettings;
 }
+
+/**
+ * When a fast model is stuck (the same checks keep failing, or it repeats itself), ask a
+ * stronger model for one piece of advice and hand control back. `model` is `provider/id`.
+ */
+export interface EscalationSettings {
+	model: string;
+	/** Advice calls allowed per user prompt. */
+	maxCallsPerPrompt: number;
+	/** Advice calls allowed per session. */
+	maxCallsPerSession: number;
+}
+
+export const DEFAULT_ESCALATION_MODEL = "anthropic/claude-opus-5-5";
 
 export const DEFAULT_CHECK_TIMEOUT_MS = 300_000;
 
@@ -56,10 +84,14 @@ export function defaultHarnessConfig(): HarnessConfig {
 		checks: [],
 		protect: [],
 		maxRepairRounds: 2,
-		contract: true,
+		// Off by default: on GPT-6 Luna it added 73% tokens with no measured gain (evals/harness/RESULTS.md).
+		contract: false,
 		masking: { enabled: true, keepRecentResults: 6, minResultBytes: 2_000, batchBytes: 48_000 },
 		localProfile: true,
 		shellTimeoutSeconds: 300,
+		features: {},
+		autoChecks: true,
+		escalation: { model: DEFAULT_ESCALATION_MODEL, maxCallsPerPrompt: 2, maxCallsPerSession: 6 },
 	};
 }
 
@@ -93,6 +125,11 @@ function boolean(value: unknown, field: string): boolean {
 	return value;
 }
 
+function ladderLevel(value: unknown, field: string): 1 | 2 | 3 {
+	if (value !== 1 && value !== 2 && value !== 3) throw new HarnessConfigError(`${field} must be 1, 2 or 3`);
+	return value;
+}
+
 function parseCheck(value: unknown, index: number): HarnessCheck {
 	const field = `checks[${index}]`;
 	if (!isRecord(value)) throw new HarnessConfigError(`${field} must be an object`);
@@ -107,6 +144,7 @@ function parseCheck(value: unknown, index: number): HarnessCheck {
 			value.timeoutMs === undefined
 				? DEFAULT_CHECK_TIMEOUT_MS
 				: nonNegativeInteger(value.timeoutMs, `${field}.timeoutMs`),
+		level: value.level === undefined ? undefined : ladderLevel(value.level, `${field}.level`),
 	};
 }
 
@@ -123,6 +161,9 @@ export function parseHarnessConfig(value: unknown): HarnessConfig {
 		"masking",
 		"localProfile",
 		"shellTimeoutSeconds",
+		"features",
+		"autoChecks",
+		"escalation",
 	]);
 	for (const key of Object.keys(value)) {
 		if (!known.has(key)) throw new HarnessConfigError(`Unknown key "${key}"`);
@@ -139,6 +180,41 @@ export function parseHarnessConfig(value: unknown): HarnessConfig {
 	if (value.localProfile !== undefined) config.localProfile = boolean(value.localProfile, "localProfile");
 	if (value.shellTimeoutSeconds !== undefined)
 		config.shellTimeoutSeconds = nonNegativeInteger(value.shellTimeoutSeconds, "shellTimeoutSeconds");
+	if (value.autoChecks !== undefined) config.autoChecks = boolean(value.autoChecks, "autoChecks");
+	if (value.features !== undefined) {
+		if (!isRecord(value.features)) throw new HarnessConfigError("features must be an object");
+		for (const [name, enabled] of Object.entries(value.features)) {
+			if (!FEATURE_NAMES.includes(name as FeatureName)) {
+				throw new HarnessConfigError(`Unknown feature "${name}". Known: ${FEATURE_NAMES.join(", ")}`);
+			}
+			config.features[name as FeatureName] = boolean(enabled, `features.${name}`);
+		}
+	}
+	if (value.escalation !== undefined) {
+		if (!isRecord(value.escalation)) throw new HarnessConfigError("escalation must be an object");
+		const escalation = value.escalation;
+		for (const key of Object.keys(escalation)) {
+			if (!["model", "maxCallsPerPrompt", "maxCallsPerSession"].includes(key)) {
+				throw new HarnessConfigError(`Unknown key "escalation.${key}"`);
+			}
+		}
+		if (escalation.model !== undefined) {
+			if (typeof escalation.model !== "string" || !/^[^/\s]+\/\S+$/.test(escalation.model)) {
+				throw new HarnessConfigError('escalation.model must be "provider/model-id"');
+			}
+			config.escalation.model = escalation.model;
+		}
+		if (escalation.maxCallsPerPrompt !== undefined)
+			config.escalation.maxCallsPerPrompt = nonNegativeInteger(
+				escalation.maxCallsPerPrompt,
+				"escalation.maxCallsPerPrompt",
+			);
+		if (escalation.maxCallsPerSession !== undefined)
+			config.escalation.maxCallsPerSession = nonNegativeInteger(
+				escalation.maxCallsPerSession,
+				"escalation.maxCallsPerSession",
+			);
+	}
 	if (value.masking !== undefined) {
 		if (!isRecord(value.masking)) throw new HarnessConfigError("masking must be an object");
 		const masking = value.masking;

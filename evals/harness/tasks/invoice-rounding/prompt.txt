@@ -1,0 +1,1 @@
+Customers report invoice totals that are sometimes off by a cent when a discount or tax applies. Find the cause and fix it.

@@ -345,8 +345,16 @@ describe("local profile tool set", () => {
 		};
 		harnessExtension(pi as unknown as ExtensionAPI);
 		const start = (provider: string) => {
-			const event = { systemPromptOptions: { sections: {} as Record<string, string>, contextFiles: [] } };
-			handlers.get("before_agent_start")?.(event, { model: { provider } });
+			const event = {
+				prompt: "",
+				systemPromptOptions: { sections: {} as Record<string, string>, contextFiles: [], promptGuidelines: [] },
+			};
+			handlers.get("before_agent_start")?.(event, {
+				model: { provider },
+				cwd: tmpdir(),
+				isProjectTrusted: () => false,
+				ui: { notify() {} },
+			});
 			return event.systemPromptOptions.sections;
 		};
 		return { start, activeTools: () => activeTools, handlers };
@@ -354,12 +362,13 @@ describe("local profile tool set", () => {
 
 	it("keeps only core tools for the local model and restores the rest for another model", () => {
 		const fake = fakePi(["read", "edit", "mcp", "mcpScript", "task"]);
+		// The task contract is off by default; lookup is on for cloud models and off for the local one.
 		fake.start("midnight");
-		expect(fake.activeTools()).toEqual(["read", "edit", "task"]);
+		expect(fake.activeTools()).toEqual(["read", "edit"]);
 		fake.start("midnight");
-		expect(fake.activeTools()).toEqual(["read", "edit", "task"]);
+		expect(fake.activeTools()).toEqual(["read", "edit"]);
 		fake.start("anthropic");
-		expect(fake.activeTools().sort()).toEqual(["edit", "mcp", "mcpScript", "read", "task"]);
+		expect(fake.activeTools().sort()).toEqual(["edit", "lookup", "mcp", "mcpScript", "read"]);
 	});
 
 	it("gives shell calls without a timeout the default one, and keeps an explicit timeout", () => {

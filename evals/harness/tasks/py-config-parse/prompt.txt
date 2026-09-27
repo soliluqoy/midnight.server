@@ -1,0 +1,1 @@
+parse_config in config.py breaks on real config files people write. Make it handle them properly.

@@ -1,0 +1,10 @@
+const assert = require("node:assert");
+const { render } = require("./template.js");
+assert.strictEqual(render("Hi {{name}}", { name: "Ann" }), "Hi Ann");
+assert.strictEqual(render("{{{html}}}", { html: "<b>x</b>" }), "<b>x</b>");
+assert.strictEqual(render("{{x}}", { x: "<script>alert(1)</script>" }), "&lt;script&gt;alert(1)&lt;/script&gt;");
+assert.strictEqual(render("<a title=\"{{t}}\">", { t: "\" onmouseover=\"x" }), "<a title=\"&quot; onmouseover=&quot;x\">");
+assert.strictEqual(render("{{q}}", { q: "Tom & 'Jerry'" }), "Tom &amp; &#39;Jerry&#39;");
+assert.strictEqual(render("{{n}} {{missing}}", { n: 0 }), "0 ");
+assert.strictEqual(render("{{a}}{{{a}}}", { a: "&" }), "&amp;&");
+console.log("pass");

@@ -77,7 +77,7 @@ function fakeManagerThatCannotSetUp(): { manager: EngineManager; stops: number[]
 }
 
 describe("mode selection", () => {
-	it("respects an explicit model choice: no fallback, hybrid extensions still added", async () => {
+	it("respects an explicit model choice: no fallback, and no local helpers on the default path", async () => {
 		const args = ["-p", "hello", "--model", "openai/gpt-4o"];
 		const runtime = await prepareLocalRuntime(args, { modelRuntime: await unconfiguredModelRuntime() });
 		expect(runtime.mode).toBe("default");
@@ -85,8 +85,6 @@ describe("mode selection", () => {
 		expect(runtime.extensionFactories.map((factory) => factory.name)).toEqual([
 			"midnight-local",
 			"midnight-session-title",
-			"midnight-delegate",
-			"midnight-drift-watch",
 		]);
 	});
 
@@ -143,8 +141,6 @@ describe("mode selection", () => {
 		expect(runtime.extensionFactories.map((factory) => factory.name)).toEqual([
 			"midnight-local",
 			"midnight-session-title",
-			"midnight-delegate",
-			"midnight-drift-watch",
 		]);
 	});
 
@@ -171,8 +167,6 @@ describe("mode selection", () => {
 		expect(runtime.extensionFactories.map((factory) => factory.name)).toEqual([
 			"midnight-local",
 			"midnight-session-title",
-			"midnight-delegate",
-			"midnight-drift-watch",
 		]);
 	});
 

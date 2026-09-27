@@ -1,0 +1,1 @@
+splitBill in bill.js loses cents when splitting a total between people. Fix it.

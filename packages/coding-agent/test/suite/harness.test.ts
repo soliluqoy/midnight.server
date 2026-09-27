@@ -40,7 +40,7 @@ describe("harness", () => {
 	});
 
 	it("runs checks before settling and feeds a failure back for one repair round", async () => {
-		const harness = await harnessWith({ checks: [CHECK], contract: false });
+		const harness = await harnessWith({ checks: [CHECK], contract: false, features: { inRunChecks: false } });
 		harnesses.push(harness);
 		const requests: string[] = [];
 		harness.setResponses([
@@ -67,7 +67,12 @@ describe("harness", () => {
 	});
 
 	it("stops after the configured repair rounds and reports", async () => {
-		const harness = await harnessWith({ checks: [CHECK], contract: false, maxRepairRounds: 1 });
+		const harness = await harnessWith({
+			checks: [CHECK],
+			contract: false,
+			maxRepairRounds: 1,
+			features: { inRunChecks: false },
+		});
 		harnesses.push(harness);
 		harness.setResponses([
 			fauxAssistantMessage(fauxToolCall("write", { path: "answer.txt", content: "bad" }), { stopReason: "toolUse" }),
@@ -122,7 +127,7 @@ describe("harness", () => {
 	});
 
 	it("holds the run to open acceptance criteria once, then settles", async () => {
-		const harness = await harnessWith();
+		const harness = await harnessWith({ contract: true });
 		harnesses.push(harness);
 		const requests: string[] = [];
 		harness.setResponses([
@@ -158,7 +163,7 @@ describe("harness", () => {
 	});
 
 	it("rejects update before set and marking without evidence", async () => {
-		const harness = await harnessWith();
+		const harness = await harnessWith({ contract: true });
 		harnesses.push(harness);
 		const results: string[] = [];
 		harness.setResponses([
