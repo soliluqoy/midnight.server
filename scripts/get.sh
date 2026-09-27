@@ -33,9 +33,14 @@ case "$(uname -m)" in
 	arm64 | aarch64) arch=arm64 ;;
 	*) fail "unsupported architecture $(uname -m)" ;;
 esac
+# A shell running under Rosetta on Apple Silicon reports x86_64; the native build is arm64.
+if [ "$os-$arch" = darwin-x64 ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = 1 ]; then
+	arch=arm64
+fi
 platform="$os-$arch"
 case "$platform" in
-	linux-x64 | darwin-x64 | darwin-arm64) ;;
+	linux-x64 | darwin-arm64) ;;
+	darwin-x64) fail "releases are built for Apple Silicon Macs only; on an Intel Mac, build from source with scripts/build-unix.sh" ;;
 	*) fail "no release build for $platform" ;;
 esac
 
