@@ -8,7 +8,15 @@ import { type GitStatusSummary, GitStatusTracker, parseGitStatusPorcelainV2 } fr
 import { collectSessionFileChanges, countPatchLines } from "../src/core/session-file-changes.ts";
 import { type SessionEntry, SessionManager } from "../src/core/session-manager.ts";
 import agentModeExtension, { PLAN_MODE_TOOLS } from "../src/extensions/agent-mode.ts";
-import { cleanSessionTitle, generateSessionTitle, type TitleCompleter } from "../src/midnight/session-title.ts";
+import {
+	cleanSessionTitle,
+	generateSessionTitle,
+	RETITLE_MIN_INTERVAL_MS,
+	RETITLE_MIN_TURNS,
+	regenerateSessionTitle,
+	shouldRetitle,
+	type TitleCompleter,
+} from "../src/midnight/session-title.ts";
 import { getMidnightStatus, onMidnightStatusChange, updateMidnightStatus } from "../src/midnight/status.ts";
 import { FooterComponent } from "../src/modes/interactive/components/footer.ts";
 import { describeGitStatus, SidebarComponent } from "../src/modes/interactive/components/sidebar.ts";
@@ -148,6 +156,29 @@ describe("session titles", () => {
 		expect(await generateSessionTitle(model("Refac", "length"), "u", "a", signal)).toBeUndefined();
 		expect(await generateSessionTitle(model("", "error"), "u", "a", signal)).toBeUndefined();
 	});
+
+	it("retitles from the current title and recent requests", async () => {
+		let prompt = "";
+		const complete: TitleCompleter = async (context) => {
+			prompt = String(context.messages[0]?.content);
+			return fauxAssistantMessage("Add retry to the uploader.");
+		};
+		const title = await regenerateSessionTitle(
+			complete,
+			"Fix date parsing",
+			["now make uploads retry", "and log failures"],
+			new AbortController().signal,
+		);
+		expect(title).toBe("Add retry to the uploader");
+		expect(prompt).toContain("<current_title>Fix date parsing</current_title>");
+		expect(prompt).toContain("and log failures");
+	});
+
+	it("retitles only after enough runs and enough time", () => {
+		expect(shouldRetitle(RETITLE_MIN_TURNS, RETITLE_MIN_INTERVAL_MS)).toBe(true);
+		expect(shouldRetitle(RETITLE_MIN_TURNS - 1, RETITLE_MIN_INTERVAL_MS * 10)).toBe(false);
+		expect(shouldRetitle(RETITLE_MIN_TURNS * 10, RETITLE_MIN_INTERVAL_MS - 1)).toBe(false);
+	});
 });
 
 type Handler = (event: Record<string, unknown>, ctx?: unknown) => unknown;
@@ -281,7 +312,7 @@ describe("sidebar and footer", () => {
 		}
 	});
 
-	it("refreshes cached session scans in the sidebar and footer when the session changes", () => {
+	it("refreshes the sidebar title when the session is renamed and keeps it out of the footer", () => {
 		const sessionManager = SessionManager.inMemory(process.cwd());
 		const session = { ...createSession(), sessionManager } as unknown as AgentSession;
 		const sidebar = new SidebarComponent({
@@ -301,7 +332,7 @@ describe("sidebar and footer", () => {
 		sessionManager.appendSessionInfo("Renamed");
 		expect(sessionManager.getRevision()).not.toBe(revision);
 		expect(sidebarText()).toContain("Renamed");
-		expect(footerText()).toContain("• Renamed");
+		expect(footerText()).not.toContain("Renamed");
 	});
 
 	it("shows the mode badge, branch and dirty count in the footer", () => {
