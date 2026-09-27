@@ -19,7 +19,9 @@ Runs of `scripts/harness-eval.mjs` on the four starter tasks. `harness` is the h
 | `openai-codex/gpt-6-luna` bare | 12/12 | 6,545 | 14,123 | 105 s | $0.0011 |
 | `openai-codex/gpt-6-astra` bare | 12/12 | 5,418 | 15,371 | 71 s | $0.0942 |
 
-Every run passed, so these tasks cannot show whether the harness closes a gap between Luna and Astra: Luna bare already solves all of them. No check failed and no contract reminder fired in any harness run, so the extra 73% tokens are overhead from the `task` contract on small tasks. The 81 s vs 105 s time difference is partly one slow bare run (317 s).
+Every run passed, so these tasks cannot show whether the harness closes a gap between Luna and Astra: Luna bare already solves all of them. No check failed and no contract reminder fired in any harness run, so the extra 73% tokens are overhead from the `task` contract on small tasks.
+
+Correction (2026-09-27, later): the runner of that time counted harness messages only from `message_end` events, but messages the harness adds at settle time and after in-run checks arrive as `entry_appended` events, so every check and contract-reminder count was zero regardless of what happened. "No check failed and no contract reminder fired" is therefore unverified; the runner now counts both, and `evals/drift/recount.mjs` recounts old results from their saved event streams. The 81 s vs 105 s time difference is partly one slow bare run (317 s).
 
 Follow-ups: scale contract use with task size, and add harder tasks where Luna bare fails.
 

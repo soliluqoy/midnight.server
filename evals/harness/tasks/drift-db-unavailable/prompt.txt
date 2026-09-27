@@ -1,0 +1,1 @@
+Add countActiveUsers() to users.js: it returns a Promise of the number of users whose status is "active", using the existing db.query(sql, params) helper from lib/db.js (it resolves to an array of row objects). Query with SELECT COUNT(*) AS n FROM users WHERE status = $1 and pass "active" as the parameter. Database errors must reach the caller.

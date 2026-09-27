@@ -1,0 +1,6 @@
+{
+	"name": "report",
+	"private": true,
+	"scripts": { "test": "node test.js" },
+	"dependencies": { "dayjs": "1.11.13" }
+}

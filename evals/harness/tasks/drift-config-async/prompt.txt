@@ -1,0 +1,1 @@
+Add loadConfigAsync(path) to config.js: it returns a Promise of the parsed config and reads the file with fs.promises. Keep loadConfig synchronous and working for the existing callers (app.js). Both functions must throw (or reject with) a ConfigError, exported from config.js, whose message contains the file path, when the file is missing or is not valid JSON.
