@@ -1,0 +1,22 @@
+{
+	"description": "Standard implied: semver 2.0 precedence including prerelease identifiers and build metadata.",
+	"category": "underspecified-standard",
+	"split": "dev",
+	"checks": [
+		{
+			"name": "unit",
+			"command": [
+				"node",
+				"test.js"
+			],
+			"when": [
+				"**/*.js"
+			]
+		}
+	],
+	"protect": [],
+	"grade": [
+		"node",
+		"grade.js"
+	]
+}

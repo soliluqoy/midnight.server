@@ -1,0 +1,29 @@
+{
+	"description": "Spaces, single numbers, overlaps and duplicates, sorted output, errors for invalid or reversed ranges.",
+	"category": "implied-requirements",
+	"split": "dev",
+	"checks": [
+		{
+			"name": "go test",
+			"command": [
+				"go",
+				"test",
+				"./..."
+			],
+			"when": [
+				"**/*.go"
+			]
+		}
+	],
+	"protect": [],
+	"grade": [
+		"go",
+		"test",
+		"-run",
+		"Hidden",
+		"./..."
+	],
+	"requires": [
+		"go"
+	]
+}

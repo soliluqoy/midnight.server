@@ -1,0 +1,1 @@
+Our EventEmitter in emitter.js misbehaves: some listeners run twice and others get skipped. Fix it.

@@ -1,0 +1,1 @@
+{ "name": "trap", "private": true, "scripts": { "test": "node test.js" } }

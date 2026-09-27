@@ -1,0 +1,22 @@
+{
+	"description": "Off-by-one in binary search; duplicates, empty arrays, values beyond both ends.",
+	"category": "hidden-bug",
+	"split": "holdout",
+	"checks": [
+		{
+			"name": "unit",
+			"command": [
+				"node",
+				"test.js"
+			],
+			"when": [
+				"**/*.js"
+			]
+		}
+	],
+	"protect": [],
+	"grade": [
+		"node",
+		"grade.js"
+	]
+}

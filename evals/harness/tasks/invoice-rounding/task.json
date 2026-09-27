@@ -1,0 +1,23 @@
+{
+	"description": "Bug hidden in src/utils/money.js (toFixed on binary floats); the prompt names only the symptom.",
+	"category": "navigation",
+	"split": "dev",
+	"checks": [
+		{
+			"name": "tests",
+			"command": [
+				"npm",
+				"test",
+				"--silent"
+			],
+			"when": [
+				"**/*.js"
+			]
+		}
+	],
+	"protect": [],
+	"grade": [
+		"node",
+		"grade.js"
+	]
+}

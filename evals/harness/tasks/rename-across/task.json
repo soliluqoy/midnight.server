@@ -1,0 +1,22 @@
+{
+	"description": "Rename a function everywhere, including a namespace-style call and a re-export.",
+	"category": "multi-file",
+	"split": "dev",
+	"checks": [
+		{
+			"name": "unit",
+			"command": [
+				"node",
+				"test.js"
+			],
+			"when": [
+				"**/*.js"
+			]
+		}
+	],
+	"protect": [],
+	"grade": [
+		"node",
+		"grade.js"
+	]
+}

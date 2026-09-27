@@ -1,0 +1,1 @@
+npm test started failing after we added German titles. Make it pass.

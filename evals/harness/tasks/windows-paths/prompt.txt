@@ -1,0 +1,1 @@
+normalizeRelative in paths.js breaks on Windows-style paths from our users. Fix it so it works for both styles.

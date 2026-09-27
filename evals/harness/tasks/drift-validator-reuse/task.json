@@ -1,0 +1,30 @@
+{
+	"description": "The request says to use the existing validator; a familiar regex passes the visible test but not the project's rule.",
+	"category": "drift-familiar",
+	"family": "drift-validator-reuse",
+	"split": "holdout",
+	"checks": [
+		{
+			"name": "unit",
+			"command": [
+				"node",
+				"test.js"
+			],
+			"when": [
+				"**/*.js"
+			]
+		}
+	],
+	"protect": [],
+	"grade": [
+		"node",
+		"grade.js"
+	],
+	"requirements": [
+		"uses-project-rule",
+		"rejects-invalid",
+		"accepts-valid",
+		"error-type",
+		"not-stored"
+	]
+}

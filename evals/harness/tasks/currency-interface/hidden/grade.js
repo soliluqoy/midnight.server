@@ -1,0 +1,12 @@
+const assert = require("node:assert");
+const { cartSummary } = require("./src/cart.js");
+const { receiptLine } = require("./src/receipt.js");
+const { orderEmail } = require("./src/email.js");
+const make = (currency) => ({ id: 7, currency, items: [{ name: "pen", price: 1.5, quantity: 2 }] });
+assert.strictEqual(cartSummary(make("USD")), "pen x2: $3.00\nTotal: $3.00");
+assert.strictEqual(cartSummary(make("EUR")), "pen x2: €3.00\nTotal: €3.00");
+assert.strictEqual(receiptLine(make("GBP"), 12.5), "Paid £12.50 for order 7");
+assert.strictEqual(orderEmail(make("JPY"), 1200), "Your order 7 of ¥1200 has shipped.");
+assert.strictEqual(orderEmail(make("JPY"), 1200.4), "Your order 7 of ¥1200 has shipped.");
+assert.strictEqual(orderEmail(make("USD"), 5), "Your order 7 of $5.00 has shipped.");
+console.log("pass");

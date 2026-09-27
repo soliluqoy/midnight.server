@@ -1,0 +1,96 @@
+# Sessions and Context
+
+midnight.server saves a conversation as a session. The active branch of that session supplies conversation history for the next model request. Use session commands to continue work, explore another branch, or reduce the amount of history sent to the model.
+
+## Continue or switch sessions
+
+midnight.server saves sessions automatically unless you start it with `--no-session`.
+
+```bash
+midnight.server --continue
+midnight.server --resume
+```
+
+`--continue` opens the most recent session for the current working directory. `--resume` opens the session picker. In interactive mode, `/resume` opens the same picker and `/new` starts a new session.
+
+Use `/name` or `--name` to assign a recognizable session name. Run `/session` to verify the current session file, ID, message count, token usage, and cost.
+
+The session picker lets you search, rename, and delete sessions. It can also show paths, change sorting, and limit results to named sessions. See [Keybindings](keybindings.md#sessions) for its shortcuts.
+
+## Choose how to branch
+
+midnight.server stores entries as a tree, so returning to an earlier point does not erase the branch you leave.
+
+`/tree` (or Escape twice in an empty editor) is the one place to go back. Pick an entry, then:
+
+| Key | Result | Use it when |
+|---|---|---|
+| Enter | Continues from that entry in the current session file | Related alternatives should stay together |
+| `shift+n` | Starts a new session from that entry | The alternative should become separate work, or you want a copy of the current state |
+
+On a user message, both put its text back in the editor so you can edit and resubmit it; Enter branches before it in this session, `shift+n` starts a new session that ends just before it (what `/fork` does). On any other entry the editor stays empty; `shift+n` on the newest entry copies the whole branch (what `/clone` does). `/fork` and `/clone` still work when typed. Side threads can open `/tree` for you (`b`, see [Redo an item from a side thread](#redo-an-item-from-a-side-thread)).
+
+When you leave a branch, midnight.server can summarize it and attach that summary to the branch you enter. This preserves relevant work from the abandoned path without including every message from it.
+
+For the persisted tree and entry types, see [Session Format](session-format.md).
+
+## Manage conversation context
+
+The model receives the active branch, not every branch in the session file. midnight.server combines that history with the system prompt, discovered context files, available tools, and loaded skill descriptions. [How midnight.server Works](how-pi-works.md#context) describes how those inputs are assembled.
+
+The footer shows current context usage. When the active context approaches the model's limit, midnight.server normally compacts older history automatically. Compaction adds a summary and keeps recent messages. It does not delete the original session entries.
+
+Run `/compact` to compact manually. You can add instructions when the summary should preserve a particular topic or decision. Configure automatic compaction and retained history through [Settings](settings.md#compaction).
+
+Compaction can fail if the provider is unavailable or cannot accept the summarization request. Correct the provider problem and run `/compact` again. Disabling automatic compaction does not disable the manual command.
+
+See [Compaction Reference](compaction.md) for thresholds, retained boundaries, branch-summary behavior, and extension hooks.
+
+## Ask side questions
+
+A side thread is a short question about one item in the transcript, such as a failed command or a reply. The answer appears folded under that item. The main agent never sees it, keeps running while you ask, and your prompt draft is kept.
+
+1. Press `alt+t`. The editor becomes a question box for the newest tool call or reply, which is highlighted; one line above the editor shows the item and the model. While the box is empty, up/down picks another item (or alt+click it). Tab (in the empty box) and Shift+Tab pick the next and previous model from a short list: the session model and your `ctrl+p` models. `ctrl+p` and `alt+p` cycle the same list, and `ctrl+l` searches all available models. None of these change the main session model or thinking level while the box is open.
+2. Type the question and press Enter. Escape goes back to your prompt without asking.
+3. The answer streams under the item. To manage threads, press `alt+t` again from the question box (a half-typed question is kept). Then up/down picks an item, Enter asks a follow-up, Space opens or folds its thread, `m` sends it to the main agent, `b` branches from before the item (see below), `d` deletes it, and `x` stops a running answer. `alt+t` or Escape leaves.
+
+`/ask [question]` asks about the newest item without selecting it. Start the question with `@same` or `@provider/model` to choose the model.
+
+The model decides how much context the question carries:
+
+| Model | Request |
+|---|---|
+| Same model as the session | The main agent's last request plus the question, so the provider can reuse its prompt cache |
+| Another model | The item, recent conversation text, and earlier answers in the thread |
+
+The default is the session model. The model you choose is kept for later questions until you quit.
+
+Threads are saved beside the session file as `<session>.threads.json`, so they come back when you resume. They are not session entries: `/tree`, `/fork`, and compaction ignore them, and a fork starts without threads. `m` is the only way a thread reaches the main agent: it adds the unsent questions and answers as a visible message. If the agent is running, the message is added when the current turn ends. No turn is started.
+
+### Redo an item from a side thread
+
+When a side thread shows the agent went the wrong way at an item, select the item and press `b`. `/tree` opens on the entry just before it: the prompt that led to the item, or the tool result it followed. Navigate as usual (move the selection first if you want to go back further). After navigating, the thread's answered questions are added to the editor as a note, below the prompt text if you picked a user message. Edit it into guidance and send it to redo the item on a new branch. Press `shift+n` instead of Enter in the tree to redo it in a new session; the note comes along the same way.
+
+The thread stays with the item on the branch you left, and comes back if you navigate there again. If the agent is running, navigating stops it, as in `/tree`.
+
+## Control session storage
+
+By default, midnight.server stores sessions under `~/.midnight.server/agent/sessions/`, grouped by working directory. Use `--session-dir`, `MIDNIGHT_SERVER_CODING_AGENT_SESSION_DIR`, or the `sessionDir` setting to choose another location. The CLI option has highest precedence.
+
+Use `--no-session` for an ephemeral run. An ephemeral session cannot be resumed after midnight.server exits.
+
+Use `--session` when you already know the session path or ID. Use `--fork` to create a new session from an existing session before interactive mode starts.
+
+## Export or share a session
+
+Use `/export` to write the current session as HTML or JSONL. Use `/share` to upload it and get a viewer link. midnight.server uses a Radius artifact when Radius authentication is configured; otherwise, it uses a private GitHub gist.
+
+HTML exports and shares include side threads, folded under their items. JSONL exports contain only the session file.
+
+Review exported or shared sessions first. They can contain prompts, model responses, tool arguments, command output, file contents, and extension messages.
+
+## Report a bug
+
+Run `/bug [description]` to prepare a bug report for the midnight.server developers. You can include the session transcript, omit it, or ask the current model to summarize the problem. Review any transcript or generated summary because it can contain sensitive conversation data.
+
+The report includes environment and provider configuration without credential values, plus recorded error diagnostics. midnight.server exports it as a zip archive in the current directory and never uploads it; inspect the archive, then attach it to an issue at https://github.com/soliluqoy/midnight.server/issues.

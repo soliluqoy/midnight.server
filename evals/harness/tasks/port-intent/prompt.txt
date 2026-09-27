@@ -1,0 +1,1 @@
+parsePort in port.js is used to read a TCP port from user config. Make it safe to use: it should only ever return a valid port.

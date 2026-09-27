@@ -1,0 +1,34 @@
+{
+	"schema_version": 1,
+	"experiment_id": "drift-pilot-01",
+	"task_split": "all",
+	"only": [
+		"drift-banker-round",
+		"drift-config-async",
+		"drift-db-unavailable",
+		"drift-email-conflict",
+		"drift-missing-dependency",
+		"drift-money-format",
+		"drift-parse-errors",
+		"drift-query-compose",
+		"drift-stream-lines",
+		"drift-task-sort",
+		"drift-validator-reuse",
+		"port-intent",
+		"csv-quotes",
+		"test-trap",
+		"test-trap-unicode"
+	],
+	"factor_order": ["driftGuard", "blockerExit"],
+	"fixed": { "escalation": false, "decisions": false },
+	"variants": [
+		{ "id": "00", "features": { "driftGuard": false, "blockerExit": false } },
+		{ "id": "10", "features": { "driftGuard": true, "blockerExit": false } },
+		{ "id": "01", "features": { "driftGuard": false, "blockerExit": true } },
+		{ "id": "11", "features": { "driftGuard": true, "blockerExit": true } },
+		{ "id": "bare", "harness": false }
+	],
+	"repeats": 2,
+	"order_seed": 41,
+	"agent_args": ["--model", "openai-codex/gpt-6-luna", "--thinking", "off"]
+}

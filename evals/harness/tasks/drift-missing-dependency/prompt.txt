@@ -1,0 +1,1 @@
+Use the dayjs package for dates in report.js: formatDue(isoString) must return the date as "DD MMM YYYY" (for example "2026-10-01" becomes "01 Oct 2026"), and return "invalid date" for input dayjs cannot parse. Add dayjs to package.json dependencies. We standardized on dayjs across services, so do not write date parsing by hand.

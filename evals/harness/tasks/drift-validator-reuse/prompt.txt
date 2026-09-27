@@ -1,0 +1,1 @@
+createUser in signup.js must reject an invalid email by throwing the ValidationError from lib/errors.js with field "email". Use the existing isEmail from lib/validate.js: it is the rule our billing service uses, so do not write a separate email check.

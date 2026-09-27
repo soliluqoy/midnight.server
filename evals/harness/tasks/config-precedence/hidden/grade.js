@@ -1,0 +1,10 @@
+const assert = require("node:assert");
+const { loadConfig } = require("./config.js");
+assert.deepStrictEqual(loadConfig(), { port: 8080, verbose: false, name: "app", retries: 3 });
+assert.strictEqual(loadConfig({ env: { port: 9000 }, cli: { port: 7000 } }).port, 7000);
+assert.strictEqual(loadConfig({ file: { port: 1 }, env: { port: 2 } }).port, 2);
+assert.strictEqual(loadConfig({ file: { verbose: true }, cli: { verbose: false } }).verbose, false, "an explicit false flag wins");
+assert.strictEqual(loadConfig({ env: { retries: 5 }, cli: { retries: 0 } }).retries, 0, "an explicit 0 flag wins");
+assert.strictEqual(loadConfig({ file: { name: "x" }, cli: { name: "" } }).name, "", "an explicit empty string wins");
+assert.strictEqual(loadConfig({ file: { name: "x" }, cli: { name: undefined } }).name, "x", "undefined means not given");
+console.log("pass");
