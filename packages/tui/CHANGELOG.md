@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.87.1-midnight.1] - 2026-09-27
+
 ### Added
 
 - Added `Editor.onEmptyPaste`, called for a bracketed paste with no text (Windows Terminal sends one for Ctrl+V when the clipboard holds only an image).

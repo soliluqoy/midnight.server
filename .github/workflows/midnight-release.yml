@@ -1,8 +1,9 @@
 name: midnight.server Release
 
 # Builds, verifies and attaches release archives for Windows x64, Linux x64 and
-# macOS arm64 (Apple Silicon) to a draft GitHub release for a v*-midnight.* tag. Publish
-# the draft after writing its notes. A manual run with publish off builds and
+# macOS arm64 (Apple Silicon) to a draft GitHub release for a v*-midnight.* tag. The
+# draft's notes are the tag's section of packages/coding-agent/CHANGELOG.md
+# (scripts/midnight-release-notes.mjs); review and publish it. A manual run with publish off builds and
 # verifies any ref (e.g. main) without touching releases.
 on:
   push:
@@ -134,6 +135,19 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Release notes from the changelog
+        run: node scripts/midnight-release-notes.mjs "$RELEASE_TAG" > "$RUNNER_TEMP/notes.md"
+
       - name: Download
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -151,6 +165,6 @@ jobs:
           rm SHA256SUMS-*
           cat SHA256SUMS
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --draft --verify-tag --title "midnight.server $RELEASE_TAG" --notes "Release notes pending."
+            gh release create "$RELEASE_TAG" --draft --verify-tag --title "midnight.server $RELEASE_TAG" --notes-file "$RUNNER_TEMP/notes.md"
           fi
           gh release upload "$RELEASE_TAG" --clobber ./*

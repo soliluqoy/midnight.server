@@ -1,48 +1,43 @@
 ---
 name: release
-description: Prepare, publish, verify, and recover pi releases. Use for release preparation, local release smoke tests, publishing, and failed release CI or announcements.
+description: Prepare, tag, verify and publish a midnight.server GitHub release (Windows x64, Linux x64, macOS arm64). Use for release preparation, release smoke tests, and failed release CI.
 ---
 
-# Releasing pi
+# Releasing midnight.server
 
-Run repository commands from the repo root (two directories above this skill), unless instructed otherwise.
+Run commands from the repo root (two directories above this skill). Releases are GitHub releases only; nothing is published to npm.
 
-**Lockstep versioning**: all packages share one version; every release updates all together. `patch` = fixes + additions, `minor` = breaking changes. No major releases.
+Tag format: `v<pi-version>-midnight.<n>`. `<pi-version>` is the Pi base in `packages/coding-agent/package.json` (e.g. `0.87.1`); `<n>` is the next number after the latest tag on that base (`git tag --list 'v0.87.1-midnight.*' --sort=-v:refname | head -1`) and restarts at 1 when the Pi base changes.
 
-1. **Update CHANGELOGs**: ask the user whether they ran the `/cl` prompt on the latest commit on `main`. If not, they must run `/cl` first to audit and update each package's `[Unreleased]` section before releasing.
+1. **Start from a clean, current `main`** with every release PR merged and CI green.
 
-2. **Local smoke test**: build an unpublished release and smoke test from outside the repo (so it can't resolve workspace files):
-   ```bash
-   npm run release:local -- --out /tmp/pi-local-release --force
-   cd /tmp
+2. **Audit the changelog**: run the `cl` prompt (`.midnight.server/prompts/cl.md`) so every commit since the last tag has an entry under `## [Unreleased]`.
 
-   # Node package install smoke tests
-   /tmp/pi-local-release/node/pi --help
-   /tmp/pi-local-release/node/pi --version
-   /tmp/pi-local-release/node/pi --list-models
-   /tmp/pi-local-release/node/pi -p "Say exactly: ok"
-   /tmp/pi-local-release/node/pi
+3. **Cut the version section** on a branch `chore/release-<n>`: in each `packages/*/CHANGELOG.md` whose `## [Unreleased]` has entries, rename it to `## [<pi-version>-midnight.<n>] - <YYYY-MM-DD>` and add an empty `## [Unreleased]` above it. Preview the notes with `npm run release:notes -- v<pi-version>-midnight.<n>`. Commit `docs: release v<pi-version>-midnight.<n>`, open a PR, merge it.
 
-   # Bun binary smoke tests
-   /tmp/pi-local-release/bun/pi --help
-   /tmp/pi-local-release/bun/pi --version
-   /tmp/pi-local-release/bun/pi --list-models
-   /tmp/pi-local-release/bun/pi -p "Say exactly: ok"
-   /tmp/pi-local-release/bun/pi
+4. **Local smoke test** (Windows, PowerShell), optional when CI is trusted but required after packaging or engine changes:
+   ```powershell
+   scripts\bootstrap.ps1 -Install
+   scripts\build.ps1
+   scripts\package.ps1
+   scripts\verify-release.ps1 -Package dist\midnight.server-windows-x64.zip
    ```
-   Verify both Node and Bun startup, model/account listing, interactive startup, and at least one real prompt with the intended default provider. The bare commands `/tmp/pi-local-release/node/pi` and `/tmp/pi-local-release/bun/pi` start interactive mode; run each in tmux, submit a prompt, and wait for the model reply before considering the interactive smoke test passed. Failures are release blockers unless the user explicitly accepts the risk.
+   Then start the built binary from a directory outside the repo, check `--version`, `--list-models`, `-p "Say exactly: ok"`, and one interactive prompt (see [interactive-testing.md](interactive-testing.md)). Failures block the release unless the user accepts the risk.
 
-   Load and follow [interactive-testing.md](interactive-testing.md) for the tmux workflow. Start each release binary from `/tmp`, not the repo root.
-
-3. **Run the release script**:
+5. **Tag and push** from the merged `main`:
    ```bash
-   PI_ALLOW_LOCKFILE_CHANGE=1 npm_config_min_release_age=0 npm run release:patch    # fixes + additions
-   PI_ALLOW_LOCKFILE_CHANGE=1 npm_config_min_release_age=0 npm run release:minor    # breaking changes
+   git switch main && git pull --ff-only
+   git tag v<pi-version>-midnight.<n>
+   git push origin v<pi-version>-midnight.<n>
    ```
-   Use `npm_config_min_release_age=0` only for the release command. The repo's normal npm age gate can otherwise block the release lockfile refresh when the current workspace package version was published recently. Review any lockfile or shrinkwrap diffs the release creates before push.
+   Pushing a tag is outward-facing; confirm with the user first.
 
-   The release script bumps all package versions, updates changelogs, regenerates release artifacts, runs `npm run check`, commits `Release vX.Y.Z`, tags `vX.Y.Z`, adds fresh `## [Unreleased]` changelog sections, commits `Add [Unreleased] section for next cycle`, then pushes `main` and the tag. Do not rerun the release script after a tag was pushed.
+6. **CI builds the draft**: `.github/workflows/midnight-release.yml` builds and verifies Windows x64, Linux x64 (`.deb` installed and run) and macOS arm64, then creates a draft release whose notes are the tag's `packages/coding-agent/CHANGELOG.md` section plus install instructions, with the archives and `SHA256SUMS` attached. Watch it with `gh run watch`.
 
-4. **CI verifies and announces the npm release**: pushing the `vX.Y.Z` tag triggers `.github/workflows/build-binaries.yml`. The `publish-npm` job uses npm trusted publishing through GitHub Actions OIDC with environment `npm-publish`; no local `npm publish`, `npm whoami`, OTP, or WebAuthn flow is required. After publishing, `announce-pi-dev-release` verifies every public workspace package resolves at the exact release version and that its npm tarball is available, then writes the verified release marker to R2. `pi.dev/api/latest-version` reads that marker; it must never announce a release from npm before this job succeeds.
+7. **Review and publish**: `gh release view <tag>`; edit the notes only if needed (`gh release edit <tag> --notes-file <file>`), then `gh release edit <tag> --draft=false` after the user confirms.
 
-5. **If CI publish or announcement fails**: inspect the failed job. The publish helper is idempotent and skips package versions already present on npm; the announcement job rechecks availability before updating the R2 marker. Rerun the failed job or workflow after fixing CI or transient npm issues. Do not rerun `npm run release:patch` or `npm run release:minor` for the same version.
+## Recovery
+
+- A failed job: fix the cause on a branch, merge, then rerun the workflow for the same tag with `gh workflow run midnight-release.yml -f tag=<tag>` only if the fix does not change the release contents; otherwise delete the draft and tag (with the user's consent) and release the next `<n>`.
+- The notes step fails with "has no ## [...] section": step 3 was skipped. Merge the changelog cut, move the tag only with the user's consent, or release the next `<n>`.
+- A dry run of any ref: `gh workflow run midnight-release.yml -f tag=main -f publish=false`.
