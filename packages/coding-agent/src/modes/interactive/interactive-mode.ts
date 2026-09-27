@@ -148,7 +148,6 @@ import { FooterComponent, formatTokens } from "./components/footer.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { createMermaidMarkdownTransformer } from "./components/mermaid.ts";
-import { modeChip } from "./components/mode-chip.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
 import {
 	type AuthSelectorProvider,
@@ -1062,7 +1061,7 @@ export class InteractiveMode {
 		// Add header with keybindings from config (unless silenced)
 		if (this.options.verbose || !this.settingsManager.getQuietStartup()) {
 			const logo = () => {
-				return `${theme.fg("accent", "☾ ")}${theme.bold(theme.fg("text", APP_NAME))}${theme.fg("dim", ` v${this.version}`)}  ${modeChip(getMidnightStatus().agentMode)}`;
+				return `${theme.fg("accent", "☾ ")}${theme.bold(theme.fg("text", APP_NAME))}${theme.fg("dim", ` v${this.version}`)}`;
 			};
 
 			// Build startup instructions using keybinding hint helpers
