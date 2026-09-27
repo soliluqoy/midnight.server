@@ -112,9 +112,10 @@ for (const subpath of ["/client", "/experimental/plugin"]) {
   assert.throws(() => import.meta.resolve("${codingAgentName}" + subpath), /not exported|not defined|Cannot find|cannot find/);
 }
 `);
-		run(runtime, [entry], { cwd: directory, env, timeout: 30_000 });
+		// Spawn the runtime directly: a Windows shell splits executable paths containing spaces.
+		run(runtime, [entry], { cwd: directory, env, timeout: 30_000, shell: false });
 		for (const cli of new Set([manifest.bin.pi, "dist/cli.js"])) {
-			const output = run(runtime, [join(packageDir, cli), "--version"], { cwd: directory, env, timeout: 30_000 });
+			const output = run(runtime, [join(packageDir, cli), "--version"], { cwd: directory, env, timeout: 30_000, shell: false });
 			if (output.trim() !== manifest.version) throw new Error(`Unexpected version from ${cli}: ${output}`);
 		}
 	} finally {
