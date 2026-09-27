@@ -196,7 +196,11 @@ function addTerm(target: Map<string, number>, term: string, weight: number): voi
 	target.set(term, (target.get(term) ?? 0) + weight);
 }
 
-async function indexFile(root: string, path: string, previous: IndexedFile | undefined): Promise<IndexedFile | undefined> {
+async function indexFile(
+	root: string,
+	path: string,
+	previous: IndexedFile | undefined,
+): Promise<IndexedFile | undefined> {
 	if (!TEXT_EXTENSIONS.has(extname(path).toLowerCase())) return undefined;
 	let stats: Stats;
 	try {

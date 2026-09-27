@@ -1,5 +1,6 @@
-import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { execFile, spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { copyFile, mkdir, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { isGeneratedPath } from "./workspace-index.ts";
@@ -18,6 +19,10 @@ import { isGeneratedPath } from "./workspace-index.ts";
  * A snapshot is a commit under `refs/midnight/checkpoints/`, built with a temporary index
  * file. The user's index, branches, HEAD and stash are never touched. Refs are deleted when
  * the session ends.
+ *
+ * Every git call here is asynchronous: these run at the start of each request, after each
+ * passing check and when a run settles, and a synchronous child process freezes the TUI
+ * (no rendering, no input) for as long as git takes.
  */
 
 export interface Checkpoint {
@@ -31,22 +36,82 @@ export interface Checkpoint {
 const REF_PREFIX = "refs/midnight/checkpoints";
 const MAX_DIFF_BYTES = 12_000;
 
-function git(cwd: string, args: string[], env?: Record<string, string>, input?: string) {
-	const result = spawnSync("git", args, {
-		cwd,
-		encoding: "utf8",
-		env: env ? { ...process.env, ...env } : process.env,
-		input,
-		maxBuffer: 64 * 1024 * 1024,
-		windowsHide: true,
-		timeout: 60_000,
-	});
-	return { ok: result.status === 0, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+interface GitResult {
+	ok: boolean;
+	stdout: string;
 }
 
-export function isGitWorkTree(cwd: string): boolean {
-	const result = git(cwd, ["rev-parse", "--is-inside-work-tree"]);
+function gitBuffer(
+	cwd: string,
+	args: string[],
+	options: { env?: Record<string, string>; input?: string } = {},
+): Promise<{ ok: boolean; stdout: Buffer }> {
+	return new Promise((done) => {
+		const child = execFile(
+			"git",
+			args,
+			{
+				cwd,
+				encoding: "buffer",
+				env: options.env ? { ...process.env, ...options.env } : process.env,
+				maxBuffer: 256 * 1024 * 1024,
+				windowsHide: true,
+				timeout: 60_000,
+			},
+			(error, stdout) => done({ ok: !error, stdout: stdout ?? Buffer.alloc(0) }),
+		);
+		// git may exit before reading all of its input (a bad repository): not an error of ours.
+		child.stdin?.on("error", () => undefined);
+		child.stdin?.end(options.input ?? "");
+	});
+}
+
+async function git(cwd: string, args: string[], env?: Record<string, string>): Promise<GitResult> {
+	const result = await gitBuffer(cwd, args, { env });
+	return { ok: result.ok, stdout: result.stdout.toString("utf8") };
+}
+
+export async function isGitWorkTree(cwd: string): Promise<boolean> {
+	const result = await git(cwd, ["rev-parse", "--is-inside-work-tree"]);
 	return result.ok && result.stdout.trim() === "true";
+}
+
+/**
+ * Blob contents for `tree:path` specs, in one `git cat-file --batch` process instead of one per
+ * file: on Windows each git process costs tens of milliseconds, and an inventory can read
+ * hundreds of blobs. Blobs larger than `maxBytes` and missing ones map to undefined.
+ */
+async function readBlobs(root: string, specs: readonly string[], maxBytes: number): Promise<Map<string, Buffer>> {
+	const blobs = new Map<string, Buffer>();
+	// A spec is one input line: a path with a line break cannot be named, so it is left out.
+	const named = [...new Set(specs)].filter((spec) => !/[\r\n]/.test(spec));
+	if (named.length === 0) return blobs;
+	const sizes = await gitBuffer(root, ["cat-file", "--batch-check=%(objectsize)"], {
+		input: `${named.join("\n")}\n`,
+	});
+	if (!sizes.ok) return blobs;
+	const small = sizes.stdout
+		.toString("utf8")
+		.split("\n")
+		.slice(0, named.length)
+		.flatMap((line, index) => (/^\d+$/.test(line) && Number(line) <= maxBytes ? [named[index]!] : []));
+	if (small.length === 0) return blobs;
+	const batch = await gitBuffer(root, ["cat-file", "--batch=%(objectsize)"], { input: `${small.join("\n")}\n` });
+	if (!batch.ok) return blobs;
+	// Each object is "<size>\n<content>\n"; a missing one is "<spec> missing\n".
+	const out = batch.stdout;
+	let offset = 0;
+	for (const spec of small) {
+		const end = out.indexOf(0x0a, offset);
+		if (end === -1) break;
+		const header = out.subarray(offset, end).toString("utf8");
+		offset = end + 1;
+		if (!/^\d+$/.test(header)) continue;
+		const size = Number(header);
+		blobs.set(spec, out.subarray(offset, offset + size));
+		offset += size + 1;
+	}
+	return blobs;
 }
 
 /**
@@ -54,8 +119,8 @@ export function isGitWorkTree(cwd: string): boolean {
  * with an 8.3 short-path cwd on Windows (`C:\Users\RUNNER~1\...`, as TEMP often is) every changed
  * path mapped back from it would look outside the workspace. `--show-cdup` is relative to `cwd`.
  */
-function repoRoot(cwd: string): string | undefined {
-	const result = git(cwd, ["rev-parse", "--show-cdup"]);
+async function repoRoot(cwd: string): Promise<string | undefined> {
+	const result = await git(cwd, ["rev-parse", "--show-cdup"]);
 	return result.ok ? resolve(cwd, result.stdout.trim()) : undefined;
 }
 
@@ -75,21 +140,25 @@ export class CheckpointStore {
 	}
 
 	/** Snapshot the working tree (tracked and untracked, respecting .gitignore). */
-	snapshot(label: string): Checkpoint | undefined {
-		const tree = writeWorkingTree(this.cwd);
+	async snapshot(label: string): Promise<Checkpoint | undefined> {
+		const tree = await writeWorkingTree(this.cwd);
 		if (!tree) return undefined;
 		if (this.latest?.tree === tree) return this.latest;
-		const head = git(this.cwd, ["rev-parse", "--verify", "-q", "HEAD"]);
+		const head = await git(this.cwd, ["rev-parse", "--verify", "-q", "HEAD"]);
 		const parents = head.ok ? ["-p", head.stdout.trim()] : [];
-		const commit = git(this.cwd, ["commit-tree", tree, ...parents, "-m", `midnight.server checkpoint: ${label}`], {
-			GIT_AUTHOR_NAME: "midnight.server",
-			GIT_AUTHOR_EMAIL: "harness@midnight.server",
-			GIT_COMMITTER_NAME: "midnight.server",
-			GIT_COMMITTER_EMAIL: "harness@midnight.server",
-		});
+		const commit = await git(
+			this.cwd,
+			["commit-tree", tree, ...parents, "-m", `midnight.server checkpoint: ${label}`],
+			{
+				GIT_AUTHOR_NAME: "midnight.server",
+				GIT_AUTHOR_EMAIL: "harness@midnight.server",
+				GIT_COMMITTER_NAME: "midnight.server",
+				GIT_COMMITTER_EMAIL: "harness@midnight.server",
+			},
+		);
 		if (!commit.ok) return undefined;
 		const ref = `${REF_PREFIX}/${this.sessionTag}-${++this.counter}`;
-		if (!git(this.cwd, ["update-ref", ref, commit.stdout.trim()]).ok) return undefined;
+		if (!(await git(this.cwd, ["update-ref", ref, commit.stdout.trim()])).ok) return undefined;
 		const checkpoint = { ref, commit: commit.stdout.trim(), tree, createdAt: Date.now(), label };
 		this.checkpoints.push(checkpoint);
 		return checkpoint;
@@ -102,40 +171,45 @@ export class CheckpointStore {
 	 * diff (checkpoint -> state before restoring) and the restored paths as given in `only`,
 	 * or undefined when nothing differed or git failed.
 	 */
-	restore(checkpoint: Checkpoint, only: readonly string[]): { diff: string; paths: string[] } | undefined {
+	async restore(
+		checkpoint: Checkpoint,
+		only: readonly string[],
+	): Promise<{ diff: string; paths: string[] } | undefined> {
 		const allowed = new Map(only.map((path) => [pathKey(path), path]));
 		if (allowed.size === 0) return undefined;
-		const root = repoRoot(this.cwd);
-		const current = writeWorkingTree(this.cwd);
+		const [root, current] = await Promise.all([repoRoot(this.cwd), writeWorkingTree(this.cwd)]);
 		if (!root || !current || current === checkpoint.tree) return undefined;
-		const names = git(root, ["diff", "--name-status", "-z", "--no-renames", checkpoint.tree, current]);
+		const names = await git(root, ["diff", "--name-status", "-z", "--no-renames", checkpoint.tree, current]);
 		if (!names.ok) return undefined;
 		const fields = names.stdout.split("\0").filter(Boolean);
-		const selected: string[] = [];
+		const selected: Array<{ status: string; path: string; target: string }> = [];
 		const paths: string[] = [];
 		for (let index = 0; index + 1 < fields.length; index += 2) {
-			const status = fields[index];
-			const path = fields[index + 1];
+			const status = fields[index]!;
+			const path = fields[index + 1]!;
 			const target = join(root, path);
 			const requested = allowed.get(pathKey(target));
 			if (requested === undefined) continue;
-			selected.push(path);
+			selected.push({ status, path, target });
 			paths.push(requested);
-			if (status === "A") {
-				rmSync(target, { force: true });
-				continue;
-			}
-			const blob = spawnSync("git", ["cat-file", "blob", `${checkpoint.tree}:${path}`], {
-				cwd: root,
-				maxBuffer: 256 * 1024 * 1024,
-				windowsHide: true,
-			});
-			if (blob.status !== 0) continue;
-			mkdirSync(dirname(target), { recursive: true });
-			writeFileSync(target, blob.stdout);
 		}
 		if (selected.length === 0) return undefined;
-		const diff = git(root, [
+		const blobs = await readBlobs(
+			root,
+			selected.filter((item) => item.status !== "A").map((item) => `${checkpoint.tree}:${item.path}`),
+			Number.POSITIVE_INFINITY,
+		);
+		for (const { status, path, target } of selected) {
+			if (status === "A") {
+				await rm(target, { force: true });
+				continue;
+			}
+			const blob = blobs.get(`${checkpoint.tree}:${path}`);
+			if (!blob) continue;
+			await mkdir(dirname(target), { recursive: true });
+			await writeFile(target, blob);
+		}
+		const diff = await git(root, [
 			"--literal-pathspecs",
 			"diff",
 			"--no-color",
@@ -143,7 +217,7 @@ export class CheckpointStore {
 			checkpoint.tree,
 			current,
 			"--",
-			...selected,
+			...selected.map((item) => item.path),
 		]);
 		const text = diff.stdout;
 		return {
@@ -152,9 +226,20 @@ export class CheckpointStore {
 		};
 	}
 
-	/** Delete this session's refs. The objects are left for git's normal garbage collection. */
+	/**
+	 * Delete this session's refs. The objects are left for git's normal garbage collection. This
+	 * runs at shutdown, where an asynchronous call could be cut off, so it is one synchronous git
+	 * process for all refs.
+	 */
 	dispose(): void {
-		for (const checkpoint of this.checkpoints) git(this.cwd, ["update-ref", "-d", checkpoint.ref]);
+		if (this.checkpoints.length === 0) return;
+		spawnSync("git", ["update-ref", "--stdin"], {
+			cwd: this.cwd,
+			input: this.checkpoints.map((checkpoint) => `delete ${checkpoint.ref}\n`).join(""),
+			stdio: ["pipe", "ignore", "ignore"],
+			windowsHide: true,
+			timeout: 10_000,
+		});
 		this.checkpoints.length = 0;
 	}
 }
@@ -187,30 +272,36 @@ const MAX_INVENTORY_FILES = 200;
  * tree now, with both contents: edits through tools and shell commands alike. Paths are
  * repository-relative. Undefined when git fails.
  */
-export function workingTreeChanges(
+export async function workingTreeChanges(
 	cwd: string,
 	base: string,
-): Array<{ path: string; before: string | undefined; after: string | undefined }> | undefined {
-	const root = repoRoot(cwd);
-	const current = writeWorkingTree(cwd);
+): Promise<Array<{ path: string; before: string | undefined; after: string | undefined }> | undefined> {
+	const [root, current] = await Promise.all([repoRoot(cwd), writeWorkingTree(cwd)]);
 	if (!root || !current) return undefined;
 	if (current === base) return [];
-	const names = git(root, ["diff", "--name-status", "-z", "--no-renames", base, current]);
+	const names = await git(root, ["diff", "--name-status", "-z", "--no-renames", base, current]);
 	if (!names.ok) return undefined;
 	const fields = names.stdout.split("\0").filter(Boolean);
-	const blob = (tree: string, path: string): string | undefined => {
-		const size = git(root, ["cat-file", "-s", `${tree}:${path}`]);
-		if (!size.ok || Number(size.stdout.trim()) > MAX_INVENTORY_FILE_BYTES) return undefined;
-		const content = git(root, ["cat-file", "blob", `${tree}:${path}`]);
-		return content.ok && !content.stdout.includes("\0") ? content.stdout : undefined;
+	const candidates: Array<{ status: string; path: string }> = [];
+	for (let index = 0; index + 1 < fields.length; index += 2) {
+		const path = fields[index + 1]!;
+		// Installed dependencies and build output would crowd the agent's own changes out of the cap.
+		if (!isGeneratedPath(path)) candidates.push({ status: fields[index]!, path });
+	}
+	const specs = candidates.flatMap(({ status, path }) => [
+		...(status === "A" ? [] : [`${base}:${path}`]),
+		...(status === "D" ? [] : [`${current}:${path}`]),
+	]);
+	const blobs = await readBlobs(root, specs, MAX_INVENTORY_FILE_BYTES);
+	const text = (spec: string): string | undefined => {
+		const blob = blobs.get(spec);
+		return blob && !blob.includes(0) ? blob.toString("utf8") : undefined;
 	};
 	const changes: Array<{ path: string; before: string | undefined; after: string | undefined }> = [];
-	for (let index = 0; index + 1 < fields.length && changes.length < MAX_INVENTORY_FILES; index += 2) {
-		const [status, path] = [fields[index], fields[index + 1]];
-		// Installed dependencies and build output would crowd the agent's own changes out of the cap.
-		if (isGeneratedPath(path)) continue;
-		const before = status === "A" ? undefined : blob(base, path);
-		const after = status === "D" ? undefined : blob(current, path);
+	for (const { status, path } of candidates) {
+		if (changes.length >= MAX_INVENTORY_FILES) break;
+		const before = status === "A" ? undefined : text(`${base}:${path}`);
+		const after = status === "D" ? undefined : text(`${current}:${path}`);
 		// A binary or oversized side is unreadable, not added or deleted: leave the file out.
 		if ((status !== "A" && before === undefined) || (status !== "D" && after === undefined)) continue;
 		changes.push({ path, before, after });
@@ -219,7 +310,7 @@ export function workingTreeChanges(
 }
 
 /** The repository root, for mapping `workingTreeChanges` paths. */
-export function gitRoot(cwd: string): string | undefined {
+export function gitRoot(cwd: string): Promise<string | undefined> {
 	return repoRoot(cwd);
 }
 
@@ -230,8 +321,8 @@ export function gitRoot(cwd: string): string | undefined {
  * runs at the start of each request). `add -A` then makes it match the working tree, so staged
  * changes in the user's index do not leak into the result.
  */
-export function writeWorkingTree(cwd: string): string | undefined {
-	const info = git(cwd, ["rev-parse", "--show-cdup", "--git-path", "index"]);
+export async function writeWorkingTree(cwd: string): Promise<string | undefined> {
+	const info = await git(cwd, ["rev-parse", "--show-cdup", "--git-path", "index"]);
 	if (!info.ok) return undefined;
 	const [cdup = "", gitIndex = ""] = info.stdout.split(/\r?\n/);
 	const root = resolve(cwd, cdup.trim());
@@ -244,22 +335,22 @@ export function writeWorkingTree(cwd: string): string | undefined {
 		let seeded = false;
 		try {
 			if (gitIndex.trim()) {
-				copyFileSync(resolve(cwd, gitIndex.trim()), indexFile);
+				await copyFile(resolve(cwd, gitIndex.trim()), indexFile);
 				seeded = true;
 			}
 		} catch {
 			// No index yet (fresh repository): start from HEAD or empty.
 		}
 		if (!seeded) {
-			const head = git(root, ["rev-parse", "--verify", "-q", "HEAD"]);
-			if (!git(root, head.ok ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], env).ok) return undefined;
+			const head = await git(root, ["rev-parse", "--verify", "-q", "HEAD"]);
+			if (!(await git(root, head.ok ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], env)).ok) return undefined;
 		}
-		if (!git(root, ["add", "-A", "--", "."], env).ok) return undefined;
-		const tree = git(root, ["write-tree"], env);
+		if (!(await git(root, ["add", "-A", "--", "."], env)).ok) return undefined;
+		const tree = await git(root, ["write-tree"], env);
 		return tree.ok ? tree.stdout.trim() : undefined;
 	} finally {
 		try {
-			unlinkSync(indexFile);
+			await unlink(indexFile);
 		} catch {
 			// Never created.
 		}

@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, extname, join } from "node:path";
@@ -20,6 +20,9 @@ import { basename, extname, join } from "node:path";
  * `node --check` for JS without it, Python's `ast` (see `pythonInterpreter`), `gofmt`,
  * `rustfmt`, and JSON.parse.
  * When none is available the file is not checked.
+ *
+ * Parsers run as asynchronous child processes. This runs after every edit, and starting node
+ * and loading typescript takes most of a second on Windows: a synchronous call froze the TUI.
  */
 
 export interface SyntaxResult {
@@ -30,7 +33,7 @@ export interface SyntaxResult {
 	parser: string;
 }
 
-type Checker = (content: string, path: string, cwd: string) => SyntaxResult | undefined;
+type Checker = (content: string, path: string, cwd: string) => Promise<SyntaxResult | undefined>;
 
 const TIMEOUT_MS = 15_000;
 
@@ -52,16 +55,35 @@ process.stdin.on("end", () => {
 });
 `;
 
-function which(command: string): boolean {
-	const probe = process.platform === "win32" ? "where" : "which";
-	return spawnSync(probe, [command], { stdio: "ignore", windowsHide: true }).status === 0;
+function runParser(
+	command: string,
+	args: string[],
+	input: string,
+	cwd: string,
+): Promise<{ status: number | null; out: string }> {
+	return new Promise((done) => {
+		const child = execFile(
+			command,
+			args,
+			{ cwd, encoding: "utf8", timeout: TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
+			(error, stdout, stderr) => {
+				// Killed by the timeout or never started (ENOENT): no exit status.
+				const status = !error ? 0 : typeof error.code === "number" ? error.code : null;
+				done({ status, out: `${stdout ?? ""}${stderr ?? ""}`.trim() });
+			},
+		);
+		// A process that exits before reading its input closes the pipe; its exit status tells.
+		child.stdin?.on("error", () => undefined);
+		child.stdin?.end(input);
+	});
 }
 
-const available = new Map<string, boolean>();
-function has(command: string): boolean {
+const available = new Map<string, Promise<boolean>>();
+function has(command: string): Promise<boolean> {
 	let known = available.get(command);
 	if (known === undefined) {
-		known = which(command);
+		const probe = process.platform === "win32" ? "where" : "which";
+		known = runParser(probe, [command], "", process.cwd()).then(({ status }) => status === 0);
 		available.set(command, known);
 	}
 	return known;
@@ -76,32 +98,15 @@ function projectTypeScript(cwd: string): string | undefined {
 	}
 }
 
-function runParser(
-	command: string,
-	args: string[],
-	input: string,
-	cwd: string,
-): { status: number | null; out: string } {
-	const result = spawnSync(command, args, {
-		cwd,
-		input,
-		encoding: "utf8",
-		timeout: TIMEOUT_MS,
-		windowsHide: true,
-		maxBuffer: 4 * 1024 * 1024,
-	});
-	return { status: result.status, out: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() };
-}
-
 function firstLine(text: string): string {
 	return (text.split(/\r?\n/).find((line) => line.trim()) ?? text).trim().slice(0, 300);
 }
 
-const typeScriptChecker: Checker = (content, path, cwd) => {
-	if (!has("node")) return undefined;
+const typeScriptChecker: Checker = async (content, path, cwd) => {
+	if (!(await has("node"))) return undefined;
 	const tsModule = projectTypeScript(cwd);
 	if (tsModule) {
-		const { status, out } = runParser("node", ["-e", TS_PARSE_SCRIPT, tsModule, basename(path)], content, cwd);
+		const { status, out } = await runParser("node", ["-e", TS_PARSE_SCRIPT, tsModule, basename(path)], content, cwd);
 		if (status !== 0) return undefined;
 		return out.startsWith("OK")
 			? { ok: true, parser: "typescript" }
@@ -109,64 +114,62 @@ const typeScriptChecker: Checker = (content, path, cwd) => {
 	}
 	const extension = extname(path).toLowerCase();
 	if (![".js", ".mjs", ".cjs"].includes(extension)) return undefined;
-	const dir = mkdtempSync(join(tmpdir(), "harness-parse-"));
+	const dir = await mkdtemp(join(tmpdir(), "harness-parse-"));
 	try {
 		const file = join(dir, `check${extension}`);
-		writeFileSync(file, content);
-		const { status, out } = runParser("node", ["--check", file], "", dir);
+		await writeFile(file, content);
+		const { status, out } = await runParser("node", ["--check", file], "", dir);
 		if (status === null) return undefined;
 		if (status === 0) return { ok: true, parser: "node --check" };
 		const location = /check\.[a-z]+:(\d+)/.exec(out)?.[1];
 		const message = out.split(/\r?\n/).find((line) => /Error/.test(line)) ?? firstLine(out);
 		return { ok: false, error: `${location ? `${location}: ` : ""}${message.trim()}`, parser: "node --check" };
 	} finally {
-		rmSync(dir, { recursive: true, force: true });
+		await rm(dir, { recursive: true, force: true });
 	}
 };
 
-let python: string | null | undefined;
+let python: Promise<string | undefined> | undefined;
 
 /**
  * A Python interpreter that runs, or undefined. Being on PATH is not enough: on Windows,
  * `python.exe` and `python3.exe` in WindowsApps are Store placeholders that exit with an
- * error, and a real install provides `python` and `py` but not `python3`.
+ * error, and a real install provides `python` and `py` but not `python3`. Probed once.
  */
-export function pythonInterpreter(): string | undefined {
-	if (python === undefined) {
+export function pythonInterpreter(): Promise<string | undefined> {
+	python ??= (async () => {
 		const candidates = process.platform === "win32" ? ["python", "py", "python3"] : ["python3", "python"];
-		python =
-			candidates.find(
-				(candidate) =>
-					spawnSync(candidate, ["-c", "import ast"], { stdio: "ignore", windowsHide: true, timeout: TIMEOUT_MS })
-						.status === 0,
-			) ?? null;
-	}
-	return python ?? undefined;
+		for (const candidate of candidates) {
+			if ((await runParser(candidate, ["-c", "import ast"], "", process.cwd())).status === 0) return candidate;
+		}
+		return undefined;
+	})();
+	return python;
 }
 
-const pythonChecker: Checker = (content, path, cwd) => {
-	const python = pythonInterpreter();
+const pythonChecker: Checker = async (content, path, cwd) => {
+	const python = await pythonInterpreter();
 	if (!python) return undefined;
 	const script =
 		"import ast,sys\ntry:\n ast.parse(sys.stdin.read(), sys.argv[1])\n print('OK')\nexcept SyntaxError as e:\n print(f'ERR {e.lineno}:{e.offset} {e.msg}')";
-	const { status, out } = runParser(python, ["-c", script, basename(path)], content, cwd);
+	const { status, out } = await runParser(python, ["-c", script, basename(path)], content, cwd);
 	if (status !== 0) return undefined;
 	return out.startsWith("OK")
 		? { ok: true, parser: "python ast" }
 		: { ok: false, error: out.slice(4), parser: "python ast" };
 };
 
-const goChecker: Checker = (content, _path, cwd) => {
-	if (!has("gofmt")) return undefined;
-	const { status, out } = runParser("gofmt", ["-e"], content, cwd);
+const goChecker: Checker = async (content, _path, cwd) => {
+	if (!(await has("gofmt"))) return undefined;
+	const { status, out } = await runParser("gofmt", ["-e"], content, cwd);
 	if (status === null) return undefined;
 	if (status === 0) return { ok: true, parser: "gofmt" };
 	return { ok: false, error: firstLine(out.replace(/^<standard input>:/gm, "")), parser: "gofmt" };
 };
 
-const rustChecker: Checker = (content, _path, cwd) => {
-	if (!has("rustfmt")) return undefined;
-	const { status, out } = runParser("rustfmt", ["--edition", "2021", "--emit", "stdout"], content, cwd);
+const rustChecker: Checker = async (content, _path, cwd) => {
+	if (!(await has("rustfmt"))) return undefined;
+	const { status, out } = await runParser("rustfmt", ["--edition", "2021", "--emit", "stdout"], content, cwd);
 	if (status === null) return undefined;
 	if (status === 0) return { ok: true, parser: "rustfmt" };
 	const error = out.split(/\r?\n/).find((line) => line.startsWith("error")) ?? firstLine(out);
@@ -174,7 +177,7 @@ const rustChecker: Checker = (content, _path, cwd) => {
 	return { ok: false, error: `${location ? `${location} ` : ""}${error}`, parser: "rustfmt" };
 };
 
-const jsonChecker: Checker = (content) => {
+const jsonChecker: Checker = async (content) => {
 	try {
 		JSON.parse(content);
 		return { ok: true, parser: "JSON.parse" };
@@ -203,11 +206,11 @@ export function canCheckSyntax(path: string): boolean {
 }
 
 /** Parse `content` as the language of `path`. Undefined when no parser is available. */
-export function checkSyntax(content: string, path: string, cwd: string): SyntaxResult | undefined {
+export async function checkSyntax(content: string, path: string, cwd: string): Promise<SyntaxResult | undefined> {
 	const checker = CHECKERS[extname(path).toLowerCase()];
 	if (!checker) return undefined;
 	try {
-		return checker(content, path, cwd);
+		return await checker(content, path, cwd);
 	} catch {
 		return undefined;
 	}
@@ -218,16 +221,16 @@ export function checkSyntax(content: string, path: string, cwd: string): SyntaxR
  * undefined for a new file, which counts as valid. Returns the error to report, or undefined
  * when the edit is acceptable (parses, was already broken, or cannot be checked).
  */
-export function introducedSyntaxError(
+export async function introducedSyntaxError(
 	before: string | undefined,
 	after: string,
 	path: string,
 	cwd: string,
-): SyntaxResult | undefined {
-	const next = checkSyntax(after, path, cwd);
+): Promise<SyntaxResult | undefined> {
+	const next = await checkSyntax(after, path, cwd);
 	if (!next || next.ok) return undefined;
 	if (before !== undefined) {
-		const previous = checkSyntax(before, path, cwd);
+		const previous = await checkSyntax(before, path, cwd);
 		if (!previous || !previous.ok) return undefined;
 	}
 	return next;

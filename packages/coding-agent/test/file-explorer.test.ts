@@ -309,7 +309,11 @@ describe("chat viewport explorer column", () => {
 			},
 			leftMargin: 2,
 		});
-		const editorLine = () => viewport.root.render(40).map(stripAnsi).find((line) => line.includes("I")) ?? "";
+		const editorLine = () =>
+			viewport.root
+				.render(40)
+				.map(stripAnsi)
+				.find((line) => line.includes("I")) ?? "";
 		expect(editorLine().startsWith("  I")).toBe(true);
 		explorerShown = true;
 		// The explorer column (one line tall here) plus the gap replaces the margin.

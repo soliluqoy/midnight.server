@@ -6,7 +6,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ProjectedSessionEntry } from "../src/core/session-manager.ts";
 import { fitCompactionToWindow } from "../src/core/settings-manager.ts";
-import { CheckpointStore } from "../src/harness/checkpoints.ts";
+import { CheckpointStore, workingTreeChanges, writeWorkingTree } from "../src/harness/checkpoints.ts";
 import { parseHarnessConfig } from "../src/harness/config.ts";
 import { buildContextPack, buildFollowUpPack } from "../src/harness/context-pack.ts";
 import { detectProjectChecks, expandTests } from "../src/harness/detect-checks.ts";
@@ -349,6 +349,8 @@ describe("check detection", () => {
 	});
 });
 
+const python = await pythonInterpreter();
+
 describe("parse gate", () => {
 	let root: string;
 	beforeEach(() => {
@@ -356,33 +358,33 @@ describe("parse gate", () => {
 	});
 	afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-	it("checks JSON in process", () => {
-		expect(checkSyntax('{"a": 1}', "a.json", root)?.ok).toBe(true);
-		expect(checkSyntax('{"a": }', "a.json", root)?.ok).toBe(false);
+	it("checks JSON in process", async () => {
+		expect((await checkSyntax('{"a": 1}', "a.json", root))?.ok).toBe(true);
+		expect((await checkSyntax('{"a": }', "a.json", root))?.ok).toBe(false);
 	});
 
 	it.skipIf(!hasCommand("node"))(
 		"rejects a JavaScript edit that breaks parsing, but not a file already broken",
-		() => {
+		async () => {
 			const good = "function a() {\n  return 1;\n}\n";
 			const bad = "function a() {\n  return 1;\n";
-			expect(checkSyntax(good, "a.js", root)?.ok).toBe(true);
-			const error = introducedSyntaxError(good, bad, "a.js", root);
+			expect((await checkSyntax(good, "a.js", root))?.ok).toBe(true);
+			const error = await introducedSyntaxError(good, bad, "a.js", root);
 			expect(error?.ok).toBe(false);
-			expect(introducedSyntaxError(bad, `${bad}\n`, "a.js", root)).toBeUndefined();
+			expect(await introducedSyntaxError(bad, `${bad}\n`, "a.js", root)).toBeUndefined();
 			// A new file counts as valid before.
-			expect(introducedSyntaxError(undefined, bad, "a.js", root)?.ok).toBe(false);
+			expect((await introducedSyntaxError(undefined, bad, "a.js", root))?.ok).toBe(false);
 		},
 	);
 
-	it.skipIf(!pythonInterpreter())("reports the Python syntax error location", () => {
-		const result = checkSyntax("def f(:\n  pass\n", "a.py", root);
+	it.skipIf(!python)("reports the Python syntax error location", async () => {
+		const result = await checkSyntax("def f(:\n  pass\n", "a.py", root);
 		expect(result?.ok).toBe(false);
 		expect(result?.error).toMatch(/^1:/);
 	});
 
-	it("does not check unknown file types", () => {
-		expect(checkSyntax("anything", "a.txt", root)).toBeUndefined();
+	it("does not check unknown file types", async () => {
+		expect(await checkSyntax("anything", "a.txt", root)).toBeUndefined();
 	});
 });
 
@@ -474,11 +476,11 @@ describe.skipIf(!hasCommand("git"))("checkpoints", () => {
 	});
 	afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-	it("snapshots without touching the index and restores changed, added and deleted files", () => {
+	it("snapshots without touching the index and restores changed, added and deleted files", async () => {
 		writeFileSync(join(root, "a.js"), "two\n");
 		writeFileSync(join(root, "gone.js"), "keep me\n");
 		const store = new CheckpointStore(root, "test");
-		const checkpoint = store.snapshot("green");
+		const checkpoint = await store.snapshot("green");
 		expect(checkpoint).toBeDefined();
 		expect(git("status", "--porcelain")).toContain(" M a.js");
 		expect(git("stash", "list")).toBe("");
@@ -487,7 +489,7 @@ describe.skipIf(!hasCommand("git"))("checkpoints", () => {
 		writeFileSync(join(root, "new.js"), "new\n");
 		rmSync(join(root, "gone.js"));
 		const only = ["a.js", "new.js", "gone.js"].map((path) => join(root, path));
-		const restored = store.restore(checkpoint!, only);
+		const restored = await store.restore(checkpoint!, only);
 		expect(restored?.paths.sort()).toEqual([...only].sort());
 		expect(restored?.diff).toContain("+three");
 		expect(readFileSync(join(root, "a.js"), "utf8")).toBe("two\n");
@@ -498,15 +500,15 @@ describe.skipIf(!hasCommand("git"))("checkpoints", () => {
 		expect(git("for-each-ref", "refs/midnight")).toBe("");
 	});
 
-	it("restores only the given paths and leaves every other change alone", () => {
+	it("restores only the given paths and leaves every other change alone", async () => {
 		const store = new CheckpointStore(root, "test");
-		const checkpoint = store.snapshot("green");
+		const checkpoint = await store.snapshot("green");
 		writeFileSync(join(root, "a.js"), "agent change\n");
 		writeFileSync(join(root, "notes.txt"), "user notes\n");
 		mkdirSync(join(root, "docs"));
 		writeFileSync(join(root, "docs", "user.md"), "user doc\n");
 
-		const restored = store.restore(checkpoint!, [join(root, "a.js")]);
+		const restored = await store.restore(checkpoint!, [join(root, "a.js")]);
 		expect(restored?.paths).toEqual([join(root, "a.js")]);
 		expect(restored?.diff).toContain("+agent change");
 		expect(restored?.diff).not.toContain("user notes");
@@ -515,10 +517,33 @@ describe.skipIf(!hasCommand("git"))("checkpoints", () => {
 		expect(readFileSync(join(root, "docs", "user.md"), "utf8")).toBe("user doc\n");
 
 		// Nothing to restore among the given paths: nothing happens.
-		expect(store.restore(checkpoint!, [join(root, "a.js"), join(root, "missing.js")])).toBeUndefined();
+		expect(await store.restore(checkpoint!, [join(root, "a.js"), join(root, "missing.js")])).toBeUndefined();
 		expect(readFileSync(join(root, "notes.txt"), "utf8")).toBe("user notes\n");
-		expect(store.restore(checkpoint!, [])).toBeUndefined();
+		expect(await store.restore(checkpoint!, [])).toBeUndefined();
 		store.dispose();
+	});
+
+	it("inventories changed files with both contents, leaving out binary and oversized ones", async () => {
+		writeFileSync(join(root, "gone.js"), "bye\n");
+		writeFileSync(join(root, "image.bin"), Buffer.from([1, 0, 2]));
+		writeFileSync(join(root, "big.txt"), "x\n");
+		const base = await writeWorkingTree(root);
+		expect(base).toBeDefined();
+		expect(await workingTreeChanges(root, base!)).toEqual([]);
+
+		writeFileSync(join(root, "a.js"), "two\n");
+		writeFileSync(join(root, "new file.js"), "new\n");
+		rmSync(join(root, "gone.js"));
+		writeFileSync(join(root, "image.bin"), Buffer.from([3, 0, 4]));
+		writeFileSync(join(root, "big.txt"), "x".repeat(600_000));
+		const changes = await workingTreeChanges(root, base!);
+		expect(changes?.sort((a, b) => a.path.localeCompare(b.path))).toEqual([
+			{ path: "a.js", before: "one\n", after: "two\n" },
+			{ path: "gone.js", before: "bye\n", after: undefined },
+			{ path: "new file.js", before: undefined, after: "new\n" },
+		]);
+		// The user's index is untouched.
+		expect(git("status", "--porcelain")).toContain(" M a.js");
 	});
 });
 

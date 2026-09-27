@@ -240,12 +240,12 @@ describe("harness tool set", () => {
 			},
 		};
 		harnessExtension(pi as unknown as ExtensionAPI);
-		const start = (provider: string) => {
+		const start = async (provider: string) => {
 			const event = {
 				prompt: "",
 				systemPromptOptions: { sections: {} as Record<string, string>, contextFiles: [], promptGuidelines: [] },
 			};
-			handlers.get("before_agent_start")?.(event, {
+			await handlers.get("before_agent_start")?.(event, {
 				model: { provider },
 				cwd: tmpdir(),
 				isProjectTrusted: () => false,
@@ -256,11 +256,11 @@ describe("harness tool set", () => {
 		return { start, activeTools: () => activeTools, handlers };
 	}
 
-	it("adds lookup and leaves the other tools alone", () => {
+	it("adds lookup and leaves the other tools alone", async () => {
 		const fake = fakePi(["read", "edit", "mcp", "mcpScript"]);
-		fake.start("anthropic");
+		await fake.start("anthropic");
 		expect(fake.activeTools().sort()).toEqual(["edit", "lookup", "mcp", "mcpScript", "read"]);
-		fake.start("anthropic");
+		await fake.start("anthropic");
 		expect(fake.activeTools().sort()).toEqual(["edit", "lookup", "mcp", "mcpScript", "read"]);
 	});
 
