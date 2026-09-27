@@ -30,7 +30,7 @@ Then run `midnight.server`, and `/login` or set an API key for your provider. Se
 - **File explorer.** Alt+E opens a file tree on the left (fullscreen mode) with git status marks. Enter adds `@path` to the prompt, Space previews the file, Escape goes back. It shows on its own only on terminals 150+ columns wide.
 - **Side threads.** Alt+T turns the editor into a question box about the newest tool call or reply (Up/Down picks another). Ask with the session model or another model. The answer folds under that item, the main agent never sees it, and it can keep running. Alt+T again manages threads: `m` sends one to the main agent, `b` redoes the item from before it with the thread in your prompt. `/ask` asks about the newest item. [Details](packages/coding-agent/docs/sessions.md#ask-side-questions).
 - **Command palette.** Alt+X opens a fuzzy-searchable list of actions and slash commands.
-- **Automatic session titles.** After the first exchange the session model names the session, unless you already named it.
+- **Automatic session titles.** After the first exchange the session model names the session, then updates the title as the work moves on (at most every 3 runs and 5 minutes). A name you set with `--name` or `/name` is kept. The title shows in the sidebar and terminal title, not the footer.
 - **Native Windows.** PowerShell is the default shell tool; no Node.js, Python, WSL, or Git Bash is needed to run it.
 
 ## Escalation
