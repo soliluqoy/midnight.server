@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `Editor.onEmptyPaste`, called for a bracketed paste with no text (Windows Terminal sends one for Ctrl+V when the clipboard holds only an image).
+
 ### Fixed
 
 - Fixed slow fullscreen frames with side-by-side columns: stack layout no longer renders a column only to measure a height it discards, and compositing no longer re-measures each row (scroll frames with a sidebar went from about 15 ms to 3 ms on a 42,000-line transcript).

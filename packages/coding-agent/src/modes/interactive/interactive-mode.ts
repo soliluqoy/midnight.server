@@ -3,7 +3,6 @@
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
  */
 
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -122,7 +121,7 @@ import { readWorkspaceSnapshot } from "../../core/workspace-files.ts";
 import { getMidnightStatus, onMidnightStatusChange, updateMidnightStatus } from "../../midnight/status.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardText } from "../../utils/clipboard.ts";
-import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
+import { readClipboardImage } from "../../utils/clipboard-image.ts";
 import { parseGitUrl } from "../../utils/git.ts";
 import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
@@ -254,7 +253,17 @@ class ExpandableText extends Text implements Expandable {
 type CompactionQueuedMessage = {
 	text: string;
 	mode: "steer" | "followUp";
+	images?: ImageContent[];
 };
+
+/** Submitted editor text with the clipboard images its `[imageN]` markers refer to. */
+type UserInput = {
+	text: string;
+	images?: ImageContent[];
+};
+
+/** Marker the editor shows for a pasted clipboard image. */
+const IMAGE_MARKER_REGEX = /\[image(\d+)\]/g;
 
 type CompactionCostNotice = {
 	type: "compaction_cost";
@@ -467,8 +476,17 @@ export class InteractiveMode {
 	private keybindings: KeybindingsManager;
 	private version: string;
 	private isInitialized = false;
-	private onInputCallback?: (text: string) => void;
-	private pendingUserInputs: string[] = [];
+	private onInputCallback?: (input: UserInput) => void;
+	private pendingUserInputs: UserInput[] = [];
+	/** Clipboard images pasted into the editor, keyed by the number in their `[imageN]` marker. */
+	private pastedImages = new Map<number, ImageContent>();
+	private pastedImageCounter = 0;
+	/**
+	 * The user message drawn when the prompt is submitted. Extension hooks (the harness context
+	 * pack, git snapshots) run before the session emits the real message, which can take seconds;
+	 * without this the prompt seemed stuck. Replaced when the session emits the message.
+	 */
+	private submittedPrompt: Component[] | undefined = undefined;
 	private activeStatusIndicator: StatusIndicator | undefined = undefined;
 	private activeWorkingIndicatorEmbedded = false;
 	private readonly idleStatus = new IdleStatus();
@@ -1281,10 +1299,17 @@ export class InteractiveMode {
 		while (true) {
 			const userInput = await this.getUserInput();
 			try {
-				await this.session.prompt(userInput);
+				await this.session.prompt(userInput.text, { images: userInput.images });
 			} catch (error: unknown) {
 				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 				this.showError(errorMessage);
+			} finally {
+				// The prompt failed or an input hook handled it, so the session never emitted it.
+				if (this.submittedPrompt) {
+					this.removeSubmittedPrompt();
+					if (!this.session.isStreaming) this.clearStatusIndicator("working");
+					this.ui.requestRender();
+				}
 			}
 		}
 	}
@@ -2770,6 +2795,9 @@ export class InteractiveMode {
 				if (!customEditor.onPasteImage) {
 					customEditor.onPasteImage = () => this.defaultEditor.onPasteImage?.();
 				}
+				if (!customEditor.onEmptyPaste) {
+					customEditor.onEmptyPaste = () => this.defaultEditor.onEmptyPaste?.();
+				}
 				if (!customEditor.onExtensionShortcut) {
 					customEditor.onExtensionShortcut = (data: string) => this.defaultEditor.onExtensionShortcut?.(data);
 				}
@@ -3221,10 +3249,14 @@ export class InteractiveMode {
 			}
 		};
 
-		// Handle clipboard paste (triggered on Ctrl+V). Images are attached by path;
-		// otherwise, paste plain text from the system clipboard.
+		// Handle clipboard paste (triggered on Ctrl+V). Images become `[imageN]` markers and are
+		// attached on submit; otherwise, paste plain text from the system clipboard.
 		this.defaultEditor.onPasteImage = () => {
 			void this.handleClipboardPaste();
+		};
+		// Windows Terminal answers Ctrl+V with an empty paste when the clipboard holds only an image.
+		this.defaultEditor.onEmptyPaste = () => {
+			void this.handleClipboardPaste({ imageOnly: true });
 		};
 	}
 
@@ -3242,20 +3274,21 @@ export class InteractiveMode {
 		}
 	}
 
-	private async handleClipboardPaste(): Promise<void> {
+	private async handleClipboardPaste(options?: { imageOnly?: boolean }): Promise<void> {
 		try {
 			const image = await readClipboardImage();
 			if (image) {
-				const tmpDir = os.tmpdir();
-				const ext = extensionForImageMimeType(image.mimeType) ?? "png";
-				const fileName = `midnight-server-clipboard-${crypto.randomUUID()}.${ext}`;
-				const filePath = path.join(tmpDir, fileName);
-				fs.writeFileSync(filePath, Buffer.from(image.bytes));
-
-				this.editor.insertTextAtCursor?.(filePath);
+				const id = ++this.pastedImageCounter;
+				this.pastedImages.set(id, {
+					type: "image",
+					data: Buffer.from(image.bytes).toString("base64"),
+					mimeType: image.mimeType,
+				});
+				this.editor.insertTextAtCursor?.(`[image${id}]`);
 				this.ui.requestRender();
 				return;
 			}
+			if (options?.imageOnly) return;
 
 			const text = await readClipboardText();
 			if (text) {
@@ -3436,6 +3469,8 @@ export class InteractiveMode {
 				}
 			}
 
+			const images = this.takePastedImages(text);
+
 			// Queue input during compaction (extension commands execute immediately)
 			if (this.session.isCompacting) {
 				if (this.isExtensionCommand(text)) {
@@ -3443,7 +3478,7 @@ export class InteractiveMode {
 					this.editor.setText("");
 					await this.session.prompt(text);
 				} else {
-					this.queueCompactionMessage(text, "steer");
+					this.queueCompactionMessage(text, "steer", images);
 				}
 				return;
 			}
@@ -3453,7 +3488,7 @@ export class InteractiveMode {
 			if (this.session.isStreaming) {
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
-				await this.session.prompt(text, { streamingBehavior: "steer" });
+				await this.session.prompt(text, { streamingBehavior: "steer", images });
 				this.updatePendingMessagesDisplay();
 				this.ui.requestRender();
 				return;
@@ -3464,9 +3499,11 @@ export class InteractiveMode {
 			this.flushPendingBashComponents();
 
 			if (this.onInputCallback) {
-				this.onInputCallback(text);
+				// Commands and templates are not sent as typed, so only plain prompts are drawn early.
+				if (!text.startsWith("/")) this.showSubmittedPrompt(text);
+				this.onInputCallback({ text, images });
 			} else {
-				this.pendingUserInputs.push(text);
+				this.pendingUserInputs.push({ text, images });
 			}
 			this.editor.addToHistory?.(text);
 		};
@@ -3576,6 +3613,7 @@ export class InteractiveMode {
 					this.addMessageToChat(event.message);
 					this.ui.requestRender();
 				} else if (event.message.role === "user") {
+					this.removeSubmittedPrompt();
 					this.addMessageToChat(event.message);
 					this.updatePendingMessagesDisplay();
 					this.ui.requestRender();
@@ -4289,18 +4327,63 @@ export class InteractiveMode {
 		);
 	}
 
-	async getUserInput(): Promise<string> {
+	async getUserInput(): Promise<UserInput> {
 		const queuedInput = this.pendingUserInputs.shift();
 		if (queuedInput !== undefined) {
 			return queuedInput;
 		}
 
 		return new Promise((resolve) => {
-			this.onInputCallback = (text: string) => {
+			this.onInputCallback = (input: UserInput) => {
 				this.onInputCallback = undefined;
-				resolve(text);
+				resolve(input);
 			};
 		});
+	}
+
+	/** Draw the submitted prompt and the working indicator before the session emits the message. */
+	private showSubmittedPrompt(text: string): void {
+		this.removeSubmittedPrompt();
+		const components: Component[] = [];
+		if (this.chatContainer.children.length > 0) components.push(new Spacer(1));
+		components.push(
+			new UserMessageComponent(
+				text,
+				this.getMarkdownThemeWithSettings(),
+				this.outputPad,
+				this.getMarkdownTransformers(),
+			),
+		);
+		for (const component of components) this.chatContainer.addChild(component);
+		this.submittedPrompt = components;
+		if (this.workingVisible && this.activeStatusIndicator?.kind !== "working") this.showWorkingStatusIndicator();
+		this.ui.requestRender();
+	}
+
+	private removeSubmittedPrompt(): void {
+		if (!this.submittedPrompt) return;
+		for (const component of this.submittedPrompt) this.chatContainer.removeChild(component);
+		this.submittedPrompt = undefined;
+	}
+
+	/**
+	 * The pasted images whose `[imageN]` markers are in the submitted text, in marker order.
+	 * Clears the pasted images: markers left in the editor history no longer refer to them.
+	 */
+	private takePastedImages(text: string): ImageContent[] | undefined {
+		const images: ImageContent[] = [];
+		const seen = new Set<number>();
+		for (const match of text.matchAll(IMAGE_MARKER_REGEX)) {
+			const id = Number(match[1]);
+			const image = this.pastedImages.get(id);
+			if (image && !seen.has(id)) {
+				seen.add(id);
+				images.push(image);
+			}
+		}
+		this.pastedImages.clear();
+		this.pastedImageCounter = 0;
+		return images.length > 0 ? images : undefined;
 	}
 
 	private rebuildChatFromMessages(): void {
@@ -4530,7 +4613,7 @@ export class InteractiveMode {
 				this.editor.setText("");
 				await this.session.prompt(text);
 			} else {
-				this.queueCompactionMessage(text, "followUp");
+				this.queueCompactionMessage(text, "followUp", this.takePastedImages(text));
 			}
 			return;
 		}
@@ -4538,9 +4621,10 @@ export class InteractiveMode {
 		// Alt+Enter queues a follow-up message (waits until agent finishes)
 		// This handles extension commands (execute immediately), prompt template expansion, and queueing
 		if (this.session.isStreaming) {
+			const images = this.takePastedImages(text);
 			this.editor.addToHistory?.(text);
 			this.editor.setText("");
-			await this.session.prompt(text, { streamingBehavior: "followUp" });
+			await this.session.prompt(text, { streamingBehavior: "followUp", images });
 			this.updatePendingMessagesDisplay();
 			this.ui.requestRender();
 		}
@@ -4791,8 +4875,8 @@ export class InteractiveMode {
 		return allQueued.length;
 	}
 
-	private queueCompactionMessage(text: string, mode: "steer" | "followUp"): void {
-		this.compactionQueuedMessages.push({ text, mode });
+	private queueCompactionMessage(text: string, mode: "steer" | "followUp", images?: ImageContent[]): void {
+		this.compactionQueuedMessages.push({ text, mode, images });
 		this.editor.addToHistory?.(text);
 		this.editor.setText("");
 		this.updatePendingMessagesDisplay();
@@ -4836,9 +4920,9 @@ export class InteractiveMode {
 					if (this.isExtensionCommand(message.text)) {
 						await this.session.prompt(message.text);
 					} else if (message.mode === "followUp") {
-						await this.session.followUp(message.text);
+						await this.session.followUp(message.text, message.images);
 					} else {
-						await this.session.steer(message.text);
+						await this.session.steer(message.text, message.images);
 					}
 				}
 				this.updatePendingMessagesDisplay();
@@ -4866,7 +4950,7 @@ export class InteractiveMode {
 
 			// Start a prompt when idle, or queue it into a run still finishing compaction.
 			const promptPromise = this.session
-				.prompt(firstPrompt.text, { streamingBehavior: firstPrompt.mode })
+				.prompt(firstPrompt.text, { streamingBehavior: firstPrompt.mode, images: firstPrompt.images })
 				.catch((error) => {
 					restoreQueue(error);
 				});
@@ -4876,9 +4960,9 @@ export class InteractiveMode {
 				if (this.isExtensionCommand(message.text)) {
 					await this.session.prompt(message.text);
 				} else if (message.mode === "followUp") {
-					await this.session.followUp(message.text);
+					await this.session.followUp(message.text, message.images);
 				} else {
-					await this.session.steer(message.text);
+					await this.session.steer(message.text, message.images);
 				}
 			}
 			this.updatePendingMessagesDisplay();

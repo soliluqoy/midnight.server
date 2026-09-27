@@ -155,7 +155,9 @@ export const KEYBINDINGS = {
 		description: "Restore queued messages",
 	},
 	"app.clipboard.pasteImage": {
-		defaultKeys: windowsKeybindings ? "alt+v" : "ctrl+v",
+		// Windows Terminal handles Ctrl+V itself; an image-only clipboard reaches the editor as an
+		// empty paste instead (see onEmptyPaste). Alt+V always reaches the app.
+		defaultKeys: windowsKeybindings ? ["ctrl+v", "alt+v"] : "ctrl+v",
 		description: "Paste image from clipboard (text fallback)",
 	},
 	"app.agentMode.toggle": {

@@ -30,6 +30,7 @@
 - Added `b` in side-thread selection (`app.thread.branch`): it opens `/tree` on the entry before the selected item and, after navigating, adds the thread's answers to the editor, so a side question that finds a wrong turn becomes a redo on a new branch.
 - Added Linux x64 (`.deb` and tarball) and macOS (Apple Silicon and Intel) releases, a `get.sh` installer for them, and a release workflow that builds and verifies every platform from a `v*-midnight.*` tag. macOS builds are ad-hoc signed only, not notarized.
 - On Linux and macOS the engine now runs under a wrapper that stops it when the CLI exits or is killed, like the Windows Job Object host, so a crashed CLI no longer leaves `llama-server` running. On Linux the engine directory is added to `LD_LIBRARY_PATH` so its bundled libraries load.
+- Added Ctrl+V image paste on Windows: a screenshot on the clipboard becomes an `[image1]` marker in the prompt and is sent to the model as an image on submit. Windows Terminal answers Ctrl+V on an image-only clipboard with an empty paste, which now reads the image. Alt+V still works, and all platforms use the markers instead of inserting a temporary file path.
 
 ### Changed
 
@@ -63,6 +64,7 @@
 - Fixed local-engine progress and drift-watch updates re-wrapping the whole transcript; only the startup header is refreshed now, and its plan/build badge updates when the mode changes.
 - Fixed the model refusing to commit, push or delete branches: the `delegate_local` guideline "git is read-only" appeared as a global rule in the system prompt. It now says only the helper's git option is read-only.
 - Fixed the TUI freezing while the harness worked: git snapshots, syntax checks and the Python probe ran as synchronous child processes. At the end of each response the drift inventory spawned four git processes per changed file (2.4 s frozen for 10 files; up to the 200-file cap), and each TypeScript edit froze it for about a second while `node` loaded `typescript`. They now run asynchronously, and the drift inventory reads all file contents with two `git cat-file` processes (0.4 s for 10 files).
+- Fixed the prompt looking frozen after Enter: the message appeared only after the harness finished its git snapshot, git status and index refresh, which ran one after another. The message and working indicator now show at once, and those steps run concurrently.
 
 ### Removed
 

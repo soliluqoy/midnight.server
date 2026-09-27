@@ -630,7 +630,21 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", async (event, ctx) => {
 		// Trust can be granted during a session; checks and servers follow it.
 		if (ctx.isProjectTrusted() !== trusted || ctx.cwd !== cwd) loadState(ctx);
+		const planning = getMidnightStatus().agentMode === "plan";
+		const packing = on(ctx, "contextPack") && !planning && event.prompt.trim() !== "";
+		// The prompt is not sent until this handler returns, so the git and index work starts at
+		// once and runs concurrently instead of one process after another.
+		// The drift inventory compares against the tree as the request found it, so edits made by
+		// shell commands count too. Outside git, it falls back to files changed through edit/write
+		// (writeWorkingTree is undefined there).
+		const baselineTree = on(ctx, "driftGuard") && !planning ? writeWorkingTree(ctx.cwd) : undefined;
+		const indexed = packing ? workspace() : undefined;
+		const git = packing && !packSent ? gitSummary(ctx.cwd) : undefined;
+		// Awaited below or inside the try; this only keeps an early throw from leaving them unhandled.
+		baselineTree?.catch(() => undefined);
+		indexed?.catch(() => undefined);
 		await factsReady;
+		const started = Date.now();
 		run = freshRun(event.prompt);
 		run.startedAt = Date.now();
 		changeEpoch++;
@@ -640,16 +654,11 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		syncTools(ctx);
 		// What this request actually runs with, so an experiment can check it against its assignment.
 		telemetry.record({ type: "features", modelClass: modelClass(ctx), features: features(ctx) });
-		const planning = getMidnightStatus().agentMode === "plan";
 		if (on(ctx, "blockerExit") && !planning) event.systemPromptOptions.promptGuidelines.push(BLOCKER_GUIDELINE);
-		// The drift inventory compares against the tree as the request found it, so edits made by
-		// shell commands count too. Outside git, it falls back to files changed through edit/write
-		// (writeWorkingTree is undefined there).
-		if (on(ctx, "driftGuard") && !planning) run.baselineTree = await writeWorkingTree(ctx.cwd);
-		if (!on(ctx, "contextPack") || getMidnightStatus().agentMode === "plan" || !event.prompt.trim()) return;
+		if (baselineTree) run.baselineTree = await baselineTree;
+		if (!indexed) return;
 		try {
-			const started = Date.now();
-			const workspaceIndex = await workspace();
+			const workspaceIndex = await indexed;
 			let text: string | undefined;
 			if (!packSent) {
 				const window = ctx.model?.contextWindow ?? 0;
@@ -665,7 +674,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					checks: activeChecks(),
 					platform: process.platform,
 					shell: active.includes("powershell") ? "powershell" : active.includes("bash") ? "bash" : undefined,
-					git: await gitSummary(ctx.cwd),
+					git: await git,
 					budgetTokens: budget,
 				});
 				text = pack?.text;

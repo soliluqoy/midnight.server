@@ -366,6 +366,11 @@ export class Editor implements Component, Focusable {
 
 	public onSubmit?: (text: string) => void;
 	public onChange?: (text: string) => void;
+	/**
+	 * Called for a bracketed paste with no text. Windows Terminal sends one for Ctrl+V when the
+	 * clipboard holds only an image (e.g. a screenshot), so the host can read the image itself.
+	 */
+	public onEmptyPaste?: () => void;
 	public disableSubmit: boolean = false;
 
 	constructor(tui: TUI, theme: EditorTheme, options: EditorOptions = {}) {
@@ -728,6 +733,8 @@ export class Editor implements Component, Focusable {
 				const pasteContent = this.pasteBuffer.substring(0, endIndex);
 				if (pasteContent.length > 0) {
 					this.handlePaste(pasteContent);
+				} else {
+					this.onEmptyPaste?.();
 				}
 				this.isInPaste = false;
 				const remaining = this.pasteBuffer.substring(endIndex + 6);
