@@ -50,7 +50,7 @@ describe("language servers", () => {
 			expect(newErrors(before, after ?? []).length).toBeGreaterThan(0);
 
 			client!.sync(lib, "def parse_port(value: str) -> int:\n    return int(value)\n");
-			const index = buildWorkspaceIndex(root);
+			const index = await buildWorkspaceIndex(root);
 			const references = await runLookup({ op: "references", symbol: "parse_port" }, index, manager);
 			expect(references).toContain("main.py");
 		},
@@ -66,7 +66,7 @@ describe("language servers", () => {
 				"export function parsePort(value: string): number {\n  return Number(value);\n}\n",
 			);
 			writeFileSync(join(root, "main.ts"), "import { parsePort } from './port';\nparsePort('80');\n");
-			const index = buildWorkspaceIndex(root);
+			const index = await buildWorkspaceIndex(root);
 			const outline = await runLookup({ op: "outline", path: "port.ts" }, index, manager);
 			expect(outline).toContain("parsePort");
 			const references = await runLookup({ op: "references", symbol: "parsePort" }, index, manager);

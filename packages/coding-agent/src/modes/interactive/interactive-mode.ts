@@ -1014,6 +1014,7 @@ export class InteractiveMode {
 				width: EXPLORER_WIDTH,
 				visible: (layoutViewport) => this.isExplorerVisible(layoutViewport.width),
 			},
+			leftMargin: 2,
 		});
 		this.transcriptScrollView = viewport.transcript;
 		this.fullscreenLayoutRoot = viewport.root;

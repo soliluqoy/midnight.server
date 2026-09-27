@@ -190,6 +190,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	let facts: ProjectFacts = { languages: [], checks: [] };
 	let index: WorkspaceIndex | undefined;
 	let indexDirty = true;
+	let indexBuild: Promise<WorkspaceIndex> | undefined;
 	let packSent = false;
 	let lsp: LspManager | undefined;
 	let checkpoints: CheckpointStore | undefined;
@@ -239,12 +240,25 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		return config.autoChecks && trusted ? facts.checks : [];
 	}
 
-	function workspace(): WorkspaceIndex {
-		if (!index || indexDirty) {
-			index = buildWorkspaceIndex(cwd, index);
+	/**
+	 * The workspace index, rebuilt when a change marked it dirty. Concurrent callers share one
+	 * build; a change during a build marks the result dirty again for the next caller.
+	 */
+	function workspace(): Promise<WorkspaceIndex> {
+		if (index && !indexDirty) return Promise.resolve(index);
+		if (!indexBuild) {
 			indexDirty = false;
+			const root = cwd;
+			indexBuild = buildWorkspaceIndex(root, index)
+				.then((built) => {
+					if (root === cwd) index = built;
+					return built;
+				})
+				.finally(() => {
+					indexBuild = undefined;
+				});
 		}
-		return index;
+		return indexBuild;
 	}
 
 	function lspManager(): LspManager | undefined {
@@ -270,7 +284,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		parameters: lookupParameters,
 		executionMode: "parallel",
 		async execute(_toolCallId, params: Static<typeof lookupParameters>, signal) {
-			const text = await runLookup(params, workspace(), lspManager(), signal);
+			const text = await runLookup(params, await workspace(), lspManager(), signal);
 			telemetry.record({ type: "lookup", op: params.op });
 			return { content: [{ type: "text", text }], details: undefined };
 		},
@@ -324,6 +338,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		packSent = false;
 		lastGreen = undefined;
 		syncTools(ctx);
+		// Index in the background while the user types, so the first request does not wait for it.
+		if (config.enabled && on(ctx, "contextPack")) void workspace().catch(() => undefined);
 	});
 
 	pi.on("session_shutdown", () => {
@@ -516,7 +532,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			) {
 				const suggestions = suggestPaths(
 					path,
-					workspace().files.map((file) => file.path),
+					(await workspace()).files.map((file) => file.path),
 				);
 				if (suggestions.length > 0) {
 					extra.push(`[harness: ${path} does not exist. Did you mean: ${suggestions.join(", ")}?]`);
@@ -603,7 +619,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		if (!on(ctx, "contextPack") || getMidnightStatus().agentMode === "plan" || !event.prompt.trim()) return;
 		try {
 			const started = Date.now();
-			const workspaceIndex = workspace();
+			const workspaceIndex = await workspace();
 			let text: string | undefined;
 			if (!packSent) {
 				const window = ctx.model?.contextWindow ?? 0;
@@ -754,7 +770,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			for (const item of selectChecks(levelChecks, changed)) {
 				if (inRun && (checkDurations.get(item.check.name) ?? 0) > IN_RUN_CHECK_BUDGET_MS) continue;
 				if (item.check.command.includes("{tests}")) {
-					tests ??= testsFor(workspace(), changed);
+					tests ??= testsFor(await workspace(), changed);
 					const argv = expandTests(item.check, tests);
 					if (!argv) continue;
 					selected.push({ ...item, argv });
@@ -928,13 +944,17 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	}
 
 	/** Test files as the request found them: the literals a special case would copy from. */
-	function testSourcesAtStart(ctx: ExtensionContext, changes: readonly FileChange[]): Map<string, string> {
+	function testSourcesAtStart(
+		ctx: ExtensionContext,
+		workspaceIndex: WorkspaceIndex,
+		changes: readonly FileChange[],
+	): Map<string, string> {
 		const sources = new Map<string, string>();
 		let bytes = 0;
 		for (const change of changes) {
 			if (isTestPath(change.path) && change.before !== undefined) sources.set(change.path, change.before);
 		}
-		for (const file of workspace().files) {
+		for (const file of workspaceIndex.files) {
 			if (!file.isTest || sources.has(file.path) || bytes > 1_000_000) continue;
 			if (changes.some((change) => change.path === file.path)) continue;
 			try {
@@ -1066,6 +1086,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		if (on(ctx, "driftGuard") && !run.lastCheckFailed) {
 			const changes = driftInventory(ctx);
 			if (changes.length > 0 || run.shellCommands.length > 0) {
+				const workspaceIndex = await workspace();
 				const signals = detectDrift({
 					request: run.prompt,
 					changes,
@@ -1075,9 +1096,9 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 							run.verifiedAt !== undefined && run.verifiedAt >= (run.lastChangeAt ?? run.startedAt ?? 0),
 						lastCheckFailed: run.lastCheckFailed,
 					},
-					testSources: testSourcesAtStart(ctx, changes),
-					workspaceFiles: workspace()
-						.files.map((file) => file.path)
+					testSources: testSourcesAtStart(ctx, workspaceIndex, changes),
+					workspaceFiles: workspaceIndex.files
+						.map((file) => file.path)
 						.filter((path) => !changes.some((change) => change.path === path && change.before === undefined)),
 					shellCommands: run.shellCommands,
 				});

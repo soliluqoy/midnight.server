@@ -266,17 +266,41 @@ export function relativeImports(path: string, text: string): string[] {
 /** Split identifiers and words into lowercase search terms: `parsePortNumber` -> parse, port, number. */
 export function identifierTerms(text: string): string[] {
 	const terms: string[] = [];
+	forEachIdentifierTerm(text, (term) => terms.push(term));
+	return terms;
+}
+
+/**
+ * `identifierTerms` without the array, for indexing. Words repeat heavily in code, so each
+ * word's split is cached: indexing a workspace otherwise spends most of its time re-splitting
+ * the same identifiers.
+ */
+export function forEachIdentifierTerm(text: string, visit: (term: string) => void): void {
 	for (const word of text.match(/[A-Za-z][A-Za-z0-9]*|[0-9]+/g) ?? []) {
-		const parts = word
-			.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-			.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-			.split(" ");
-		for (const part of parts) {
-			let term = part.toLowerCase();
-			// Plural and singular are the same subject: "results" finds "result".
-			if (term.length > 3 && term.endsWith("s") && !term.endsWith("ss")) term = term.slice(0, -1);
-			if (term.length >= 2 && !STOP_WORDS.has(term)) terms.push(term);
+		let terms = WORD_TERMS.get(word);
+		if (!terms) {
+			terms = splitWord(word);
+			if (WORD_TERMS.size >= MAX_CACHED_WORDS) WORD_TERMS.clear();
+			WORD_TERMS.set(word, terms);
 		}
+		for (const term of terms) visit(term);
+	}
+}
+
+const MAX_CACHED_WORDS = 200_000;
+const WORD_TERMS = new Map<string, readonly string[]>();
+
+function splitWord(word: string): string[] {
+	const terms: string[] = [];
+	const parts = word
+		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+		.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+		.split(" ");
+	for (const part of parts) {
+		let term = part.toLowerCase();
+		// Plural and singular are the same subject: "results" finds "result".
+		if (term.length > 3 && term.endsWith("s") && !term.endsWith("ss")) term = term.slice(0, -1);
+		if (term.length >= 2 && !STOP_WORDS.has(term)) terms.push(term);
 	}
 	return terms;
 }

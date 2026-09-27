@@ -23,6 +23,11 @@ export interface ChatViewportOptions {
 	readonly sidebar?: ChatViewportColumn;
 	/** Fixed-width column to the left of the transcript and input dock. */
 	readonly explorer?: ChatViewportColumn;
+	/**
+	 * Blank columns to the left of the transcript and input dock while the explorer is hidden, so
+	 * the chat does not start at the terminal's left edge. Includes the column gap.
+	 */
+	readonly leftMargin?: number;
 }
 
 export interface ChatViewportColumn {
@@ -39,6 +44,8 @@ export interface ChatViewport {
 	readonly root: Component;
 	readonly transcript: ScrollView;
 }
+
+const BLANK: Component = { render: () => [], invalidate: () => {} };
 
 /** Shared fullscreen transcript and fixed input-dock layout. */
 export function createChatViewport(options: ChatViewportOptions): ChatViewport {
@@ -62,12 +69,24 @@ export function createChatViewport(options: ChatViewportOptions): ChatViewport {
 		{ component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
 		{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
 	]);
-	if (!options.sidebar && !options.explorer) return { transcript, root: main };
+	const explorer = options.explorer;
+	const margin = Math.max(0, Math.floor(options.leftMargin ?? 0));
+	if (!options.sidebar && !explorer && margin === 0) return { transcript, root: main };
 	return {
 		transcript,
 		root: new HStack(
 			[
-				...(options.explorer === undefined ? [] : [columnEntry(options.explorer)]),
+				...(explorer === undefined ? [] : [columnEntry(explorer)]),
+				// The stack's gap supplies one column of the margin.
+				...(margin === 0
+					? []
+					: [
+							columnEntry({
+								component: BLANK,
+								width: Math.max(1, margin - 1),
+								visible: (viewport) => !explorer?.visible(viewport),
+							}),
+						]),
 				{ component: main, basis: 0, grow: 1, shrink: 1, minSize: 20 },
 				...(options.sidebar === undefined ? [] : [columnEntry(options.sidebar)]),
 			],

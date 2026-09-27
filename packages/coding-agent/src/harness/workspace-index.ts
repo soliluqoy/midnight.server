@@ -1,7 +1,16 @@
-import { spawnSync } from "node:child_process";
-import { type Dirent, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, extname, join, posix, relative, sep } from "node:path";
-import { identifierTerms, languageOf, type OutlineSymbol, outlineSource, relativeImports } from "./outline.ts";
+import { execFile } from "node:child_process";
+import type { Dirent, Stats } from "node:fs";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, dirname, extname, join, parse, posix, relative, resolve, sep } from "node:path";
+import {
+	forEachIdentifierTerm,
+	identifierTerms,
+	languageOf,
+	type OutlineSymbol,
+	outlineSource,
+	relativeImports,
+} from "./outline.ts";
 
 /**
  * A lexical index of the workspace: files, their symbols, imports and term statistics, and
@@ -121,55 +130,77 @@ export function isTestPath(path: string): boolean {
 	);
 }
 
-/** Workspace files, preferring git's view (tracked plus untracked, respecting .gitignore). */
-export function listWorkspaceFiles(root: string): { files: string[]; truncated: boolean } {
-	const git = spawnSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
-		cwd: root,
-		encoding: "utf8",
-		maxBuffer: 64 * 1024 * 1024,
-		windowsHide: true,
+/**
+ * A directory that is not a project: the home directory or a filesystem root. Indexing one walks
+ * thousands of unrelated files (AppData, caches, downloads) before the first request.
+ */
+export function isUnindexableRoot(root: string): boolean {
+	const normalize = (path: string) => {
+		const resolved = resolve(path);
+		return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+	};
+	const target = normalize(root);
+	return target === normalize(homedir()) || target === normalize(parse(target).root);
+}
+
+function gitListFiles(root: string): Promise<string | undefined> {
+	return new Promise((done) => {
+		execFile(
+			"git",
+			["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+			{ cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true, timeout: 30_000 },
+			(error, stdout) => done(error || !stdout ? undefined : stdout),
+		);
 	});
+}
+
+/** Workspace files, preferring git's view (tracked plus untracked, respecting .gitignore). */
+export async function listWorkspaceFiles(root: string): Promise<{ files: string[]; truncated: boolean }> {
+	if (isUnindexableRoot(root)) return { files: [], truncated: false };
+	const listed = await gitListFiles(root);
 	let files: string[];
-	if (git.status === 0 && typeof git.stdout === "string" && git.stdout.length > 0) {
-		files = git.stdout
+	let truncated = false;
+	if (listed) {
+		files = listed
 			.split("\0")
 			.filter(Boolean)
 			.filter((path) => !path.split("/").some((part) => IGNORED_DIRS.has(part)));
 	} else {
 		files = [];
-		const walk = (dir: string) => {
-			if (files.length >= MAX_FILES) return;
+		const walk = async (dir: string): Promise<void> => {
 			let entries: Dirent[];
 			try {
-				entries = readdirSync(dir, { withFileTypes: true, encoding: "utf8" });
+				entries = await readdir(dir, { withFileTypes: true, encoding: "utf8" });
 			} catch {
 				return;
 			}
 			for (const entry of entries) {
-				if (files.length >= MAX_FILES) return;
+				if (files.length >= MAX_FILES) {
+					truncated = true;
+					return;
+				}
 				if (entry.isDirectory()) {
-					if (!IGNORED_DIRS.has(entry.name) && !entry.name.startsWith(".")) walk(join(dir, entry.name));
+					if (!IGNORED_DIRS.has(entry.name) && !entry.name.startsWith(".")) await walk(join(dir, entry.name));
 				} else if (entry.isFile()) {
 					files.push(relative(root, join(dir, entry.name)).split(sep).join("/"));
 				}
 			}
 		};
-		walk(root);
+		await walk(root);
 	}
 	const unique = [...new Set(files)].sort();
-	return { files: unique.slice(0, MAX_FILES), truncated: unique.length > MAX_FILES };
+	return { files: unique.slice(0, MAX_FILES), truncated: truncated || unique.length > MAX_FILES };
 }
 
-function addTerms(target: Map<string, number>, terms: readonly string[], weight: number): number {
-	for (const term of terms) target.set(term, (target.get(term) ?? 0) + weight);
-	return terms.length * weight;
+function addTerm(target: Map<string, number>, term: string, weight: number): void {
+	target.set(term, (target.get(term) ?? 0) + weight);
 }
 
-function indexFile(root: string, path: string, previous: IndexedFile | undefined): IndexedFile | undefined {
+async function indexFile(root: string, path: string, previous: IndexedFile | undefined): Promise<IndexedFile | undefined> {
 	if (!TEXT_EXTENSIONS.has(extname(path).toLowerCase())) return undefined;
-	let stats: ReturnType<typeof statSync>;
+	let stats: Stats;
 	try {
-		stats = statSync(join(root, path));
+		stats = await stat(join(root, path));
 	} catch {
 		return undefined;
 	}
@@ -177,7 +208,7 @@ function indexFile(root: string, path: string, previous: IndexedFile | undefined
 	if (previous && previous.mtimeMs === stats.mtimeMs && previous.bytes === stats.size) return previous;
 	let text: string;
 	try {
-		const raw = readFileSync(join(root, path));
+		const raw = await readFile(join(root, path));
 		if (raw.subarray(0, 4000).includes(0)) return undefined;
 		text = raw.toString("utf8");
 	} catch {
@@ -187,9 +218,13 @@ function indexFile(root: string, path: string, previous: IndexedFile | undefined
 	const terms = new Map<string, number>();
 	const pathTerms = identifierTerms(path);
 	const symbolTerms = symbols.flatMap((symbol) => identifierTerms(symbol.name));
-	let length = addTerms(terms, pathTerms, PATH_WEIGHT);
-	length += addTerms(terms, symbolTerms, SYMBOL_WEIGHT);
-	length += addTerms(terms, identifierTerms(text.slice(0, MAX_INDEXED_CONTENT)), 1);
+	for (const term of pathTerms) addTerm(terms, term, PATH_WEIGHT);
+	for (const term of symbolTerms) addTerm(terms, term, SYMBOL_WEIGHT);
+	let length = pathTerms.length * PATH_WEIGHT + symbolTerms.length * SYMBOL_WEIGHT;
+	forEachIdentifierTerm(text.slice(0, MAX_INDEXED_CONTENT), (term) => {
+		addTerm(terms, term, 1);
+		length++;
+	});
 	return {
 		path,
 		bytes: stats.size,
@@ -204,13 +239,21 @@ function indexFile(root: string, path: string, previous: IndexedFile | undefined
 	};
 }
 
-/** Build (or refresh, reusing unchanged files from `previous`) the index for `root`. */
-export function buildWorkspaceIndex(root: string, previous?: WorkspaceIndex): WorkspaceIndex {
-	const { files, truncated } = listWorkspaceFiles(root);
+/** Files stat'd and read concurrently while indexing; each batch also yields to the event loop. */
+const INDEX_BATCH = 32;
+
+/**
+ * Build (or refresh, reusing unchanged files from `previous`) the index for `root`. File I/O is
+ * asynchronous and batched, so the UI keeps rendering while a large workspace is indexed.
+ */
+export async function buildWorkspaceIndex(root: string, previous?: WorkspaceIndex): Promise<WorkspaceIndex> {
+	const { files, truncated } = await listWorkspaceFiles(root);
 	const indexed: IndexedFile[] = [];
-	for (const path of files) {
-		const file = indexFile(root, path, previous?.byPath.get(path));
-		if (file) indexed.push(file);
+	for (let start = 0; start < files.length; start += INDEX_BATCH) {
+		const batch = await Promise.all(
+			files.slice(start, start + INDEX_BATCH).map((path) => indexFile(root, path, previous?.byPath.get(path))),
+		);
+		for (const file of batch) if (file) indexed.push(file);
 	}
 	const documentFrequency = new Map<string, number>();
 	let totalLength = 0;
