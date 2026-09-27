@@ -190,6 +190,9 @@ export type AgentSessionEvent =
 			willRetry: boolean;
 	  }
 	| { type: "agent_settled" }
+	/** Extensions are running pre-settlement work (checks, reviews) after the model's last turn. */
+	| { type: "settle_start" }
+	| { type: "settle_end" }
 	| {
 			type: "queue_update";
 			steering: readonly string[];
@@ -408,6 +411,7 @@ export class AgentSession {
 	private _lastActivityOutcome: AgentActivityOutcome = "completed";
 	private _isBeforeSettle = false;
 	private _abortDuringBeforeSettle = false;
+	private _beforeSettleAbort: AbortController | undefined;
 	private _isEmittingAgentSettled = false;
 	private readonly _deferredSettledActions: Array<() => Promise<void>> = [];
 
@@ -1575,9 +1579,12 @@ export class AgentSession {
 		if (!this._extensionRunner.hasHandlers("agent_before_settle")) return this.agent.hasQueuedMessages();
 		this._isBeforeSettle = true;
 		this._abortDuringBeforeSettle = false;
+		const abortController = new AbortController();
+		this._beforeSettleAbort = abortController;
+		this._emit({ type: "settle_start" });
 		try {
 			const result = await this._extensionRunner.emitBoundary(
-				{ type: "agent_before_settle", outcome: this._lastActivityOutcome },
+				{ type: "agent_before_settle", outcome: this._lastActivityOutcome, signal: abortController.signal },
 				(entries) => this._buildBoundaryContext(entries, "agent_before_settle"),
 			);
 			this._commitBoundaryDrafts(result.entries);
@@ -1592,6 +1599,8 @@ export class AgentSession {
 			return shouldContinue;
 		} finally {
 			this._isBeforeSettle = false;
+			this._beforeSettleAbort = undefined;
+			this._emit({ type: "settle_end" });
 		}
 	}
 
@@ -2122,7 +2131,10 @@ export class AgentSession {
 		this.abortRetry();
 		this.abortCompaction();
 		this.abortBranchSummary();
-		if (this._isBeforeSettle) this._abortDuringBeforeSettle = true;
+		if (this._isBeforeSettle) {
+			this._abortDuringBeforeSettle = true;
+			this._beforeSettleAbort?.abort();
+		}
 		this.agent.abort();
 		await this.waitForIdle();
 	}

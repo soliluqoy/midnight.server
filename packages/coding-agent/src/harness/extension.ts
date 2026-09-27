@@ -7,6 +7,7 @@ import { createTwoFilesPatch } from "diff";
 import { type Static, Type } from "typebox";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import type {
+	BoundaryResult,
 	ExtensionAPI,
 	ExtensionContext,
 	MessageRenderer,
@@ -1008,6 +1009,19 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 
 	pi.on("agent_before_settle", async (event, ctx) => {
 		if (!config.enabled || event.outcome !== "completed" || getMidnightStatus().agentMode === "plan") return;
+		// An interrupt during settlement stops the running checks and escalation instead of waiting them out.
+		if (controller.signal.aborted) controller = new AbortController();
+		const settleController = controller;
+		const stop = () => settleController.abort();
+		event.signal.addEventListener("abort", stop, { once: true });
+		try {
+			return await settle(ctx);
+		} finally {
+			event.signal.removeEventListener("abort", stop);
+		}
+	});
+
+	async function settle(ctx: ExtensionContext): Promise<BoundaryResult | undefined> {
 		let changed = await changedFiles(ctx);
 		// Ending again without changes does not fix a failure: check the same files again.
 		if (changed.length === 0 && run.lastCheckFailed) changed = run.lastChecked;
@@ -1077,6 +1091,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					config.maxRepairRounds,
 					repeated,
 					on(ctx, "blockerExit"),
+					on(ctx, "adaptiveRepair"),
 				);
 				const entries: SessionBoundaryDraft[] = [];
 				let rollbackNote = "";
@@ -1165,7 +1180,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 				}
 			}
 		}
-	});
+		return undefined;
+	}
 
 	pi.registerCommand("harness", {
 		description: "Show the harness state: model class, features, checks, context pack, escalation and savings",

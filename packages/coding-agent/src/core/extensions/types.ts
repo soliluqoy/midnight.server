@@ -817,6 +817,8 @@ export interface BoundaryResult {
 /** Fired before final settlement. May append entries and ensure one next provider request. */
 export interface AgentBeforeSettleEvent extends BoundaryState {
 	type: "agent_before_settle";
+	/** Aborted when the user interrupts during settlement; long-running handlers should stop. */
+	signal: AbortSignal;
 }
 
 /** Fired after an agent run has fully settled and no automatic retry, compaction, or queued continuation will run. */

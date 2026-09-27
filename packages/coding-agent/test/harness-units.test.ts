@@ -6,6 +6,7 @@ import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import type { ProjectedSessionEntry } from "../src/core/session-manager.ts";
 import {
 	boundOutput,
+	diagnosticExcerpt,
 	expandCommand,
 	formatCheckFeedback,
 	parsePorcelainZ,
@@ -71,6 +72,11 @@ describe("harness checks", () => {
 		expect(bounded).toContain("11700 bytes omitted");
 	});
 
+	it("extracts distinct diagnostic lines from the middle of long output", () => {
+		const output = ["banner", "x".repeat(6_000), "expected: 2", "received: 3", "expected: 2", "tail"].join("\n");
+		expect(diagnosticExcerpt(output)).toBe("expected: 2\nreceived: 3");
+	});
+
 	it("asks for a diagnosis when the same checks fail again", () => {
 		const outcome = {
 			name: "test",
@@ -87,6 +93,10 @@ describe("harness checks", () => {
 		expect(repeated).toContain("repair round 2 of 2");
 		expect(repeated).toContain("[FAIL] test: npm test (exit 1, 1.2 s)");
 		expect(repeated).toContain("root cause");
+		expect(repeated).toContain("materially different repair");
+		expect(formatCheckFeedback([outcome], 2, 2, true, false, false)).not.toContain(
+			"Treat the previous approach as rejected",
+		);
 	});
 
 	it("parses porcelain -z output including renames", () => {

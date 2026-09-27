@@ -734,6 +734,34 @@ describe("AgentSession actionable boundaries", () => {
 		);
 		expect(harness.eventsOfType("agent_settled")).toHaveLength(1);
 	});
+
+	it("aborts the pre-settlement signal on interrupt and brackets the hook with settle events", async () => {
+		const started = deferred();
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					// Stands in for a long harness check that only ends when its signal aborts.
+					pi.on("agent_before_settle", async (event) => {
+						started.resolve();
+						await new Promise<void>((resolve) => event.signal.addEventListener("abort", () => resolve()));
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("first")]);
+
+		const prompt = harness.session.prompt("start");
+		await started.promise;
+		expect(harness.session.isStreaming).toBe(true);
+		expect(harness.eventsOfType("settle_start")).toHaveLength(1);
+		expect(harness.eventsOfType("settle_end")).toHaveLength(0);
+		await Promise.all([prompt, harness.session.abort()]);
+
+		expect(harness.session.isStreaming).toBe(false);
+		expect(harness.eventsOfType("settle_end")).toHaveLength(1);
+		expect(harness.eventsOfType("agent_settled")).toHaveLength(1);
+	});
 });
 
 describe("durable length recovery", () => {

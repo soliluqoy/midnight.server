@@ -28,6 +28,7 @@ export interface AppKeybindings {
 	"app.message.copy": true;
 	"app.message.followUp": true;
 	"app.message.dequeue": true;
+	"app.message.sendNow": true;
 	"app.clipboard.pasteImage": true;
 	"app.agentMode.toggle": true;
 	"app.sidebar.toggle": true;
@@ -153,6 +154,10 @@ export const KEYBINDINGS = {
 	"app.message.dequeue": {
 		defaultKeys: windowsKeybindings ? "alt+q" : "alt+up",
 		description: "Restore queued messages",
+	},
+	"app.message.sendNow": {
+		defaultKeys: "alt+n",
+		description: "Interrupt and send queued messages now",
 	},
 	"app.clipboard.pasteImage": {
 		// Windows Terminal handles Ctrl+V itself; an image-only clipboard reaches the editor as an

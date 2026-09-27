@@ -8,6 +8,8 @@
 
 ### Added
 
+- Added `app.message.sendNow` (Alt+N): interrupts the running turn, harness checks or compaction and sends the queued messages plus the editor text as the next prompt. The queued-message hint shows it next to the edit key.
+- Added adaptive repair feedback to the harness: repeated check failures now surface diagnostic lines hidden in long output and require a materially different repair strategy or an explicit blocker. The `adaptiveRepair` feature is enabled by default and can be ablated with `MIDNIGHT_SERVER_HARNESS_FEATURES=-adaptiveRepair`.
 - Added bundled extensions: packages pinned in `packaging/extensions` ship in `extensions/` beside the executable and load by default, skipped when settings configure the same npm package or `MIDNIGHT_SERVER_NO_BUNDLED_EXTENSIONS` is set. The first is [pi-mcp-adapter](docs/mcp.md), so `/mcp` works on a fresh install and reads `~/.midnight.server/agent/mcp.json`.
 - Added plan and build modes. Tab in an empty editor switches; plan mode limits the model to read-only tools (`read`, `grep`, `find`, `ls`, `delegate_local`), adds a planning instruction to the system prompt, and blocks other tool calls, and build mode restores the previous tool set. The mode shows in the header, footer, sidebar and editor border.
 - Added an opencode-style session sidebar in fullscreen mode with the session title, git branch and working-tree status (changed/staged counts, ahead/behind), context usage and cost, the model, local engine and drift-watch state, and files changed this session with line counts. The `sidebar` setting (`auto`, `always`, `hidden`) and `app.sidebar.toggle` (Alt+S) control it.
@@ -53,6 +55,7 @@
 
 ### Fixed
 
+- Fixed the session looking idle while harness checks ran after the model's last turn: a "Finishing up" indicator now shows during settlement, prompts submitted then are visibly queued, and Esc stops the running checks and escalation instead of waiting for them to finish. `agent_before_settle` handlers receive a `signal` that aborts on interrupt.
 - Fixed the process crashing with "This extension ctx is stale" when a session ended while a drift-watch check was running, for example at the end of a `-p` run.
 - Fixed the `bash` and `powershell` tool guidelines telling the model to inspect `PI_*` environment variables; the tools export `MIDNIGHT_SERVER_*`.
 

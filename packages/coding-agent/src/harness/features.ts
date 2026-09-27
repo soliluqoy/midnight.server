@@ -30,6 +30,8 @@ export const FEATURE_NAMES = [
 	"lookup",
 	/** New language-server errors reported with each edit result. */
 	"diagnostics",
+	/** Replace a repeated failed repair with a materially different, evidence-led attempt. */
+	"adaptiveRepair",
 	/** Ask a stronger model for advice when a fast model is stuck. */
 	"escalation",
 	/**
@@ -73,6 +75,7 @@ const CLASS_DEFAULTS: Record<ModelClass, Record<FeatureName, boolean>> = {
 		checkpoints: true,
 		lookup: true,
 		diagnostics: true,
+		adaptiveRepair: true,
 		escalation: true,
 		driftGuard: true,
 		blockerExit: true,
@@ -89,6 +92,7 @@ const CLASS_DEFAULTS: Record<ModelClass, Record<FeatureName, boolean>> = {
 		checkpoints: true,
 		lookup: true,
 		diagnostics: true,
+		adaptiveRepair: true,
 		escalation: false,
 		driftGuard: true,
 		blockerExit: true,
