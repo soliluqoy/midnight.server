@@ -15,9 +15,6 @@ import {
 	sideThreadStoreFor,
 	type ThreadAnchor,
 } from "../../core/side-threads.ts";
-import { LOCAL_MODEL_ID, LOCAL_PROVIDER_ID, MODEL_LOCK } from "../../midnight/pins.ts";
-import { getMidnightStatus } from "../../midnight/status.ts";
-import { findModel } from "../../midnight/store.ts";
 import {
 	renderFoldedThread,
 	renderOpenThread,
@@ -126,7 +123,7 @@ export class SideThreadController implements TranscriptDecorations {
 		if (this.mode.type !== "idle") this.exitToIdle();
 	}
 
-	/** Another writer (drift watch) or this controller saved: redraw the threads. */
+	/** Another writer or this controller saved: redraw the threads. */
 	private onStoreChange(): void {
 		if (this.mode.type === "selecting") this.updateSelectionBar();
 		this.host.requestRender();
@@ -411,7 +408,7 @@ export class SideThreadController implements TranscriptDecorations {
 			anchor,
 			draft,
 			choices,
-			choiceIndex: this.choiceIndex(anchor, choices, preferred),
+			choiceIndex: this.choiceIndex(choices, preferred),
 			fromSelection,
 		};
 		this.host.setEditorText(question);
@@ -439,11 +436,7 @@ export class SideThreadController implements TranscriptDecorations {
 		if (this.mode.type !== "composing") return;
 		const session = this.host.session();
 		const kind: SideThreadModelKind =
-			model.provider === LOCAL_PROVIDER_ID
-				? "local"
-				: session.model?.provider === model.provider && session.model.id === model.id
-					? "same"
-					: "other";
+			session.model?.provider === model.provider && session.model.id === model.id ? "same" : "other";
 		const index = this.mode.choices.findIndex(
 			(choice) => choice.model.provider === model.provider && choice.model.id === model.id,
 		);
@@ -484,11 +477,7 @@ export class SideThreadController implements TranscriptDecorations {
 
 	// ----------------------------------------------------------------- models
 
-	private localModel(): Model<Api> | undefined {
-		return this.host.session().modelRuntime.getModel(LOCAL_PROVIDER_ID, LOCAL_MODEL_ID);
-	}
-
-	/** Local model (if registered), the session model, then the ctrl+p scoped models. */
+	/** The session model, then the ctrl+p scoped models. */
 	modelChoices(): SideThreadModelChoice[] {
 		const session = this.host.session();
 		const choices: SideThreadModelChoice[] = [];
@@ -499,9 +488,8 @@ export class SideThreadController implements TranscriptDecorations {
 			) {
 				return;
 			}
-			choices.push({ model, kind: model.provider === LOCAL_PROVIDER_ID ? "local" : kind });
+			choices.push({ model, kind });
 		};
-		add(this.localModel(), "local");
 		add(session.model, "same");
 		for (const scoped of session.scopedModels) add(scoped.model, "other");
 		if (this.lastChoice) {
@@ -518,19 +506,13 @@ export class SideThreadController implements TranscriptDecorations {
 	private choiceLabel(choice: SideThreadModelChoice): string {
 		const session = this.host.session();
 		const isSession = session.model?.provider === choice.model.provider && session.model.id === choice.model.id;
-		if (choice.kind === "local") return isSession ? "local (main)" : "local";
 		return isSession ? `${choice.model.id} (main)` : choice.model.id;
 	}
 
 	/**
-	 * The last model picked in this run, else the local model for tool output when it is
-	 * already installed (no surprise download), else the session model.
+	 * The last model picked in this run, else the session model.
 	 */
-	private choiceIndex(
-		anchor: ThreadAnchor,
-		choices: SideThreadModelChoice[],
-		preferred?: SideThreadModelChoice,
-	): number {
+	private choiceIndex(choices: SideThreadModelChoice[], preferred?: SideThreadModelChoice): number {
 		if (preferred) {
 			const index = choices.findIndex(
 				(choice) => choice.model.provider === preferred.model.provider && choice.model.id === preferred.model.id,
@@ -545,21 +527,15 @@ export class SideThreadController implements TranscriptDecorations {
 			);
 			if (index >= 0) return index;
 		}
-		const localIndex = choices.findIndex((choice) => choice.kind === "local");
-		const engine = getMidnightStatus().engine;
-		const localReady = engine === "ready" || (engine !== "stopped" && findModel(MODEL_LOCK) !== undefined);
-		if (anchor.id.startsWith("tool:") && localIndex >= 0 && localReady) return localIndex;
 		const sessionIndex = choices.findIndex((choice) => choice.kind === "same");
 		return sessionIndex >= 0 ? sessionIndex : 0;
 	}
 
-	/** Resolve `local`, `same`, or `provider/id` (or a bare id) for `/ask @model`. */
+	/** Resolve `same`, or `provider/id` (or a bare id) for `/ask @model`. */
 	resolveModel(spec: string): SideThreadModelChoice | undefined {
-		const choices = this.modelChoices();
-		if (spec === "local") return choices.find((choice) => choice.kind === "local");
 		if (spec === "same") {
 			const model = this.host.session().model;
-			return model ? { model, kind: model.provider === LOCAL_PROVIDER_ID ? "local" : "same" } : undefined;
+			return model ? { model, kind: "same" } : undefined;
 		}
 		const runtime = this.host.session().modelRuntime;
 		const slash = spec.indexOf("/");
@@ -570,7 +546,7 @@ export class SideThreadController implements TranscriptDecorations {
 		if (!model) return undefined;
 		const session = this.host.session();
 		const same = session.model?.provider === model.provider && session.model.id === model.id;
-		return { model, kind: model.provider === LOCAL_PROVIDER_ID ? "local" : same ? "same" : "other" };
+		return { model, kind: same ? "same" : "other" };
 	}
 
 	// -------------------------------------------------------------------- run
@@ -584,7 +560,7 @@ export class SideThreadController implements TranscriptDecorations {
 	/** `/ask` with a question: use `choice`, or the model the composer would default to. */
 	async askAbout(anchor: ThreadAnchor, question: string, choice?: SideThreadModelChoice): Promise<void> {
 		const choices = this.modelChoices();
-		const resolved = choice ?? choices[this.choiceIndex(anchor, choices)];
+		const resolved = choice ?? choices[this.choiceIndex(choices)];
 		if (!resolved) {
 			this.host.showStatus("No model available for side threads");
 			return;

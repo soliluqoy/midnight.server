@@ -184,7 +184,7 @@ export class FileExplorerComponent implements Component, Focusable {
 		if (changedBySession) suffix = `${theme.fg("accent", "●")}${suffix ? ` ${suffix}` : ""}`;
 		const suffixWidth = visibleWidth(suffix);
 		const ignored = snapshot?.isIgnored(entry.path) ?? false;
-		const nameColor = ignored || mark === "D" ? "dim" : entry.directory ? "accent" : "text";
+		const nameColor = ignored || mark === "D" ? "dim" : "text";
 		const nameWidth = Math.max(1, width - suffixWidth - (suffixWidth > 0 ? 1 : 0));
 		const name = truncateToWidth(
 			`${theme.fg("dim", indent + icon)}${theme.fg(nameColor, entry.name)}`,

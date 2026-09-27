@@ -18,7 +18,7 @@
  *   --split <s>         dev | holdout | all (default all). Tune on dev; judge on holdout.
  *   --variants <list>   Comma list. "bare" turns the harness off, "harness" is the default
  *                       harness, and name=+feat,-feat is the harness with feature switches
- *                       (MIDNIGHT_SERVER_HARNESS_FEATURES), e.g. no-pack=-contextPack,+contract.
+ *                       (MIDNIGHT_SERVER_HARNESS_FEATURES), e.g. no-pack=-contextPack,-escalation.
  *                       Default: bare,harness. The first variant is the baseline.
  *   --manifest <file>   An explicit experiment design instead of --variants/--split/--repeat
  *                       (see scripts/harness-eval-design.mjs): every arm's full feature
@@ -26,7 +26,7 @@
  *   --checks <mode>     config: write the task's checks to harness.json (default).
  *                       detect: write only protected files; the harness detects checks itself.
  *   --repeat <n>        Runs per task and variant (default 1)
- *   --jobs <n>          Runs in parallel (default 1). Keep 1 for the local model.
+ *   --jobs <n>          Runs in parallel (default 1).
  *   --timeout <s>       Per-run timeout in seconds (default 1800)
  *   --max-cost <usd>    Stop a run whose reported cost passes this; it counts as a failure.
  *   --out <file>        JSONL results (default evals/harness/results/<timestamp>.jsonl)
@@ -218,7 +218,6 @@ async function openPorts(ports) {
 function countHarnessMessage(stats, customType) {
 	if (customType === "harness_check") stats.harnessChecks++;
 	if (customType === "harness_drift") stats.driftNudges++;
-	if (customType === "harness_contract") stats.contractReminders++;
 	if (customType === "harness_advice") stats.advice++;
 }
 
@@ -257,7 +256,6 @@ function runAgent(cwd, prompt, variant, options, eventsPath, telemetryPath) {
 		cost: 0,
 		harnessChecks: 0,
 		driftNudges: 0,
-		contractReminders: 0,
 		advice: 0,
 		turnCategories: {},
 		toolErrors: {},

@@ -26,9 +26,6 @@ import type { MaskingSettings } from "./config.ts";
  * is already more than the whole 8K window.
  */
 
-/** Tools whose results are never elided: they hold state the model must keep seeing. */
-const NEVER_ELIDE = new Set(["task"]);
-
 const IMAGE_BYTES = 50_000;
 
 /** Rough bytes per token for code and English, used only to relate bytes to a token window. */
@@ -132,7 +129,7 @@ export function planMasking(
 		let keptBytes = 0;
 		for (let index = results.length - 1; index >= 0 && kept < keep; index--) {
 			const result = results[index];
-			if (edited.has(result.entryId) || NEVER_ELIDE.has(result.toolName)) {
+			if (edited.has(result.entryId)) {
 				kept++;
 				continue;
 			}
@@ -144,10 +141,7 @@ export function planMasking(
 	}
 	const eligible = results
 		.slice(0, Math.max(0, results.length - keep))
-		.filter(
-			(result) =>
-				!edited.has(result.entryId) && !NEVER_ELIDE.has(result.toolName) && result.bytes >= settings.minResultBytes,
-		);
+		.filter((result) => !edited.has(result.entryId) && result.bytes >= settings.minResultBytes);
 	const eligibleBytes = eligible.reduce((sum, result) => sum + result.bytes, 0);
 	if (eligible.length === 0 || eligibleBytes < settings.batchBytes) return none;
 	return {

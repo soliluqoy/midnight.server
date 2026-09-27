@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { createTwoFilesPatch } from "diff";
@@ -13,11 +12,11 @@ import type {
 	MessageRenderer,
 	SessionBoundaryDraft,
 } from "../core/extensions/types.ts";
-import { LOCAL_PROVIDER_ID } from "../midnight/pins.ts";
 import { getMidnightStatus } from "../midnight/status.ts";
 import { CheckpointStore, gitRoot, isGitWorkTree, workingTreeChanges, writeWorkingTree } from "./checkpoints.ts";
 import {
 	type CheckOutcome,
+	expandCommand,
 	filesModifiedSince,
 	formatCheckFeedback,
 	formatCheckSummary,
@@ -37,28 +36,6 @@ import {
 	loadHarnessConfig,
 } from "./config.ts";
 import { buildContextPack, buildFollowUpPack } from "./context-pack.ts";
-import {
-	createContract,
-	formatContract,
-	latestContract,
-	openCriteria,
-	TASK_TOOL_NAME,
-	type TaskContract,
-	updateContract,
-} from "./contract.ts";
-import {
-	compactReviewState,
-	type DecisionBackend,
-	decisionBackendFromEnv,
-	formatReviewFeedback,
-	INTAKE_QUESTIONS,
-	INTAKE_VERSION,
-	intakeNote,
-	REVIEW_QUESTIONS,
-	REVIEW_VERSION,
-	reviewPolicy,
-	stateDigest,
-} from "./decisions.ts";
 import { type DetectedCheck, detectProjectChecks, expandTests, type ProjectFacts } from "./detect-checks.ts";
 import {
 	actionable,
@@ -81,7 +58,6 @@ import {
 	resolveFeatures,
 } from "./features.ts";
 import { remapForeignPath, repairPowerShellCommand, toolNeedsExistingPath } from "./interface-repair.ts";
-import { capToolOutput, LOCAL_TOOLS, splitContextFiles, withGreedyDefault } from "./local-profile.ts";
 import { LspManager } from "./lsp.ts";
 import { planMasking } from "./masking.ts";
 import { canCheckSyntax, introducedSyntaxError, pythonInterpreter } from "./parse-gate.ts";
@@ -90,60 +66,10 @@ import { HarnessTelemetry } from "./telemetry.ts";
 import { buildWorkspaceIndex, isTestPath, testsFor, type WorkspaceIndex } from "./workspace-index.ts";
 
 export const CHECK_MESSAGE_TYPE = "harness_check";
-export const CONTRACT_MESSAGE_TYPE = "harness_contract";
 export const CONTEXT_MESSAGE_TYPE = "harness_context";
 export const ADVICE_MESSAGE_TYPE = "harness_advice";
-export const REVIEW_MESSAGE_TYPE = "harness_review";
 export const DRIFT_MESSAGE_TYPE = "harness_drift";
 export const LOOKUP_TOOL_NAME = "lookup";
-
-const taskParameters = Type.Object({
-	action: Type.Union([Type.Literal("set"), Type.Literal("update")], {
-		description: "set: start or replace the contract. update: change criteria and plan step status.",
-	}),
-	objective: Type.Optional(
-		Type.String({ description: "set: what the user wants, including what they implied but did not say." }),
-	),
-	constraints: Type.Optional(
-		Type.Array(Type.String(), { description: "set: limits the user gave or the codebase imposes." }),
-	),
-	criteria: Type.Optional(
-		Type.Array(Type.String(), {
-			description:
-				"set: acceptance criteria you can check, such as a command that must pass or a behavior to observe.",
-		}),
-	),
-	plan: Type.Optional(Type.Array(Type.String(), { description: "set: short ordered steps (optional)." })),
-	mark: Type.Optional(
-		Type.Array(
-			Type.Object({
-				id: Type.Integer({ minimum: 1, description: "1-based criterion number." }),
-				status: Type.Union([Type.Literal("met"), Type.Literal("unmet"), Type.Literal("waived")]),
-				evidence: Type.String({
-					description: "What you observed that shows it: a command and its result, a file and line.",
-				}),
-			}),
-			{ description: "update: criteria to mark." },
-		),
-	),
-	steps: Type.Optional(
-		Type.Array(
-			Type.Object({
-				id: Type.Integer({ minimum: 1, description: "1-based plan step number." }),
-				status: Type.Union([
-					Type.Literal("todo"),
-					Type.Literal("doing"),
-					Type.Literal("done"),
-					Type.Literal("dropped"),
-				]),
-				note: Type.Optional(Type.String()),
-			}),
-			{ description: "update: plan steps to mark." },
-		),
-	),
-	addCriteria: Type.Optional(Type.Array(Type.String(), { description: "update: criteria discovered while working." })),
-	addSteps: Type.Optional(Type.Array(Type.String(), { description: "update: plan steps to append." })),
-});
 
 const lookupParameters = Type.Object({
 	op: Type.Union([Type.Literal("definition"), Type.Literal("references"), Type.Literal("outline")], {
@@ -158,32 +84,8 @@ const lookupParameters = Type.Object({
 	),
 });
 
-function branchMessages(ctx: ExtensionContext): AgentMessage[] {
-	return ctx.sessionManager.getBranch().flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-}
-
-function isLocalModel(ctx: ExtensionContext): boolean {
-	return ctx.model?.provider === LOCAL_PROVIDER_ID;
-}
-
 function textOf(content: readonly (TextContent | ImageContent)[]): string {
 	return content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
-}
-
-function contractReminder(contract: TaskContract, checkSummary: string | undefined): string {
-	const open = openCriteria(contract);
-	const lines = [
-		"Before you finish: the task contract still has criteria that are not shown met.",
-		...open.map(
-			({ id, criterion }) => `${id}. ${criterion.text}${criterion.status === "unmet" ? " (marked unmet)" : ""}`,
-		),
-	];
-	if (checkSummary) lines.push("", "Harness checks on your changes:", checkSummary);
-	lines.push(
-		"",
-		"Verify each one now (run the command, read the result) and mark it with the task tool: met with the evidence you observed, or unmet or waived with the reason. If one cannot be met, tell the user plainly instead of claiming success.",
-	);
-	return lines.join("\n");
 }
 
 /** Edits in an `edit` tool input, in either the current or the legacy single-edit shape. */
@@ -214,7 +116,6 @@ interface RunState {
 	shellRan: boolean;
 	repairRound: number;
 	lastFailedKey?: string;
-	contractNudged: boolean;
 	lastCheckSummary?: string;
 	lastFailureText?: string;
 	prompt: string;
@@ -225,8 +126,6 @@ interface RunState {
 	/** Files the last settle check covered, and whether it failed. */
 	lastChecked: string[];
 	lastCheckFailed: boolean;
-	/** The independent review ran for this prompt (it runs at most once). */
-	reviewed: boolean;
 	/** Each edited file's content before its first edit in this run (undefined: it did not exist). */
 	originals: Map<string, string | undefined>;
 	/** The working tree at the start of the request (git tree id), for the drift inventory. */
@@ -248,14 +147,12 @@ function freshRun(prompt = ""): RunState {
 		allChanged: new Set(),
 		shellRan: false,
 		repairRound: 0,
-		contractNudged: false,
 		prompt,
 		loopGuard: new LoopGuard(),
 		escalations: 0,
 		loopEscalated: false,
 		lastChecked: [],
 		lastCheckFailed: false,
-		reviewed: false,
 		originals: new Map(),
 		driftNudged: false,
 		shellCommands: [],
@@ -281,7 +178,7 @@ const IN_RUN_CHECK_BUDGET_MS = 90_000;
  *   advice from a stronger model when a fast model is stuck.
  * - Always: protected files, observation masking scaled to the context window.
  *
- * Features switch per model class (fast, frontier, local) and per flag; see features.ts.
+ * Features switch per model class (fast, frontier) and per flag; see features.ts.
  */
 export default function harnessExtension(pi: ExtensionAPI): void {
 	let config: HarnessConfig = defaultHarnessConfig();
@@ -297,23 +194,27 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	let lsp: LspManager | undefined;
 	let checkpoints: CheckpointStore | undefined;
 	let lastGreen: ReturnType<CheckpointStore["snapshot"]>;
-	let decisions: DecisionBackend | undefined;
 	const checkDurations = new Map<string, number>();
+	/**
+	 * Bumped by anything that can change a check's result: a successful edit or write, any shell
+	 * command (it may install a dependency or start a service), a rollback, and each new request
+	 * (the user may have changed files in between). A result is reused only at the same value.
+	 */
+	let changeEpoch = 0;
+	const checkCache = new Map<string, { epoch: number; outcome: CheckOutcome }>();
 	const telemetry = new HarnessTelemetry();
 	const stats = {
 		maskBatches: 0,
 		elidedBytes: 0,
 		checkRuns: 0,
 		checkFailures: 0,
+		checksReused: 0,
 		repairs: 0,
-		contractNudges: 0,
 		escalations: 0,
 		escalationCostUsd: 0,
 		rollbacks: 0,
 		packs: 0,
 		packBytes: 0,
-		reviews: 0,
-		revisions: 0,
 		driftChecks: 0,
 		driftNudges: 0,
 		blockersAccepted: 0,
@@ -324,16 +225,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	}
 
 	function features(ctx: ExtensionContext): Record<FeatureName, boolean> {
-		const fromConfig: Partial<Record<FeatureName, boolean>> = {
-			contract: config.contract,
-			masking: config.masking.enabled,
-			localProfile: config.localProfile,
-			...config.features,
-		};
-		const resolved = resolveFeatures(modelClass(ctx), fromConfig, envFeatures);
-		// The local profile only ever applies to the local model.
-		if (!isLocalModel(ctx)) resolved.localProfile = false;
-		return resolved;
+		const fromConfig: Partial<Record<FeatureName, boolean>> = { masking: config.masking.enabled, ...config.features };
+		return resolveFeatures(modelClass(ctx), fromConfig, envFeatures);
 	}
 
 	function on(ctx: ExtensionContext, name: FeatureName): boolean {
@@ -368,46 +261,6 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	}
 
 	pi.registerTool({
-		name: TASK_TOOL_NAME,
-		label: "task",
-		description:
-			"Record and track the task contract: the user's objective as you understand it, their constraints, and checkable acceptance criteria. action=set starts or replaces it; action=update marks criteria met, unmet or waived with evidence and tracks plan steps. Before you finish, the harness shows any criterion not yet shown met.",
-		promptSnippet:
-			"Record the task's objective, constraints and checkable acceptance criteria; mark them with evidence",
-		promptGuidelines: [
-			"For a task beyond a quick answer or a one-line change, call task (action=set) before editing: restate the objective including what the user implied, list constraints, and write acceptance criteria you can check.",
-			"If the request is ambiguous in a way that changes the result, ask the user instead of guessing.",
-			"Mark a criterion met only with evidence you observed in this session, such as a command's result or a file and line.",
-		],
-		parameters: taskParameters,
-		executionMode: "sequential",
-		async execute(_toolCallId, params: Static<typeof taskParameters>, _signal, _onUpdate, ctx) {
-			const previous = latestContract(branchMessages(ctx));
-			let contract: TaskContract;
-			if (params.action === "set") {
-				contract = createContract(
-					{
-						objective: params.objective ?? "",
-						constraints: params.constraints,
-						criteria: params.criteria ?? [],
-						plan: params.plan,
-					},
-					previous,
-				);
-			} else {
-				if (!previous) throw new Error("No task contract yet. Call task with action=set first.");
-				contract = updateContract(previous, {
-					criteria: params.mark,
-					steps: params.steps,
-					addCriteria: params.addCriteria,
-					addSteps: params.addSteps,
-				});
-			}
-			return { content: [{ type: "text", text: formatContract(contract) }], details: contract };
-		},
-	});
-
-	pi.registerTool({
 		name: LOOKUP_TOOL_NAME,
 		label: "lookup",
 		description:
@@ -439,9 +292,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			return box;
 		};
 	pi.registerMessageRenderer(CHECK_MESSAGE_TYPE, renderHarnessMessage("[harness]"));
-	pi.registerMessageRenderer(CONTRACT_MESSAGE_TYPE, renderHarnessMessage("[contract]"));
 	pi.registerMessageRenderer(ADVICE_MESSAGE_TYPE, renderHarnessMessage("[advice]"));
-	pi.registerMessageRenderer(REVIEW_MESSAGE_TYPE, renderHarnessMessage("[review]"));
 	pi.registerMessageRenderer(DRIFT_MESSAGE_TYPE, renderHarnessMessage("[drift]"));
 
 	/** Load config, feature overrides and detected checks for the current trust state. */
@@ -461,7 +312,6 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			if (error instanceof HarnessConfigError) ctx.ui.notify(`Harness config ignored: ${error.message}`, "warning");
 			else throw error;
 		}
-		decisions ??= decisionBackendFromEnv();
 		// Detection reads manifests only; the detected commands run only in trusted projects.
 		facts = detectProjectChecks(ctx.cwd, { python: trusted ? pythonInterpreter() : undefined });
 		if (!trusted || !config.autoChecks) facts = { ...facts, checks: [] };
@@ -474,15 +324,12 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		packSent = false;
 		lastGreen = undefined;
 		syncTools(ctx);
-		// A managed Laya server loads its checkpoint in the background; decisions start once it answers.
-		if (on(ctx, "decisions")) decisions?.warmUp?.();
 	});
 
 	pi.on("session_shutdown", () => {
 		controller.abort();
 		void lsp?.dispose();
 		checkpoints?.dispose();
-		decisions?.dispose?.();
 	});
 
 	pi.on("agent_start", () => {
@@ -493,24 +340,15 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		run = freshRun();
 	});
 
-	/** Keep the harness's own tools active only when their features are on for this model. */
+	/** Keep the `lookup` tool active only when its feature is on for this model. */
 	function syncTools(ctx: ExtensionContext): void {
-		const active = new Set(pi.getActiveTools());
-		const want: Array<[string, boolean]> = [
-			[TASK_TOOL_NAME, on(ctx, "contract")],
-			[LOOKUP_TOOL_NAME, on(ctx, "lookup")],
-		];
-		let changed = false;
-		for (const [name, enabled] of want) {
-			if (enabled && !active.has(name) && getMidnightStatus().agentMode !== "plan") {
-				active.add(name);
-				changed = true;
-			} else if (!enabled && active.has(name)) {
-				active.delete(name);
-				changed = true;
-			}
+		const active = pi.getActiveTools();
+		const has = active.includes(LOOKUP_TOOL_NAME);
+		if (on(ctx, "lookup") && !has && getMidnightStatus().agentMode !== "plan") {
+			pi.setActiveTools([...active, LOOKUP_TOOL_NAME]);
+		} else if (!on(ctx, "lookup") && has) {
+			pi.setActiveTools(active.filter((name) => name !== LOOKUP_TOOL_NAME));
 		}
-		if (changed) pi.setActiveTools([...active]);
 	}
 
 	// Argument repairs made in tool_call, reported to the model with the tool's result.
@@ -635,6 +473,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					telemetry.record({ type: "parse_gate_reject", parser: error.parser });
 				}
 			}
+			if (!rejected) changeEpoch++;
 			if (!rejected && rel) {
 				run.changed.add(rel);
 				run.changedSinceInRun.add(rel);
@@ -697,6 +536,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		}
 
 		if (event.toolName === "bash" || event.toolName === "powershell") {
+			changeEpoch++;
 			run.shellRan = true;
 			indexDirty = true;
 			// A command that succeeded may have changed files: rereads and reruns are new information.
@@ -704,12 +544,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			const command = (event.input as { command?: unknown }).command;
 			if (!event.isError && typeof command === "string" && TEST_COMMAND.test(command)) run.verifiedAt = Date.now();
 		}
-		const capped =
-			on(ctx, "localProfile") && isLocalModel(ctx) && event.toolName !== TASK_TOOL_NAME
-				? capToolOutput(replaceContent ?? event.content, event.toolName)
-				: undefined;
-		if (notes.length === 0 && extra.length === 0 && !capped && !replaceContent) return;
-		const content = capped ?? replaceContent ?? event.content;
+		if (notes.length === 0 && extra.length === 0 && !replaceContent) return;
+		const content = replaceContent ?? event.content;
 		return {
 			content: [
 				...notes.map((text) => ({ type: "text" as const, text })),
@@ -747,24 +583,15 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	pi.on("before_provider_request", (event, ctx) => {
-		if (!on(ctx, "localProfile") || !isLocalModel(ctx)) return;
-		return withGreedyDefault(event.payload);
-	});
-
-	// Tools the local profile hid, restored as soon as a different model drives the session.
-	let hiddenTools: string[] = [];
 	pi.on("before_agent_start", async (event, ctx) => {
 		// Trust can be granted during a session; checks and servers follow it.
 		if (ctx.isProjectTrusted() !== trusted || ctx.cwd !== cwd) loadState(ctx);
 		run = freshRun(event.prompt);
 		run.startedAt = Date.now();
+		changeEpoch++;
 		// A passing state from an earlier request predates whatever the user did since.
 		lastGreen = undefined;
-		if (!config.enabled) {
-			delete event.systemPromptOptions.sections.project_files;
-			return;
-		}
+		if (!config.enabled) return;
 		syncTools(ctx);
 		// What this request actually runs with, so an experiment can check it against its assignment.
 		telemetry.record({ type: "features", modelClass: modelClass(ctx), features: features(ctx) });
@@ -773,25 +600,6 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		// The drift inventory compares against the tree as the request found it, so edits made by
 		// shell commands count too. Outside git, it falls back to files changed through edit/write.
 		if (on(ctx, "driftGuard") && !planning && isGitWorkTree(ctx.cwd)) run.baselineTree = writeWorkingTree(ctx.cwd);
-		if (!on(ctx, "localProfile") || !isLocalModel(ctx)) {
-			if (hiddenTools.length > 0) {
-				pi.setActiveTools([...new Set([...pi.getActiveTools(), ...hiddenTools])]);
-				hiddenTools = [];
-				syncTools(ctx);
-			}
-			delete event.systemPromptOptions.sections.project_files;
-		} else {
-			const active = pi.getActiveTools();
-			const removed = active.filter((name) => !LOCAL_TOOLS.has(name));
-			if (removed.length > 0) {
-				pi.setActiveTools(active.filter((name) => LOCAL_TOOLS.has(name)));
-				hiddenTools = [...new Set([...hiddenTools, ...removed])];
-			}
-			const { keep, note } = splitContextFiles(event.systemPromptOptions.contextFiles);
-			event.systemPromptOptions.contextFiles = keep;
-			if (note) event.systemPromptOptions.sections.project_files = note;
-			else delete event.systemPromptOptions.sections.project_files;
-		}
 		if (!on(ctx, "contextPack") || getMidnightStatus().agentMode === "plan" || !event.prompt.trim()) return;
 		try {
 			const started = Date.now();
@@ -815,18 +623,6 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					budgetTokens: budget,
 				});
 				text = pack?.text;
-				if (pack && decisions && on(ctx, "decisions")) {
-					const intake = await askDecisions(
-						INTAKE_VERSION,
-						{
-							request: event.prompt.slice(0, 6_000),
-							candidates: pack.ranked.slice(0, 8),
-						},
-						INTAKE_QUESTIONS,
-					);
-					const { note } = intake ? intakeNote(intake) : { note: undefined };
-					if (note) text = `${text}\n\n${note}`;
-				}
 				if (pack) {
 					telemetry.record({
 						type: "context_pack",
@@ -914,17 +710,9 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		return entries.length > 0 ? { entries } : undefined;
 	});
 
-	// Compaction drops the task tool results from context; restore the contract as a message.
-	pi.on("session_compact", (_event, ctx) => {
+	pi.on("session_compact", () => {
 		// Compaction removed earlier results from context: reading them again is not a loop.
 		run.loopGuard.forgetCalls();
-		if (!on(ctx, "contract")) return;
-		const contract = latestContract(branchMessages(ctx));
-		if (!contract) return;
-		pi.sendMessage(
-			{ customType: CONTRACT_MESSAGE_TYPE, content: formatContract(contract), display: false, details: contract },
-			{ deliverAs: "nextTurn" },
-		);
 	});
 
 	async function changedFiles(ctx: ExtensionContext): Promise<string[]> {
@@ -974,6 +762,14 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			}
 			const levelOutcomes: CheckOutcome[] = [];
 			for (const item of selected) {
+				const key = [item.check.name, ...(item.argv ?? expandCommand(item.check.command, item.files))].join("\0");
+				const cached = on(ctx, "checkCache") ? checkCache.get(key) : undefined;
+				if (cached && cached.epoch === changeEpoch) {
+					stats.checksReused++;
+					telemetry.record({ type: "check_reused", check: item.check.name, savedMs: cached.outcome.elapsedMs });
+					levelOutcomes.push(cached.outcome);
+					continue;
+				}
 				ctx.ui.setWorkingMessage(`Harness check: ${item.check.name}...`);
 				const check = inRun
 					? {
@@ -983,6 +779,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					: item;
 				const outcome = await runCheck(check, ctx.cwd, controller.signal);
 				checkDurations.set(item.check.name, outcome.elapsedMs);
+				// A timeout says nothing about the code; an in-run timeout is also shorter than at settle.
+				if (!outcome.timedOut && !controller.signal.aborted) checkCache.set(key, { epoch: changeEpoch, outcome });
 				levelOutcomes.push(outcome);
 			}
 			ctx.ui.setWorkingMessage();
@@ -1043,33 +841,6 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		} finally {
 			ctx.ui.setWorkingMessage();
 		}
-	}
-
-	/** Ask the decision backend and record a receipt. Undefined when unavailable: never approval. */
-	async function askDecisions(
-		version: string,
-		state: unknown,
-		questions: Parameters<DecisionBackend["ask"]>[1],
-	): Promise<
-		Awaited<ReturnType<DecisionBackend["ask"]>> extends infer R
-			? (R extends { answers: infer A } ? A : never) | undefined
-			: never
-	> {
-		if (!decisions) return undefined;
-		const result = await decisions.ask(state, questions, controller.signal).catch(() => undefined);
-		const answers = result?.answers;
-		telemetry.record({
-			type: "decision",
-			version,
-			backend: decisions.name,
-			model: result?.model,
-			digest: stateDigest(state, version),
-			answers,
-			latencyMs: result?.latencyMs,
-			inputTokens: result?.inputTokens,
-			available: result !== undefined,
-		});
-		return answers && Object.keys(answers).length > 0 ? answers : undefined;
 	}
 
 	/**
@@ -1258,6 +1029,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 						[...run.allChanged].map((path) => resolve(ctx.cwd, path)),
 					);
 					if (restored && restored.paths.length > 0) {
+						changeEpoch++;
 						const paths = restored.paths.map((path) => workspaceRelative(ctx.cwd, path) ?? path);
 						stats.rollbacks++;
 						indexDirty = true;
@@ -1334,54 +1106,6 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 				}
 			}
 		}
-
-		// An independent review, once per prompt, when the checks pass or there are none: the model
-		// that wrote the change is not the one that judges whether it is done.
-		if (decisions && on(ctx, "decisions") && !run.reviewed && run.allChanged.size > 0 && !run.lastCheckFailed) {
-			run.reviewed = true;
-			const state = compactReviewState({
-				request: run.prompt,
-				final_message: run.lastAssistantText ?? "",
-				change: {
-					files: [...run.allChanged],
-					checks: run.lastCheckSummary ?? "No project checks are configured or detected; nothing was run.",
-					diff: await changeDiff(ctx, [...run.allChanged]),
-				},
-			});
-			const answers = await askDecisions(REVIEW_VERSION, state, REVIEW_QUESTIONS);
-			if (answers) {
-				stats.reviews++;
-				const verdict = reviewPolicy(answers);
-				telemetry.record({ type: "review", action: verdict.action, probabilities: verdict.probabilities });
-				if (verdict.action === "revise") {
-					stats.revisions++;
-					return {
-						entries: [
-							{
-								type: "custom_message",
-								customType: REVIEW_MESSAGE_TYPE,
-								content: formatReviewFeedback(verdict, decisions.name),
-								display: true,
-							},
-						],
-						continue: true,
-					};
-				}
-			}
-		}
-
-		if (!on(ctx, "contract") || run.contractNudged) return;
-		const contract = latestContract(branchMessages(ctx));
-		if (!contract || openCriteria(contract).length === 0) return;
-		run.contractNudged = true;
-		stats.contractNudges++;
-		const entry: SessionBoundaryDraft = {
-			type: "custom_message",
-			customType: CONTRACT_MESSAGE_TYPE,
-			content: contractReminder(contract, run.lastCheckSummary),
-			display: true,
-		};
-		return { entries: [entry], continue: true };
 	});
 
 	pi.registerCommand("harness", {
@@ -1391,7 +1115,6 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify("Harness is off (MIDNIGHT_SERVER_HARNESS=0 or enabled: false in harness.json).");
 				return;
 			}
-			const contract = latestContract(branchMessages(ctx));
 			const resolved = features(ctx);
 			const checks = activeChecks();
 			const lines = [
@@ -1403,16 +1126,14 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					.join(", ")}`,
 				`Checks: ${checks.length > 0 ? checks.map((check) => `${check.name} (level ${check.level ?? 1}${"source" in check ? `, from ${check.source}` : ""})`).join(", ") : "none configured or detected"}`,
 				`Protected: ${["harness.json", ...config.protect].join(", ")}`,
-				`Check runs: ${stats.checkRuns} (${stats.checkFailures} failed, ${stats.repairs} repair rounds, ${stats.rollbacks} rollbacks); contract reminders: ${stats.contractNudges}`,
+				`Check runs: ${stats.checkRuns} (${stats.checkFailures} failed, ${stats.repairs} repair rounds, ${stats.rollbacks} rollbacks, ${stats.checksReused} check results reused)`,
 				`Drift: ${stats.driftChecks} check(s), ${stats.driftNudges} fix-or-disclose request(s), ${stats.blockersAccepted} reported blocker(s) accepted`,
 				`Context packs: ${stats.packs} (${(stats.packBytes / 1024).toFixed(1)} KB)`,
 				`Context masking: ${stats.maskBatches} batch(es), ${(stats.elidedBytes / 1024).toFixed(1)} KB elided (~${Math.round(stats.elidedBytes / 4)} tokens per later request)`,
 				`Escalation: ${config.escalation.model}, ${stats.escalations} call(s), $${stats.escalationCostUsd.toFixed(4)}`,
-				`Decisions: ${decisions ? `${decisions.name}, ${stats.reviews} review(s), ${stats.revisions} revision request(s)` : 'off (install Laya with pip install "laya[serve]", or set MIDNIGHT_SERVER_LAYA_URL to a local laya-serve)'}`,
 				`Language servers: ${lsp?.running.join(", ") || "none running"}`,
 				`Events: ${telemetry.summary()}`,
 			];
-			if (contract) lines.push("", formatContract(contract));
 			ctx.ui.notify(lines.join("\n"));
 		},
 	});

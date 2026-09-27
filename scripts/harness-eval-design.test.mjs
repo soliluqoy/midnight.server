@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { parseVariantList, resolveManifest, seededShuffle } from "./harness-eval-design.mjs";
 import { exportRuns } from "./harness-eval-export.mjs";
 
-const FEATURES = ["contextPack", "inRunChecks", "driftGuard", "blockerExit", "escalation", "decisions"];
+const FEATURES = ["contextPack", "inRunChecks", "driftGuard", "blockerExit", "escalation", "masking"];
 
 test("a +feature or -feature token extends the variant before it", () => {
 	const variants = parseVariantList("bare,harness,no-pack=-contextPack,+driftGuard,guard=+driftGuard");
@@ -24,7 +24,7 @@ const manifest = {
 	experiment_id: "pilot",
 	task_split: "dev",
 	factor_order: ["driftGuard", "blockerExit"],
-	fixed: { escalation: false, decisions: false },
+	fixed: { escalation: false, masking: true },
 	variants: [
 		{ id: "00", features: { driftGuard: false, blockerExit: false } },
 		{ id: "10", features: { driftGuard: true, blockerExit: false } },
@@ -41,11 +41,11 @@ test("a two-factor manifest resolves to exactly four complete assignments plus b
 	assert.equal(design.variants.length, 5);
 	assert.deepEqual(design.variants[1].assignment, {
 		escalation: false,
-		decisions: false,
+		masking: true,
 		driftGuard: true,
 		blockerExit: false,
 	});
-	assert.equal(design.variants[1].features, "-escalation,-decisions,+driftGuard,-blockerExit");
+	assert.equal(design.variants[1].features, "-escalation,+masking,+driftGuard,-blockerExit");
 	assert.equal(design.variants[4].harness, false);
 	assert.equal(design.repeats, 3);
 });

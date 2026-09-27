@@ -1,5 +1,11 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	type TuiMouseEvent,
+	type TuiMouseEventResult,
+	truncateToWidth,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import type { AgentSession } from "../../../core/agent-session.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
@@ -8,6 +14,7 @@ import type { SessionManager } from "../../../core/session-manager.ts";
 import { addUsageToTotals, createUsageTotals, type UsageTotals } from "../../../core/usage-totals.ts";
 import { getMidnightStatus } from "../../../midnight/status.ts";
 import { theme } from "../theme/theme.ts";
+import { modeChip, modeChipWidth } from "./mode-chip.ts";
 
 /**
  * Sanitize text for display in a single-line status.
@@ -57,6 +64,8 @@ export class FooterComponent implements Component {
 	private gitStatus: { getStatus(): GitStatusSummary | undefined } | undefined;
 	/** True while the sidebar shows usage and local-model state; the footer then drops to one line. */
 	private compact: () => boolean;
+	/** Click on the mode chip at the start of the first line. */
+	onToggleAgentMode: (() => void) | undefined;
 	private usageStats:
 		| {
 				sessionManager: SessionManager;
@@ -140,6 +149,13 @@ export class FooterComponent implements Component {
 			sessionName: sessionManager.getSessionName(),
 		};
 		return this.usageStats;
+	}
+
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (!this.onToggleAgentMode || event.button !== "left" || event.y !== 0) return undefined;
+		if (event.x >= modeChipWidth(getMidnightStatus().agentMode)) return undefined;
+		if (event.type === "click") this.onToggleAgentMode();
+		return event.type === "press" || event.type === "click" ? { handled: true } : undefined;
 	}
 
 	render(width: number): string[] {
@@ -274,25 +290,9 @@ export class FooterComponent implements Component {
 		const remainder = statsLine.slice(statsLeft.length); // padding + rightSide
 		const dimRemainder = theme.fg("dim", remainder);
 
-		const midnight = getMidnightStatus();
-		const badge =
-			midnight.agentMode === "plan"
-				? theme.bold(theme.fg("warning", "PLAN"))
-				: theme.bold(theme.fg("accent", "BUILD"));
-		const pwdLeft = `${badge} ${theme.fg("dim", pwd)}`;
+		const pwdLeft = `${modeChip(getMidnightStatus().agentMode)} ${theme.fg("dim", pwd)}`;
 		const compact = this.compact();
-		let pwdRight: string;
-		if (compact) {
-			pwdRight = theme.fg("dim", rightSideWithoutProvider);
-		} else {
-			const localParts: string[] = [];
-			if (midnight.mode) localParts.push(midnight.mode);
-			if (midnight.engine === "starting" && midnight.activity) localParts.push(midnight.activity);
-			else if (midnight.engine !== "off") localParts.push(`local ${midnight.engine}`);
-			if (midnight.drift?.lastVerdict && midnight.drift.lastVerdict !== "on_track")
-				localParts.push(theme.fg("warning", midnight.drift.lastVerdict.replace("_", " ")));
-			pwdRight = localParts.length > 0 ? theme.fg("dim", `☾ ${localParts.join(" · ")}`) : "";
-		}
+		const pwdRight = compact ? theme.fg("dim", rightSideWithoutProvider) : "";
 		const pwdRoom = width - visibleWidth(pwdLeft) - visibleWidth(pwdRight);
 		const pwdLine =
 			pwdRight && pwdRoom >= 2

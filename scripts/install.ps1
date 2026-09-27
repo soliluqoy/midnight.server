@@ -3,12 +3,11 @@
 Install midnight.server for the current user and put it on PATH.
 
 .DESCRIPTION
-Copies a built app layout (default: build\dist\midnight.server-windows-x64-cpu,
+Copies a built app layout (default: build\dist\midnight.server-windows-x64,
 produced by scripts\build.ps1) into %LOCALAPPDATA%\Programs\midnight.server and
 adds that directory to the user PATH, so `midnight.server` works in any new
-terminal. Does not touch %LOCALAPPDATA%\midnight.server, which is the app's
-runtime data directory (model, engine, logs, credentials) — see
-packages\coding-agent\src\midnight\paths.ts.
+terminal. Settings, sessions and credentials live in ~\.midnight.server and are
+not touched.
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\install.ps1
@@ -20,7 +19,7 @@ param(
 . (Join-Path $PSScriptRoot "lib.ps1")
 
 if (-not $Source) {
-	$Source = Join-Path $RepoRoot "build\dist\midnight.server-windows-x64-cpu"
+	$Source = Join-Path $RepoRoot "build\dist\midnight.server-windows-x64"
 }
 if (-not (Test-Path -LiteralPath $Source)) {
 	throw "Build output not found at $Source. Run scripts\build.ps1 first, or pass -Source <dir>."
@@ -59,4 +58,4 @@ $native::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, "Environment"
 $version = (Get-Item -LiteralPath (Join-Path $InstallDir "midnight.server.exe")).VersionInfo.FileVersion
 Write-Host ""
 Write-Host "Installed midnight.server $version to $InstallDir"
-Write-Host "Open a new terminal and run: midnight.server doctor"
+Write-Host "Open a new terminal and run: midnight.server"

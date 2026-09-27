@@ -3,8 +3,7 @@
 Validate the Windows build host and fetch pinned build tools.
 
 .DESCRIPTION
-Checks Node.js, npm, Git and the in-box .NET Framework compiler, then downloads
-the pinned Bun release into .cache\tools after verifying its SHA-256.
+Checks Node.js, npm and Git, then downloads the pinned Bun release into .cache\tools after verifying its SHA-256.
 With -Install, also hydrates node_modules with `npm ci --ignore-scripts`.
 #>
 param(
@@ -27,9 +26,6 @@ if (-not $node) {
 }
 if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { $problems += "npm is required (ships with Node.js)." }
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { $problems += "Git for Windows is required: https://git-scm.com/download/win" }
-
-$csc = Get-CscPath
-if (-not (Test-Path -LiteralPath $csc)) { $problems += ".NET Framework 4 compiler not found at $csc." } else { Write-Host "csc    $csc" }
 
 if ($problems.Count -gt 0) {
 	$problems | ForEach-Object { Write-Error $_ -ErrorAction Continue }

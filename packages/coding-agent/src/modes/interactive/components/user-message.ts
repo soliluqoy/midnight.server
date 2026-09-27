@@ -58,7 +58,9 @@ export class UserMessageComponent extends Container {
 	}
 
 	override render(width: number): string[] {
-		const lines = super.render(width);
+		// opencode-style: an accent bar on the left edge marks the user's turn; the panel stays neutral.
+		const bar = theme.fg("accent", "▌");
+		const lines = super.render(Math.max(1, width - 1)).map((line) => bar + line);
 		if (lines.length === 0) {
 			return lines;
 		}

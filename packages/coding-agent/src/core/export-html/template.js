@@ -907,21 +907,17 @@
         return out;
       }
 
-      function sideThreadModel(turn) {
-        return turn.model.kind === 'local' ? 'local' : turn.model.id;
-      }
-
       /** Side thread under a tool call or reply, folded until its label is clicked. */
       function renderSideThread(anchorId) {
         const thread = sideThreadMap.get(anchorId);
         if (!thread || !thread.turns.length) return '';
-        const models = [...new Set(thread.turns.map(sideThreadModel))].join(', ');
+        const models = [...new Set(thread.turns.map((turn) => turn.model.id))].join(', ');
         const count = thread.turns.length === 1 ? '1 side question' : `${thread.turns.length} side questions`;
         let body = '';
         for (const turn of thread.turns) {
-          body += `<div><span class="side-thread-who">${turn.origin === 'drift' ? 'drift watch' : 'you'}</span>${escapeHtml(turn.question)}</div>`;
+          body += `<div><span class="side-thread-who">you</span>${escapeHtml(turn.question)}</div>`;
           if (turn.answer) {
-            body += `<div><span class="side-thread-who">${escapeHtml(sideThreadModel(turn))}</span><div class="markdown-content">${safeMarkedParse(turn.answer)}</div></div>`;
+            body += `<div><span class="side-thread-who">${escapeHtml(turn.model.id)}</span><div class="markdown-content">${safeMarkedParse(turn.answer)}</div></div>`;
           }
           if (turn.status === 'error') body += `<div class="error-text">${escapeHtml(turn.error || 'failed')}</div>`;
           else if (turn.status === 'aborted') body += '<div class="side-thread-note">stopped</div>';

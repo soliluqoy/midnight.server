@@ -79,7 +79,7 @@ See [Compaction Reference](compaction.md) for trigger, summarization, and valida
 | `fullscreenExitOutput` | `"transcript" \| "resume-hint"` | `"transcript"` | Output printed when fullscreen mode exits. |
 | `fullscreenScrollbar` | `"auto" \| "always" \| "hidden"` | `"auto"` | Fullscreen transcript scrollbar behavior. |
 | `fullscreenCopyOnSelect` | boolean | `true` | Copy selected text automatically in fullscreen mode. |
-| `sidebar` | `"auto" \| "always" \| "hidden"` | `"auto"` | Session sidebar in fullscreen mode (branch, git status, context, model, local model, modified files). `"auto"` shows it from 110 columns; `app.sidebar.toggle` overrides it for the current session. |
+| `sidebar` | `"auto" \| "always" \| "hidden"` | `"auto"` | Session sidebar in fullscreen mode (branch, git status, context, model, modified files). `"auto"` shows it from 110 columns; `app.sidebar.toggle` overrides it for the current session. |
 | `explorer` | `"auto" \| "always" \| "hidden"` | `"auto"` | File explorer on the left in fullscreen mode. `"auto"` shows it from 150 columns; `app.explorer.toggle` overrides it for the current session. |
 | `editorPaddingX` | number | `0` | Horizontal editor padding from 0 to 3 cells. |
 | `outputPad` | `0 \| 1` | `1` | Horizontal transcript padding. |

@@ -1,16 +1,13 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { LOCAL_PROVIDER_ID } from "../midnight/pins.ts";
 
 /**
  * Harness features and the model classes that pick their defaults.
  *
  * Every feature can be switched in `harness.json` (`features: { name: false }`) and, for
- * measurement, with `MIDNIGHT_SERVER_HARNESS_FEATURES=-contextPack,+contract`. The eval
+ * measurement, with `MIDNIGHT_SERVER_HARNESS_FEATURES=-contextPack,-escalation`. The eval
  * (`scripts/harness-eval.mjs`) builds ablation variants from that variable.
  */
 export const FEATURE_NAMES = [
-	/** The `task` contract tool and its acceptance-criteria reminder. */
-	"contract",
 	/** Batched observation masking of old tool results. */
 	"masking",
 	/** Repo map, ranked files and environment facts in the first request of each prompt. */
@@ -25,6 +22,8 @@ export const FEATURE_NAMES = [
 	"loopGuard",
 	/** Checks after edits during the run, not only when the model says it is done. */
 	"inRunChecks",
+	/** Reuse a check's result while nothing it could depend on has changed (no edit, shell command or rollback since). */
+	"checkCache",
 	/** Snapshot passing states and restore the last one after repeated check failures. */
 	"checkpoints",
 	/** The `lookup` tool: definitions, references and outlines through LSP or syntax outlines. */
@@ -33,10 +32,6 @@ export const FEATURE_NAMES = [
 	"diagnostics",
 	/** Ask a stronger model for advice when a fast model is stuck. */
 	"escalation",
-	/** Typed intake and completion-review questions to Laya, a local System One model, when installed. */
-	"decisions",
-	/** Core-tools-only, capped output and greedy decoding for the embedded local model. */
-	"localProfile",
 	/**
 	 * Compare the finished change with the request (weakened tests, hard-coded test inputs,
 	 * stubs, swallowed errors, removed declarations, unverified success claims) and ask once to
@@ -51,25 +46,22 @@ export type FeatureName = (typeof FEATURE_NAMES)[number];
 
 /**
  * How the harness treats a model.
- * - `local`: the embedded MiniCPM model: small window, slow prompt processing.
  * - `fast`: cheap cloud models (list input price under $2 per million tokens, or unknown).
  *   They gain the most from work moved into code, and they can escalate.
  * - `frontier`: expensive strong models. Same deterministic help, no escalation.
  */
-export type ModelClass = "local" | "fast" | "frontier";
+export type ModelClass = "fast" | "frontier";
 
 /** Input price in USD per million tokens at and above which a model counts as frontier. */
 export const FRONTIER_INPUT_PRICE = 2;
 
-export function classifyModel(model: Pick<Model<Api>, "provider" | "cost"> | undefined): ModelClass {
+export function classifyModel(model: Pick<Model<Api>, "cost"> | undefined): ModelClass {
 	if (!model) return "fast";
-	if (model.provider === LOCAL_PROVIDER_ID) return "local";
 	return (model.cost?.input ?? 0) >= FRONTIER_INPUT_PRICE ? "frontier" : "fast";
 }
 
 const CLASS_DEFAULTS: Record<ModelClass, Record<FeatureName, boolean>> = {
 	fast: {
-		contract: false,
 		masking: true,
 		contextPack: true,
 		parseGate: true,
@@ -77,17 +69,15 @@ const CLASS_DEFAULTS: Record<ModelClass, Record<FeatureName, boolean>> = {
 		pathHints: true,
 		loopGuard: true,
 		inRunChecks: true,
+		checkCache: true,
 		checkpoints: true,
 		lookup: true,
 		diagnostics: true,
 		escalation: true,
-		decisions: false,
-		localProfile: false,
 		driftGuard: true,
 		blockerExit: true,
 	},
 	frontier: {
-		contract: false,
 		masking: true,
 		contextPack: true,
 		parseGate: true,
@@ -95,39 +85,18 @@ const CLASS_DEFAULTS: Record<ModelClass, Record<FeatureName, boolean>> = {
 		pathHints: true,
 		loopGuard: true,
 		inRunChecks: true,
+		checkCache: true,
 		checkpoints: true,
 		lookup: true,
 		diagnostics: true,
 		escalation: false,
-		decisions: false,
-		localProfile: false,
-		driftGuard: true,
-		blockerExit: true,
-	},
-	local: {
-		contract: false,
-		masking: true,
-		contextPack: true,
-		parseGate: true,
-		editRepair: true,
-		pathHints: true,
-		loopGuard: true,
-		inRunChecks: true,
-		checkpoints: true,
-		// Every tool schema costs prompt tokens at ~30 tokens/s on a laptop CPU.
-		lookup: false,
-		diagnostics: true,
-		escalation: false,
-		// Laya would compete with the local model's engine for the same CPU.
-		decisions: false,
-		localProfile: true,
 		driftGuard: true,
 		blockerExit: true,
 	},
 };
 
 /** Context pack token budget per class: enough for a map and a few files, well under the window. */
-export const CONTEXT_PACK_TOKENS: Record<ModelClass, number> = { fast: 2_000, frontier: 2_500, local: 600 };
+export const CONTEXT_PACK_TOKENS: Record<ModelClass, number> = { fast: 2_000, frontier: 2_500 };
 
 /** Parse `+name,-name,name` into switches. Unknown names throw so a typo cannot silently do nothing. */
 export function parseFeatureOverrides(text: string | undefined): Partial<Record<FeatureName, boolean>> {
@@ -148,7 +117,7 @@ export function parseFeatureOverrides(text: string | undefined): Partial<Record<
 
 /**
  * Resolve every feature for a model class: class default, then `harness.json`, then the
- * environment. Legacy keys (`contract`, `localProfile`, `masking.enabled`) count as config.
+ * environment. The legacy key `masking.enabled` counts as config.
  */
 export function resolveFeatures(
 	modelClass: ModelClass,

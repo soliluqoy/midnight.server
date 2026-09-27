@@ -45,11 +45,7 @@ export interface HarnessConfig {
 	protect: string[];
 	/** Repair rounds after failed checks before the harness stops and reports. */
 	maxRepairRounds: number;
-	/** Register the `task` contract tool and hold the run to its acceptance criteria. */
-	contract: boolean;
 	masking: MaskingSettings;
-	/** Tighter prompt, output and sampling defaults when the session model is the local one. */
-	localProfile: boolean;
 	/**
 	 * Timeout applied to shell tool calls that set none (the tools have no default). One
 	 * unbounded command, such as `find /` over a whole disk, otherwise stalls the run. 0 disables.
@@ -84,10 +80,7 @@ export function defaultHarnessConfig(): HarnessConfig {
 		checks: [],
 		protect: [],
 		maxRepairRounds: 2,
-		// Off by default: on GPT-6 Luna it added 73% tokens with no measured gain (evals/harness/RESULTS.md).
-		contract: false,
 		masking: { enabled: true, keepRecentResults: 6, minResultBytes: 2_000, batchBytes: 48_000 },
-		localProfile: true,
 		shellTimeoutSeconds: 300,
 		features: {},
 		autoChecks: true,
@@ -157,9 +150,7 @@ export function parseHarnessConfig(value: unknown): HarnessConfig {
 		"checks",
 		"protect",
 		"maxRepairRounds",
-		"contract",
 		"masking",
-		"localProfile",
 		"shellTimeoutSeconds",
 		"features",
 		"autoChecks",
@@ -176,8 +167,6 @@ export function parseHarnessConfig(value: unknown): HarnessConfig {
 	if (value.protect !== undefined) config.protect = stringArray(value.protect, "protect");
 	if (value.maxRepairRounds !== undefined)
 		config.maxRepairRounds = nonNegativeInteger(value.maxRepairRounds, "maxRepairRounds");
-	if (value.contract !== undefined) config.contract = boolean(value.contract, "contract");
-	if (value.localProfile !== undefined) config.localProfile = boolean(value.localProfile, "localProfile");
 	if (value.shellTimeoutSeconds !== undefined)
 		config.shellTimeoutSeconds = nonNegativeInteger(value.shellTimeoutSeconds, "shellTimeoutSeconds");
 	if (value.autoChecks !== undefined) config.autoChecks = boolean(value.autoChecks, "autoChecks");

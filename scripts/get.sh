@@ -5,7 +5,7 @@
 #
 # Downloads midnight.server-<platform>.tar.gz from the newest GitHub release, verifies
 # it against the release's SHA256SUMS, installs it into ~/.local/lib/midnight.server
-# and puts a midnight.server launcher in ~/.local/bin. The model downloads on first use.
+# and puts a midnight.server launcher in ~/.local/bin.
 # scripts/get.ps1 is the Windows equivalent.
 #
 # Environment overrides:

@@ -8,7 +8,6 @@ For a built-in provider, start with `/login`, then choose a model with `/model`.
 |---|---|
 | A supported subscription | Sign in through `/login` |
 | A provider API key | Store it through `/login` or set its environment variable |
-| A local GGUF model | Connect midnight.server to the llama.cpp router |
 | An OpenAI-, Anthropic-, or Google-compatible endpoint | Add it to `models.json` |
 | A provider with a custom protocol or authentication flow | Build or install a provider extension |
 
@@ -36,11 +35,7 @@ A session records model and thinking-level changes. Resuming the session restore
 
 ## Connect local models
 
-midnight.server integrates directly with the llama.cpp router. The router discovers GGUF files and loads models on demand. midnight.server's `/llama` command manages the router, while `/model` selects one of its loaded models.
-
-Follow [Local Models with llama.cpp](llama-cpp.md) for server startup, model layout, downloads, and connection troubleshooting.
-
-For Ollama, LM Studio, vLLM, SGLang, and other compatible servers, [configure a compatible endpoint](#configure-a-compatible-endpoint) in `models.json`.
+For llama.cpp, Ollama, LM Studio, vLLM, SGLang, and other compatible servers, [configure a compatible endpoint](#configure-a-compatible-endpoint) in `models.json`.
 
 ## Configure a compatible endpoint
 
