@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { join, parse } from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ProjectedSessionEntry } from "../src/core/session-manager.ts";
@@ -24,7 +24,14 @@ import { fitMaskingToWindow, planMasking } from "../src/harness/masking.ts";
 import { identifierTerms, outlineSource, relativeImports } from "../src/harness/outline.ts";
 import { checkSyntax, introducedSyntaxError, pythonInterpreter } from "../src/harness/parse-gate.ts";
 import { declarationBody, formatDiagnostics, newErrors, runLookup } from "../src/harness/semantic.ts";
-import { buildWorkspaceIndex, isTestPath, rankFiles, relatedFiles, testsFor } from "../src/harness/workspace-index.ts";
+import {
+	buildWorkspaceIndex,
+	isTestPath,
+	isUnindexableRoot,
+	rankFiles,
+	relatedFiles,
+	testsFor,
+} from "../src/harness/workspace-index.ts";
 
 function tempDir(prefix: string): string {
 	return mkdtempSync(join(tmpdir(), prefix));
@@ -232,8 +239,8 @@ describe("workspace index and context pack", () => {
 	});
 	afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-	it("ranks the file a request names, and pulls in its test", () => {
-		const index = buildWorkspaceIndex(root);
+	it("ranks the file a request names, and pulls in its test", async () => {
+		const index = await buildWorkspaceIndex(root);
 		const ranked = rankFiles(index, "parsePort in port.js should only return a valid port");
 		expect(ranked[0].file.path).toBe("src/port.js");
 		expect(ranked.map((item) => item.file.path)).toContain("test/port.test.js");
@@ -245,14 +252,21 @@ describe("workspace index and context pack", () => {
 		expect(isTestPath("src/port.js")).toBe(false);
 	});
 
-	it("reuses unchanged files when refreshed", () => {
-		const first = buildWorkspaceIndex(root);
-		const second = buildWorkspaceIndex(root, first);
+	it("reuses unchanged files when refreshed", async () => {
+		const first = await buildWorkspaceIndex(root);
+		const second = await buildWorkspaceIndex(root, first);
 		expect(second.byPath.get("src/csv.js")).toBe(first.byPath.get("src/csv.js"));
 	});
 
-	it("builds a bounded pack with environment, ranked files and inlined contents", () => {
-		const index = buildWorkspaceIndex(root);
+	it("does not index the home directory or a filesystem root", async () => {
+		expect(isUnindexableRoot(homedir())).toBe(true);
+		expect(isUnindexableRoot(parse(root).root)).toBe(true);
+		expect(isUnindexableRoot(root)).toBe(false);
+		expect((await buildWorkspaceIndex(homedir())).files).toEqual([]);
+	});
+
+	it("builds a bounded pack with environment, ranked files and inlined contents", async () => {
+		const index = await buildWorkspaceIndex(root);
 		const facts = detectProjectChecks(root);
 		const pack = buildContextPack({
 			index,
@@ -549,7 +563,7 @@ describe("lookup and diagnostics helpers", () => {
 	afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 	it("returns definitions with bodies, references and outlines without a language server", async () => {
-		const index = buildWorkspaceIndex(root);
+		const index = await buildWorkspaceIndex(root);
 		const definition = await runLookup({ op: "definition", symbol: "parsePort" }, index, undefined);
 		expect(definition).toContain("src/port.ts:1");
 		expect(definition).toContain("3\t  return n;");

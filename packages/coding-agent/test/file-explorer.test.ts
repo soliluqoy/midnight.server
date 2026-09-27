@@ -293,4 +293,26 @@ describe("chat viewport explorer column", () => {
 		expect(line.startsWith("E....")).toBe(true);
 		expect(line.endsWith("S...")).toBe(true);
 	});
+
+	it("indents the chat by the left margin only while the explorer is hidden", () => {
+		let explorerShown = false;
+		const viewport = createChatViewport({
+			document: new Container(),
+			pendingMessages: new Container(),
+			status: new Container(),
+			editor: { render: (width: number) => ["I".repeat(width)], invalidate: () => {} },
+			footer: new Container(),
+			explorer: {
+				component: { render: (width: number) => ["E".repeat(width)], invalidate: () => {} },
+				width: 5,
+				visible: () => explorerShown,
+			},
+			leftMargin: 2,
+		});
+		const editorLine = () => viewport.root.render(40).map(stripAnsi).find((line) => line.includes("I")) ?? "";
+		expect(editorLine().startsWith("  I")).toBe(true);
+		explorerShown = true;
+		// The explorer column (one line tall here) plus the gap replaces the margin.
+		expect(editorLine().startsWith(`${" ".repeat(6)}I`)).toBe(true);
+	});
 });

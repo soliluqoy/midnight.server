@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { isGeneratedPath } from "./workspace-index.ts";
@@ -223,18 +223,37 @@ export function gitRoot(cwd: string): string | undefined {
 	return repoRoot(cwd);
 }
 
-/** Write the working tree to a git tree object through a throwaway index. */
+/**
+ * Write the working tree to a git tree object through a throwaway index. The throwaway index
+ * starts as a copy of the repository's own index: its stat cache lets `git add -A` skip every
+ * unchanged file instead of rehashing the whole tree (seconds on a large repository, and this
+ * runs at the start of each request). `add -A` then makes it match the working tree, so staged
+ * changes in the user's index do not leak into the result.
+ */
 export function writeWorkingTree(cwd: string): string | undefined {
-	const root = repoRoot(cwd);
-	if (!root) return undefined;
+	const info = git(cwd, ["rev-parse", "--show-cdup", "--git-path", "index"]);
+	if (!info.ok) return undefined;
+	const [cdup = "", gitIndex = ""] = info.stdout.split(/\r?\n/);
+	const root = resolve(cwd, cdup.trim());
 	const indexFile = join(
 		tmpdir(),
 		`midnight-index-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
 	);
 	const env = { GIT_INDEX_FILE: indexFile };
 	try {
-		const head = git(root, ["rev-parse", "--verify", "-q", "HEAD"]);
-		if (!git(root, head.ok ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], env).ok) return undefined;
+		let seeded = false;
+		try {
+			if (gitIndex.trim()) {
+				copyFileSync(resolve(cwd, gitIndex.trim()), indexFile);
+				seeded = true;
+			}
+		} catch {
+			// No index yet (fresh repository): start from HEAD or empty.
+		}
+		if (!seeded) {
+			const head = git(root, ["rev-parse", "--verify", "-q", "HEAD"]);
+			if (!git(root, head.ok ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], env).ok) return undefined;
+		}
 		if (!git(root, ["add", "-A", "--", "."], env).ok) return undefined;
 		const tree = git(root, ["write-tree"], env);
 		return tree.ok ? tree.stdout.trim() : undefined;
