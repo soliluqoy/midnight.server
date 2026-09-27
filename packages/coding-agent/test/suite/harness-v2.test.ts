@@ -280,10 +280,13 @@ describe("harness v2 in a session", () => {
 		let noul = 0.9;
 		const states: unknown[] = [];
 		const saved = process.env.MIDNIGHT_SERVER_LAYA_URL;
+		const savedFeatures = process.env.MIDNIGHT_SERVER_HARNESS_FEATURES;
 		afterEach(() => {
 			server?.close();
 			if (saved === undefined) delete process.env.MIDNIGHT_SERVER_LAYA_URL;
 			else process.env.MIDNIGHT_SERVER_LAYA_URL = saved;
+			if (savedFeatures === undefined) delete process.env.MIDNIGHT_SERVER_HARNESS_FEATURES;
+			else process.env.MIDNIGHT_SERVER_HARNESS_FEATURES = savedFeatures;
 		});
 
 		async function startFakeLaya(): Promise<void> {
@@ -310,6 +313,8 @@ describe("harness v2 in a session", () => {
 			await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 			const address = server.address();
 			process.env.MIDNIGHT_SERVER_LAYA_URL = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
+			// The review is off by default (evals/laya-review); these tests turn it on.
+			process.env.MIDNIGHT_SERVER_HARNESS_FEATURES = "+decisions";
 		}
 
 		const editValue = () =>

@@ -347,7 +347,7 @@ describe("local profile tool set", () => {
 		const start = (provider: string) => {
 			const event = {
 				prompt: "",
-				systemPromptOptions: { sections: {} as Record<string, string>, contextFiles: [] },
+				systemPromptOptions: { sections: {} as Record<string, string>, contextFiles: [], promptGuidelines: [] },
 			};
 			handlers.get("before_agent_start")?.(event, {
 				model: { provider },

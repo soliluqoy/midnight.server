@@ -37,6 +37,14 @@ export const FEATURE_NAMES = [
 	"decisions",
 	/** Core-tools-only, capped output and greedy decoding for the embedded local model. */
 	"localProfile",
+	/**
+	 * Compare the finished change with the request (weakened tests, hard-coded test inputs,
+	 * stubs, swallowed errors, removed declarations, unverified success claims) and ask once to
+	 * fix or disclose. See drift.ts.
+	 */
+	"driftGuard",
+	/** One rule offering a sanctioned way to stop: report what blocks the request instead of substituting. */
+	"blockerExit",
 ] as const;
 
 export type FeatureName = (typeof FEATURE_NAMES)[number];
@@ -73,8 +81,10 @@ const CLASS_DEFAULTS: Record<ModelClass, Record<FeatureName, boolean>> = {
 		lookup: true,
 		diagnostics: true,
 		escalation: true,
-		decisions: true,
+		decisions: false,
 		localProfile: false,
+		driftGuard: true,
+		blockerExit: true,
 	},
 	frontier: {
 		contract: false,
@@ -89,8 +99,10 @@ const CLASS_DEFAULTS: Record<ModelClass, Record<FeatureName, boolean>> = {
 		lookup: true,
 		diagnostics: true,
 		escalation: false,
-		decisions: true,
+		decisions: false,
 		localProfile: false,
+		driftGuard: true,
+		blockerExit: true,
 	},
 	local: {
 		contract: false,
@@ -109,6 +121,8 @@ const CLASS_DEFAULTS: Record<ModelClass, Record<FeatureName, boolean>> = {
 		// Laya would compete with the local model's engine for the same CPU.
 		decisions: false,
 		localProfile: true,
+		driftGuard: true,
+		blockerExit: true,
 	},
 };
 

@@ -4,7 +4,10 @@
  * Validate the harness eval tasks without running any model:
  *
  * - the starting workspace fails the hidden grader (otherwise the task measures nothing),
- * - the reference solution passes the hidden grader and the task's visible checks,
+ * - the reference solution passes the hidden grader and the task's visible checks (or, for a
+ *   task with `visibleConflict`, fails a visible check: the request contradicts a protected test),
+ * - a grader that declares `requirements` reports every one of them, all passing for the
+ *   reference and at least one failing for the starting workspace,
  * - the reference solution leaves every `unchanged` file untouched,
  * - task.json has the fields the runner and the report need.
  *
@@ -18,7 +21,7 @@ import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } fr
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { hasCommand, portableArgv } from "./harness-eval-commands.mjs";
+import { hasCommand, parseRequirements, portableArgv } from "./harness-eval-commands.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CATEGORIES = new Set([
@@ -32,6 +35,15 @@ const CATEGORIES = new Set([
 	"refactor",
 	"feature",
 	"environment",
+	"drift-test-vs-request",
+	"drift-impossible",
+	"drift-approach",
+	"drift-scope",
+	"drift-compatibility",
+	"drift-composition",
+	"drift-familiar",
+	"drift-error-handling",
+	"drift-barrier",
 ]);
 
 function parseArgs(argv) {
@@ -54,6 +66,16 @@ function run(taskArgv, cwd) {
 		shell: process.platform === "win32",
 	});
 	return { ok: result.status === 0, output: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() };
+}
+
+/** Whether something accepts connections on the loopback port (a synchronous probe for this script). */
+function portOpen(port) {
+	const probe = spawnSync(
+		process.execPath,
+		["-e", `const s=require("node:net").connect(${port},"127.0.0.1");s.setTimeout(1000,()=>process.exit(1));s.on("connect",()=>process.exit(0));s.on("error",()=>process.exit(1));`],
+		{ timeout: 5000 },
+	);
+	return probe.status === 0;
 }
 
 function workspace(taskRoot, withReference, referenceRoot) {
@@ -88,16 +110,35 @@ function main() {
 		if (!existsSync(path.join(taskRoot, "prompt.txt"))) problems.push("missing prompt.txt");
 		if (!existsSync(referenceRoot)) problems.push("missing reference solution");
 
+		// A barrier task needs its service down: a leftover process on the port defeats it.
+		for (const port of spec.closedPorts ?? []) {
+			if (portOpen(port)) problems.push(`port ${port} is open on this machine, so the task's barrier is gone; stop the process listening on it`);
+		}
 		if (problems.length === 0) {
 			const start = workspace(taskRoot, false);
 			cpSync(path.join(taskRoot, "hidden"), start, { recursive: true });
-			if (run(spec.grade, start).ok) problems.push("the starting workspace already passes the grader");
+			const startGrade = run(spec.grade, start);
+			if (startGrade.ok) problems.push("the starting workspace already passes the grader");
+			if (spec.requirements) {
+				const reported = parseRequirements(startGrade.output);
+				const missingIds = spec.requirements.filter((id) => !(id in reported));
+				if (missingIds.length > 0) problems.push(`grader does not report ${missingIds.join(", ")}`);
+				if (!Object.values(reported).some((value) => value !== true)) {
+					problems.push("no requirement fails on the starting workspace");
+				}
+			}
 			rmSync(start, { recursive: true, force: true });
 
 			const solved = workspace(taskRoot, true, referenceRoot);
-			for (const check of spec.checks ?? []) {
-				const result = run(check.command, solved);
-				if (!result.ok) problems.push(`reference fails visible check ${check.name}: ${result.output.slice(0, 300)}`);
+			const visible = (spec.checks ?? []).map((check) => ({ check, result: run(check.command, solved) }));
+			if (spec.visibleConflict) {
+				if (visible.every(({ result }) => result.ok)) {
+					problems.push("visibleConflict: the reference should fail a visible check, but all pass");
+				}
+			} else {
+				for (const { check, result } of visible) {
+					if (!result.ok) problems.push(`reference fails visible check ${check.name}: ${result.output.slice(0, 300)}`);
+				}
 			}
 			for (const file of spec.unchanged ?? []) {
 				const original = readFileSync(path.join(taskRoot, "files", file));
@@ -106,6 +147,11 @@ function main() {
 			cpSync(path.join(taskRoot, "hidden"), solved, { recursive: true });
 			const graded = run(spec.grade, solved);
 			if (!graded.ok) problems.push(`reference fails the grader: ${graded.output.slice(0, 400)}`);
+			if (spec.requirements) {
+				const reported = parseRequirements(graded.output);
+				const failing = spec.requirements.filter((id) => reported[id] !== true);
+				if (failing.length > 0) problems.push(`reference fails requirements ${failing.join(", ")}`);
+			}
 			rmSync(solved, { recursive: true, force: true });
 		}
 

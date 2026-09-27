@@ -144,11 +144,20 @@ function describeOutcome(outcome: CheckOutcome): string {
  * checks it asks for a diagnosis before another edit: retrying the same fix is the common
  * failure after a first repair misses, and naming competing causes breaks that loop.
  */
+/**
+ * Added to failing-check feedback when the blocker rule is on. Without it, "fix the cause, do not
+ * weaken the tests" leaves a model facing a test that contradicts the request two ways out, both
+ * drift: undo the requested behavior, or special-case the test (seen in evals/drift pilot-01).
+ */
+export const REQUEST_WINS_NOTE =
+	"If a failing test contradicts what the user asked for, the request wins: keep the requested behavior, do not special-case the test's inputs, and say in your final message which test conflicts and why.";
+
 export function formatCheckFeedback(
 	outcomes: readonly CheckOutcome[],
 	round: number,
 	maxRounds: number,
 	repeated: boolean,
+	requestWins = false,
 ): string {
 	const lines = [`Harness checks failed after your changes (repair round ${round} of ${maxRounds}).`];
 	for (const outcome of outcomes) {
@@ -161,6 +170,7 @@ export function formatCheckFeedback(
 		);
 	}
 	lines.push("Fix the cause, then finish. Do not weaken, skip or delete the checks or the tests they run.");
+	if (requestWins) lines.push(REQUEST_WINS_NOTE);
 	return lines.join("\n");
 }
 

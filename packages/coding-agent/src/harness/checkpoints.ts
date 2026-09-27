@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { isGeneratedPath } from "./workspace-index.ts";
 
 /**
  * Snapshots of the working tree in private git refs, and restoring one.
@@ -172,8 +173,53 @@ function pathKey(path: string): string {
 	return process.platform === "win32" ? key.toLowerCase() : key;
 }
 
+/** Files larger than this are left out of a change inventory: not source a detector can read. */
+const MAX_INVENTORY_FILE_BYTES = 512_000;
+const MAX_INVENTORY_FILES = 200;
+
+/**
+ * Every file that differs between the tree `base` (from `writeWorkingTree`) and the working
+ * tree now, with both contents: edits through tools and shell commands alike. Paths are
+ * repository-relative. Undefined when git fails.
+ */
+export function workingTreeChanges(
+	cwd: string,
+	base: string,
+): Array<{ path: string; before: string | undefined; after: string | undefined }> | undefined {
+	const root = repoRoot(cwd);
+	const current = writeWorkingTree(cwd);
+	if (!root || !current) return undefined;
+	if (current === base) return [];
+	const names = git(root, ["diff", "--name-status", "-z", "--no-renames", base, current]);
+	if (!names.ok) return undefined;
+	const fields = names.stdout.split("\0").filter(Boolean);
+	const blob = (tree: string, path: string): string | undefined => {
+		const size = git(root, ["cat-file", "-s", `${tree}:${path}`]);
+		if (!size.ok || Number(size.stdout.trim()) > MAX_INVENTORY_FILE_BYTES) return undefined;
+		const content = git(root, ["cat-file", "blob", `${tree}:${path}`]);
+		return content.ok && !content.stdout.includes("\0") ? content.stdout : undefined;
+	};
+	const changes: Array<{ path: string; before: string | undefined; after: string | undefined }> = [];
+	for (let index = 0; index + 1 < fields.length && changes.length < MAX_INVENTORY_FILES; index += 2) {
+		const [status, path] = [fields[index], fields[index + 1]];
+		// Installed dependencies and build output would crowd the agent's own changes out of the cap.
+		if (isGeneratedPath(path)) continue;
+		const before = status === "A" ? undefined : blob(base, path);
+		const after = status === "D" ? undefined : blob(current, path);
+		// A binary or oversized side is unreadable, not added or deleted: leave the file out.
+		if ((status !== "A" && before === undefined) || (status !== "D" && after === undefined)) continue;
+		changes.push({ path, before, after });
+	}
+	return changes;
+}
+
+/** The repository root, for mapping `workingTreeChanges` paths. */
+export function gitRoot(cwd: string): string | undefined {
+	return repoRoot(cwd);
+}
+
 /** Write the working tree to a git tree object through a throwaway index. */
-function writeWorkingTree(cwd: string): string | undefined {
+export function writeWorkingTree(cwd: string): string | undefined {
 	const root = repoRoot(cwd);
 	if (!root) return undefined;
 	const indexFile = join(

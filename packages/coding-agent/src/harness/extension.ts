@@ -15,7 +15,7 @@ import type {
 } from "../core/extensions/types.ts";
 import { LOCAL_PROVIDER_ID } from "../midnight/pins.ts";
 import { getMidnightStatus } from "../midnight/status.ts";
-import { CheckpointStore, isGitWorkTree } from "./checkpoints.ts";
+import { CheckpointStore, gitRoot, isGitWorkTree, workingTreeChanges, writeWorkingTree } from "./checkpoints.ts";
 import {
 	type CheckOutcome,
 	filesModifiedSince,
@@ -60,6 +60,16 @@ import {
 	stateDigest,
 } from "./decisions.ts";
 import { type DetectedCheck, detectProjectChecks, expandTests, type ProjectFacts } from "./detect-checks.ts";
+import {
+	actionable,
+	BLOCKER_GUIDELINE,
+	claimsSuccess,
+	detectDrift,
+	disclosesDeviation,
+	environmentSignals,
+	type FileChange,
+	formatDriftFeedback,
+} from "./drift.ts";
 import { LoopGuard, notFoundHint, repairIndentation, suggestPaths, type TextEdit } from "./edit-repair.ts";
 import { formatAdvice, requestAdvice } from "./escalate.ts";
 import {
@@ -77,13 +87,14 @@ import { planMasking } from "./masking.ts";
 import { canCheckSyntax, introducedSyntaxError, pythonInterpreter } from "./parse-gate.ts";
 import { formatDiagnostics, newErrors, runLookup } from "./semantic.ts";
 import { HarnessTelemetry } from "./telemetry.ts";
-import { buildWorkspaceIndex, testsFor, type WorkspaceIndex } from "./workspace-index.ts";
+import { buildWorkspaceIndex, isTestPath, testsFor, type WorkspaceIndex } from "./workspace-index.ts";
 
 export const CHECK_MESSAGE_TYPE = "harness_check";
 export const CONTRACT_MESSAGE_TYPE = "harness_contract";
 export const CONTEXT_MESSAGE_TYPE = "harness_context";
 export const ADVICE_MESSAGE_TYPE = "harness_advice";
 export const REVIEW_MESSAGE_TYPE = "harness_review";
+export const DRIFT_MESSAGE_TYPE = "harness_drift";
 export const LOOKUP_TOOL_NAME = "lookup";
 
 const taskParameters = Type.Object({
@@ -218,6 +229,16 @@ interface RunState {
 	reviewed: boolean;
 	/** Each edited file's content before its first edit in this run (undefined: it did not exist). */
 	originals: Map<string, string | undefined>;
+	/** The working tree at the start of the request (git tree id), for the drift inventory. */
+	baselineTree?: string;
+	/** When a file last changed through edit or write. */
+	lastChangeAt?: number;
+	/** When a harness check or a test-like shell command last succeeded. */
+	verifiedAt?: number;
+	/** The drift guard asked to fix or disclose in this request (at most once). */
+	driftNudged: boolean;
+	/** Shell commands run in this request, for side effects outside the code. */
+	shellCommands: string[];
 }
 
 function freshRun(prompt = ""): RunState {
@@ -236,8 +257,14 @@ function freshRun(prompt = ""): RunState {
 		lastCheckFailed: false,
 		reviewed: false,
 		originals: new Map(),
+		driftNudged: false,
+		shellCommands: [],
 	};
 }
+
+/** Shell commands that run a project's tests or checks: their success verifies the change. */
+const TEST_COMMAND =
+	/(?:test|tests|pytest|vitest|jest|mocha|ava|tap|unittest|gos+(?:test|vet)|cargos+(?:test|check)|tsc|mypy|ruff|eslint|biome|check)|nodes+(?:--test|S*testS*.m?js)|pythond?s+S*testS*.py/i;
 
 /** In-run checks skip any check that took longer than this last time: they must stay cheap. */
 const IN_RUN_CHECK_BUDGET_MS = 90_000;
@@ -287,6 +314,9 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		packBytes: 0,
 		reviews: 0,
 		revisions: 0,
+		driftChecks: 0,
+		driftNudges: 0,
+		blockersAccepted: 0,
 	};
 
 	function modelClass(ctx: ExtensionContext): ModelClass {
@@ -412,6 +442,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	pi.registerMessageRenderer(CONTRACT_MESSAGE_TYPE, renderHarnessMessage("[contract]"));
 	pi.registerMessageRenderer(ADVICE_MESSAGE_TYPE, renderHarnessMessage("[advice]"));
 	pi.registerMessageRenderer(REVIEW_MESSAGE_TYPE, renderHarnessMessage("[review]"));
+	pi.registerMessageRenderer(DRIFT_MESSAGE_TYPE, renderHarnessMessage("[drift]"));
 
 	/** Load config, feature overrides and detected checks for the current trust state. */
 	function loadState(ctx: ExtensionContext): void {
@@ -501,6 +532,9 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			config.shellTimeoutSeconds > 0
 		) {
 			input.timeout = config.shellTimeoutSeconds;
+		}
+		if ((event.toolName === "bash" || event.toolName === "powershell") && typeof input.command === "string") {
+			run.shellCommands.push(input.command);
 		}
 		if (event.toolName === "powershell" && typeof input.command === "string") {
 			const repaired = repairPowerShellCommand(input.command);
@@ -605,6 +639,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 				run.changed.add(rel);
 				run.changedSinceInRun.add(rel);
 				run.allChanged.add(rel);
+				run.lastChangeAt = Date.now();
 				indexDirty = true;
 				run.loopGuard.noteChange();
 				if (snapshot && on(ctx, "diagnostics") && trusted) {
@@ -666,6 +701,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			indexDirty = true;
 			// A command that succeeded may have changed files: rereads and reruns are new information.
 			if (!event.isError) run.loopGuard.noteChange();
+			const command = (event.input as { command?: unknown }).command;
+			if (!event.isError && typeof command === "string" && TEST_COMMAND.test(command)) run.verifiedAt = Date.now();
 		}
 		const capped =
 			on(ctx, "localProfile") && isLocalModel(ctx) && event.toolName !== TASK_TOOL_NAME
@@ -729,6 +766,13 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			return;
 		}
 		syncTools(ctx);
+		// What this request actually runs with, so an experiment can check it against its assignment.
+		telemetry.record({ type: "features", modelClass: modelClass(ctx), features: features(ctx) });
+		const planning = getMidnightStatus().agentMode === "plan";
+		if (on(ctx, "blockerExit") && !planning) event.systemPromptOptions.promptGuidelines.push(BLOCKER_GUIDELINE);
+		// The drift inventory compares against the tree as the request found it, so edits made by
+		// shell commands count too. Outside git, it falls back to files changed through edit/write.
+		if (on(ctx, "driftGuard") && !planning && isGitWorkTree(ctx.cwd)) run.baselineTree = writeWorkingTree(ctx.cwd);
 		if (!on(ctx, "localProfile") || !isLocalModel(ctx)) {
 			if (hiddenTools.length > 0) {
 				pi.setActiveTools([...new Set([...pi.getActiveTools(), ...hiddenTools])]);
@@ -847,6 +891,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					passed: result.failed.length === 0,
 					checks: result.outcomes.length,
 				});
+				if (result.failed.length === 0) run.verifiedAt = Date.now();
 				if (result.failed.length === 0 && on(ctx, "checkpoints")) {
 					lastGreen = checkpointStore()?.snapshot("checks passed during the run") ?? lastGreen;
 				}
@@ -856,7 +901,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					content:
 						result.failed.length === 0
 							? `Harness checks after your edits pass:\n${formatCheckSummary(result.outcomes)}\nYou do not need to rerun them yourself.`
-							: `Harness checks after your edits:\n${formatCheckFeedback(result.outcomes, 0, 0, false).split("\n").slice(1).join("\n")}`,
+							: `Harness checks after your edits:\n${formatCheckFeedback(result.outcomes, 0, 0, false, on(ctx, "blockerExit")).split("\n").slice(1).join("\n")}`,
 					display: true,
 				});
 			}
@@ -1074,6 +1119,64 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		return diff.length > 16_000 ? `${diff.slice(0, 16_000)}\n[... diff truncated ...]` : diff;
 	}
 
+	/**
+	 * Every file that differs from the start of the request, workspace-relative. With a git
+	 * baseline this includes shell edits and deletions; otherwise only edit/write changes.
+	 */
+	function driftInventory(ctx: ExtensionContext): FileChange[] {
+		const inWorkspace = (path: string) => !path.startsWith(`${CONFIG_DIR_NAME}/`);
+		if (run.baselineTree) {
+			const root = gitRoot(ctx.cwd);
+			const changes = root ? workingTreeChanges(ctx.cwd, run.baselineTree) : undefined;
+			if (root && changes) {
+				return changes.flatMap((change) => {
+					const path = workspaceRelative(ctx.cwd, resolve(root, change.path));
+					return path && inWorkspace(path) ? [{ ...change, path }] : [];
+				});
+			}
+		}
+		return [...run.originals].flatMap(([path, before]) => {
+			let after: string | undefined;
+			try {
+				after = existsSync(resolve(ctx.cwd, path)) ? readFileSync(resolve(ctx.cwd, path), "utf8") : undefined;
+			} catch {
+				after = undefined;
+			}
+			return after !== before && inWorkspace(path) ? [{ path, before, after }] : [];
+		});
+	}
+
+	/**
+	 * Background processes this request started, named when a run settles with failing checks: a
+	 * process that stands in for a missing service outlives the run, and the user should know.
+	 */
+	function backgroundNote(ctx: ExtensionContext): string {
+		if (!on(ctx, "driftGuard")) return "";
+		const signal = environmentSignals(run.shellCommands).find((item) => item.kind === "background_process");
+		return signal ? `\nNote: ${signal.evidence}.` : "";
+	}
+
+	/** Test files as the request found them: the literals a special case would copy from. */
+	function testSourcesAtStart(ctx: ExtensionContext, changes: readonly FileChange[]): Map<string, string> {
+		const sources = new Map<string, string>();
+		let bytes = 0;
+		for (const change of changes) {
+			if (isTestPath(change.path) && change.before !== undefined) sources.set(change.path, change.before);
+		}
+		for (const file of workspace().files) {
+			if (!file.isTest || sources.has(file.path) || bytes > 1_000_000) continue;
+			if (changes.some((change) => change.path === file.path)) continue;
+			try {
+				const text = readFileSync(resolve(ctx.cwd, file.path), "utf8");
+				bytes += text.length;
+				sources.set(file.path, text);
+			} catch {
+				// Unreadable: skip.
+			}
+		}
+		return sources;
+	}
+
 	pi.on("agent_before_settle", async (event, ctx) => {
 		if (!config.enabled || event.outcome !== "completed" || getMidnightStatus().agentMode === "plan") return;
 		let changed = await changedFiles(ctx);
@@ -1093,16 +1196,39 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			run.lastCheckSummary = formatCheckSummary(outcomes);
 			telemetry.record({ type: "settle_check", passed: failed.length === 0, round: run.repairRound });
 			if (failed.length === 0) {
+				run.verifiedAt = Date.now();
 				if (on(ctx, "checkpoints")) lastGreen = checkpointStore()?.snapshot("checks passed") ?? lastGreen;
 			} else {
 				stats.checkFailures++;
+				// The sanctioned stop: after a repair round, a model that reports why the checks cannot
+				// pass (a conflicting test, a missing dependency) is not pushed again. More rounds are the
+				// pressure that turns an honest blocker into a special case or an undone request.
+				if (
+					on(ctx, "blockerExit") &&
+					run.repairRound >= 1 &&
+					disclosesDeviation(run.lastAssistantText) &&
+					!claimsSuccess(run.lastAssistantText)
+				) {
+					stats.blockersAccepted++;
+					telemetry.record({ type: "blocker_accepted", round: run.repairRound });
+					return {
+						entries: [
+							{
+								type: "custom_message",
+								customType: CHECK_MESSAGE_TYPE,
+								content: `Harness checks still fail, and the agent's last message says why; no further repair rounds.\n${run.lastCheckSummary}${backgroundNote(ctx)}`,
+								display: true,
+							},
+						],
+					};
+				}
 				if (run.repairRound >= config.maxRepairRounds) {
 					return {
 						entries: [
 							{
 								type: "custom_message",
 								customType: CHECK_MESSAGE_TYPE,
-								content: `Harness checks still fail after ${config.maxRepairRounds} repair round(s); stopping here. Tell the user what fails and why.\n${run.lastCheckSummary}`,
+								content: `Harness checks still fail after ${config.maxRepairRounds} repair round(s); stopping here. Tell the user what fails and why.\n${run.lastCheckSummary}${backgroundNote(ctx)}`,
 								display: true,
 							},
 						],
@@ -1116,7 +1242,13 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					.join("\0");
 				const repeated = key === run.lastFailedKey;
 				run.lastFailedKey = key;
-				const feedback = formatCheckFeedback(outcomes, run.repairRound, config.maxRepairRounds, repeated);
+				const feedback = formatCheckFeedback(
+					outcomes,
+					run.repairRound,
+					config.maxRepairRounds,
+					repeated,
+					on(ctx, "blockerExit"),
+				);
 				const entries: SessionBoundaryDraft[] = [];
 				let rollbackNote = "";
 				if (repeated && on(ctx, "checkpoints") && lastGreen) {
@@ -1154,6 +1286,52 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					if (advice) entries.push(advice);
 				}
 				return { entries, continue: true };
+			}
+		}
+
+		// Implementation drift, once the checks pass or there are none: failing checks already send
+		// the model back, and weakening a test to get past them shows up here on the next settle.
+		if (on(ctx, "driftGuard") && !run.lastCheckFailed) {
+			const changes = driftInventory(ctx);
+			if (changes.length > 0 || run.shellCommands.length > 0) {
+				const signals = detectDrift({
+					request: run.prompt,
+					changes,
+					finalMessage: run.lastAssistantText,
+					verification: {
+						verifiedAfterLastChange:
+							run.verifiedAt !== undefined && run.verifiedAt >= (run.lastChangeAt ?? run.startedAt ?? 0),
+						lastCheckFailed: run.lastCheckFailed,
+					},
+					testSources: testSourcesAtStart(ctx, changes),
+					workspaceFiles: workspace()
+						.files.map((file) => file.path)
+						.filter((path) => !changes.some((change) => change.path === path && change.before === undefined)),
+					shellCommands: run.shellCommands,
+				});
+				const flagged = actionable(signals);
+				stats.driftChecks++;
+				telemetry.record({
+					type: run.driftNudged ? "drift_final" : "drift_check",
+					kinds: signals.map((signal) => signal.kind),
+					actionable: flagged.length,
+					disclosed: disclosesDeviation(run.lastAssistantText),
+				});
+				if (flagged.length > 0 && !run.driftNudged) {
+					run.driftNudged = true;
+					stats.driftNudges++;
+					return {
+						entries: [
+							{
+								type: "custom_message",
+								customType: DRIFT_MESSAGE_TYPE,
+								content: formatDriftFeedback(flagged),
+								display: true,
+							},
+						],
+						continue: true,
+					};
+				}
 			}
 		}
 
@@ -1226,6 +1404,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 				`Checks: ${checks.length > 0 ? checks.map((check) => `${check.name} (level ${check.level ?? 1}${"source" in check ? `, from ${check.source}` : ""})`).join(", ") : "none configured or detected"}`,
 				`Protected: ${["harness.json", ...config.protect].join(", ")}`,
 				`Check runs: ${stats.checkRuns} (${stats.checkFailures} failed, ${stats.repairs} repair rounds, ${stats.rollbacks} rollbacks); contract reminders: ${stats.contractNudges}`,
+				`Drift: ${stats.driftChecks} check(s), ${stats.driftNudges} fix-or-disclose request(s), ${stats.blockersAccepted} reported blocker(s) accepted`,
 				`Context packs: ${stats.packs} (${(stats.packBytes / 1024).toFixed(1)} KB)`,
 				`Context masking: ${stats.maskBatches} batch(es), ${(stats.elidedBytes / 1024).toFixed(1)} KB elided (~${Math.round(stats.elidedBytes / 4)} tokens per later request)`,
 				`Escalation: ${config.escalation.model}, ${stats.escalations} call(s), $${stats.escalationCostUsd.toFixed(4)}`,

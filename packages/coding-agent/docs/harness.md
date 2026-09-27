@@ -66,11 +66,34 @@ Checks run as a ladder: level by level, stopping at the first level that fails, 
 
 Each time the checks pass, the harness snapshots the working tree to a private ref under `refs/midnight/checkpoints/` (a commit built from a temporary index; the user's index, branches, HEAD and stash are never touched). When the same checks fail twice in a row, the harness restores the files the agent edited to the last passing snapshot and shows the model the change it reverted, so the next attempt starts from working code with the failed idea in view. Only files the agent changed with `edit` or `write` in the current request are restored; everything else, such as the user's own edits, is left alone. A snapshot from an earlier request is never used: each request starts without one. Refs are deleted when the session ends. Workspaces that are not git repositories have no snapshots.
 
+## Implementation drift
+
+Implementation drift is a change that moves away from what was asked toward something simpler or more familiar, usually when the real thing gets hard, without saying so. Example: asked to make `parsePort` reject invalid ports, a model hits a failing test, comments out the assertion, and reports "Done. All tests pass." Every check is green and the request is not done. Deviating is sometimes right; deviating silently is the failure.
+
+- **Drift guard (`driftGuard`).** When the checks pass (or there are none), the harness compares the finished change with the request: every file that differs from the start of the request, shell edits included (a git snapshot of the working tree taken when the request starts; outside git, files changed through `edit`/`write`). It reports concrete evidence, from deterministic detectors:
+  - weakened tests: assertions removed or commented out, exact assertions replaced by weak ones (`assert.ok(x !== undefined)`, `toBeDefined()`), tests skipped or narrowed (`.skip`, `.only`, `@pytest.mark.skip`), test files deleted;
+  - a test input hard-coded into source: new code compares against a literal from the tests that neither the request nor the file mentioned before;
+  - stubs (`TODO`, `not implemented`, "simplified", "for now"), swallowed errors (empty `catch`, `except: pass`, `.catch(() => {})`), and top-level functions or classes removed when the request does not name them;
+  - a blanket success claim ("all tests pass") that no check or test command made after the last change supports, and that the message does not qualify with what still fails.
+  - side effects outside the code, from the request's shell commands: a process left running in the background (`Start-Process`, `Start-Job`, `nohup`, a trailing `&`), which often stands in for a missing service, and processes ended (`Stop-Process`, `taskkill`, `kill`). When a run settles with failing checks, the message names a background process the run started.
+
+  If any of these appear, the model gets one turn per request to fix them or to say plainly in its final message what differs from the request and why. Files the request names that the change never touches are recorded, not acted on.
+- **Blocker rule (`blockerExit`).** A sanctioned way to stop instead of drifting, in three parts:
+  - one line in the system prompt: if the request cannot be done as asked (tests contradict it, something it needs is missing, it needs more than the model can do), do what is correct and say what blocks it, instead of substituting a simpler approach, stubbing, or changing tests (the same offer cut test-exploiting behavior from 54% to 9% for GPT-5 in ImpossibleBench);
+  - failing-check feedback adds that the request wins over a test that contradicts it;
+  - after one repair round, a model whose final message reports why the checks cannot pass, without claiming success, gets no further repair rounds; the failing checks are shown and the run settles.
+
+  Without the last two, the repair loop itself caused drift: facing a protected test that contradicted the request, the model restored the old behavior or special-cased the test's input to get the check to pass (0/8 correct across the harness arms of `evals/drift` pilot 01). With them it did what was asked and reported the conflict (4/4 in pilot 02).
+
+Both are on by default. `evals/drift/` has the drift benchmark, the detector checks and the results (`evals/drift/RESULTS.md`).
+
 ## Escalation
 
 When a fast model is stuck (the same checks failed twice, or it repeated itself three times), the harness asks a stronger model for one piece of advice and hands control back. The advisor gets the request, the current diff (new files included), the failing output and the model's last message, not the transcript. Default advisor: `anthropic/claude-opus-5-5`; it is used only if that model has credentials, and never when it is the session model. Limits: 2 calls per prompt, 6 per session. `/harness` shows the calls and their cost.
 
-## Independent review (Laya, local)
+## Independent review (Laya, local; off by default)
+
+Off by default (`features: { "decisions": true }` turns it on). In `evals/laya-review`, base Laya answered all four review questions at chance on held-out tasks (AUC 0.37-0.52) and cost about 7 s per review on a laptop CPU; the drift guard now covers weakened tests and unsupported claims exactly.
 
 The model that wrote a change should not be the one that decides it is done. When [Laya](https://github.com/NandhaKishorM/laya) is available, the harness asks it narrow typed questions and code applies the answers. Laya is an open-source (Apache 2.0) System One model: a ~400M-parameter encoder that returns calibrated probabilities for yes/no (`noul`), label (`choice`) and rubric (`score`) questions in one forward pass, with no generated text.
 
@@ -127,7 +150,7 @@ When the session model is the embedded MiniCPM model: only core tools stay activ
 - `level` (1-3) places a check on the ladder; configured checks without one are level 1.
 - Unknown keys and unknown feature names are rejected, so a typo does not silently disable anything.
 
-Features: `contextPack`, `parseGate`, `editRepair`, `pathHints`, `loopGuard`, `inRunChecks`, `checkpoints`, `lookup`, `diagnostics`, `escalation`, `decisions`, `masking`, `contract`, `localProfile`.
+Features: `contextPack`, `parseGate`, `editRepair`, `pathHints`, `loopGuard`, `inRunChecks`, `checkpoints`, `lookup`, `diagnostics`, `escalation`, `decisions`, `masking`, `contract`, `localProfile`, `driftGuard`, `blockerExit`.
 
 Environment:
 
@@ -148,6 +171,10 @@ node scripts/harness-eval.mjs --report evals/harness/results/<file>.jsonl
 ```
 
 The report gives, per variant: pass rate, tokens per run and per solved task, cost per solved task, turns, turns before the first edit, false "done" claims (the run ended normally and the hidden tests fail), avoidable tool errors by class, turns by category (explore, edit, verify, recover, answer), pass rate by task category, and the harness's own events. Against the first variant it gives the pass-rate difference with a 95% bootstrap interval over tasks and an exact McNemar test. Runs with a cloud model cost real tokens; `--max-cost` caps each run.
+
+Outcomes are kept apart: `artifactPassed` (the hidden grader on the final files, run even after a timeout), `unchangedOk`, `completed`, `timedOut`, `overBudget`, and `success` (all of them; `passed` is `success`). For drift, each run also records requirement-level results (graders print `REQ <id> PASS|FAIL`), whether the visible checks pass at the end (a visible pass with a hidden failure is the proxy gap), changed test files, claimed success, disclosed limitations, silent drift (claimed success, hidden failure, nothing disclosed), and drift signals computed from the final change for every run, harness on or off. The final change is saved beside the events for re-scoring (`node evals/drift/rescore.mjs <results.jsonl>`).
+
+For a designed experiment, `--manifest <file>` (format in `scripts/harness-eval-design.mjs`) fixes every arm's complete feature assignment, repeats and a seed that shuffles run order in each repeat block; the harness logs the features it actually resolved, and `scripts/harness-eval-export.mjs` refuses runs whose resolved treatment differs from the assignment when it exports to the sensitivity lab's schema (`evals/sensitivity-lab/harness_lab.py analyze`: factorial main effects, interactions and cluster-bootstrap intervals).
 
 ## Limits
 

@@ -106,6 +106,11 @@ const TEXT_EXTENSIONS = new Set([
 	".svelte",
 ]);
 
+/** Under a dependency, build, cache or tool directory (node_modules, dist, __pycache__, ...). */
+export function isGeneratedPath(path: string): boolean {
+	return path.split("/").some((part) => IGNORED_DIRS.has(part));
+}
+
 export function isTestPath(path: string): boolean {
 	return (
 		/(^|\/)(test|tests|__tests__|spec|specs)\//.test(path) ||
