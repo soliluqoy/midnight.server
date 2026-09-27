@@ -1,5 +1,7 @@
 # Development Rules
 
+Binding rules for every agent working in this repository (midnight.server, Claude Code, Codex and others). `CLAUDE.md` adds orientation only; project prompts and skills live in `.midnight.server/prompts/` and `.midnight.server/skills/`.
+
 ## Conversational Style
 
 - Keep answers short and concise
@@ -37,7 +39,7 @@
 - If you create or modify a test file, run it and iterate on test or implementation until it passes.
 - For `packages/coding-agent/test/suite/`, use `test/suite/harness.ts` + the faux provider. No real provider APIs, keys, or paid tokens.
 - When regressions tests for fixing a github issue, add a comment with the github issue number next to the test.
-- For ad-hoc scripts, `write` them to a temp file (e.g. `/tmp`), run, edit if needed, remove when done. Don't embed multi-line scripts in `bash` commands.
+- For ad-hoc scripts, write them to a temp file (e.g. `/tmp` or your scratchpad), run, edit if needed, remove when done. Don't embed multi-line scripts in `bash` commands.
 - Never commit unless the user asks.
 
 ## Dependency and Install Security
@@ -51,7 +53,7 @@
 
 ## Git
 
-Multiple pi sessions may be running in this cwd at the same time, each modifying different files. Git operations that touch unstaged, staged, or untracked files outside your own changes will stomp on other sessions' work. Follow these rules:
+Multiple agent sessions may be running in this cwd at the same time, each modifying different files. Git operations that touch unstaged, staged, or untracked files outside your own changes will stomp on other sessions' work. Follow these rules:
 
 Committing:
 
@@ -59,7 +61,13 @@ Committing:
 - Stage explicit paths (`git add <path1> <path2>`); never `git add -A` / `git add .`.
 - Before committing, run `git status` and verify you are only staging your files.
 - `packages/ai/src/models.generated.ts` may always be included alongside your files.
-- Message format: `{feat,fix,docs}[(ai,tui,agent,coding-agent)]: <commit message> (optionally multiple lines)`. Message is informative and concise.
+- Message format: `<type>(<package>): <message>`, where type is `feat`, `fix`, `docs`, `chore`, `refactor` or `test` and package is the affected package directory (`coding-agent`, `ai`, `tui`, `agent`, ...); omit `(<package>)` for repo-wide changes. Informative and concise, optionally multiple lines.
+- No AI attribution: no `Co-Authored-By` trailers or "Generated with" footers in commits or PRs.
+
+Branches and PRs:
+
+- Work on a branch off `main` (`feat/...`, `fix/...`, `docs/...`, `chore/...`), push it, and open one PR per change against `main`. Never push directly to `main`.
+- CI (`CI`, `midnight.server Windows`) must pass before merging.
 
 Never run (destroys other agents' work or bypasses checks):
 
@@ -73,17 +81,13 @@ If rebase conflicts occur:
 
 ## Issues and PRs
 
-See `CONTRIBUTING.md` for the contributor gate (auto-close workflows, `lgtm`/`lgtmi`, quality bar).
+See `CONTRIBUTING.md` for what contributors must run before a PR.
 
 When reviewing PRs:
 
 - Do not run `gh pr checkout`, `git switch`, or otherwise move the worktree to the PR branch unless the user explicitly asks.
 - Use `gh pr view`, `gh pr diff`, `gh api`, and local `git show`/`git diff` against fetched refs to inspect PR metadata, commits, and patches without changing branches.
 - If you need PR file contents, fetch/read them into temporary files or use `git show <ref>:<path>` without switching branches.
-
-When creating issues:
-
-- Add `pkg:*` labels for affected packages (`pkg:agent`, `pkg:ai`, `pkg:coding-agent`, `pkg:tui`); use all that apply.
 
 When posting issue/PR comments:
 
@@ -95,9 +99,9 @@ When closing issues via commit:
 
 - Include `fixes #<number>` or `closes #<number>` in the message so merging auto-closes the issue. For multiple issues, repeat the keyword per issue (`closes #1, closes #2`); a shared keyword (`closes #1, #2`) only closes the first.
 
-## Testing pi Interactive Mode with tmux
+## Testing Interactive Mode
 
-For testing pi's interactive mode, load and follow [.pi/skills/interactive-testing.md](.pi/skills/interactive-testing.md).
+For testing the interactive TUI, load and follow [.midnight.server/skills/interactive-testing.md](.midnight.server/skills/interactive-testing.md).
 
 ## Changelog
 
@@ -105,20 +109,23 @@ Location: `packages/*/CHANGELOG.md` (one per package).
 
 Sections under `## [Unreleased]`: `### Breaking Changes` (API changes requiring migration), `### Added`, `### Changed`, `### Fixed`, `### Removed`.
 
+Versions: releases are tagged `v<pi-version>-midnight.<n>`, e.g. `v0.87.1-midnight.2` is the second midnight.server release on the Pi 0.87.1 base. `<n>` counts up per release and restarts at 1 when the Pi base changes.
+
 Rules:
 
-- All new entries go under `## [Unreleased]`. Read the full section first and append to existing subsections; never duplicate them.
-- Released version sections (e.g. `## [0.12.2]`) are immutable; never modify them.
-- Do not create changelog entries when working on a branch other than `main` or pull request
+- Add the entry in the same branch/PR as the change, under `## [Unreleased]`. Read the full section first and append to existing subsections; never duplicate them.
+- User-facing changes in `ai`, `agent` or `tui` are also entered in `packages/coding-agent/CHANGELOG.md`; its section becomes the GitHub release notes.
+- Released sections (`## [0.87.1-midnight.2]`, and the inherited Pi sections such as `## [0.87.1]`) are immutable; never modify them.
+- Contributor PRs do not edit changelogs; the maintainer adds the entry.
 
 Attribution:
 
-- Internal (from issues): `Fixed foo bar ([#123](https://github.com/earendil-works/pi/issues/123))`
-- External contributions: `Added feature X ([#456](https://github.com/earendil-works/pi/pull/456) by [@username](https://github.com/username))`
+- Internal (from issues): `Fixed foo bar ([#123](https://github.com/soliluqoy/midnight.server/issues/123))`
+- External contributions: `Added feature X ([#456](https://github.com/soliluqoy/midnight.server/pull/456) by [@username](https://github.com/username))`
 
 ## Releasing
 
-For release preparation, publishing, verification, or recovery, load and follow [.pi/skills/release.md](.pi/skills/release.md).
+For release preparation, publishing, verification, or recovery, load and follow [.midnight.server/skills/release.md](.midnight.server/skills/release.md).
 
 ## User Override
 

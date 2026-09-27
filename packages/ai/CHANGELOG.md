@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.87.1-midnight.1] - 2026-09-27
+
 ### Fixed
 
 - Fixed GitHub Copilot Claude Opus 5.5 advertising `off` and `minimal` thinking levels once models.dev listed it with incomplete effort metadata; it now uses the same effort map as Anthropic's Opus 5.5.

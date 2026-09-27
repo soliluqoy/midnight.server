@@ -2,14 +2,25 @@
 
 ## [Unreleased]
 
+## [0.87.1-midnight.2] - 2026-09-27
+
+### Added
+
+- Added `app.message.sendNow` (Alt+N): interrupts the running turn, harness checks or compaction and sends the queued messages plus the editor text as the next prompt. The queued-message hint shows it next to the edit key.
+- Added adaptive repair feedback to the harness: repeated check failures now surface diagnostic lines hidden in long output and require a materially different repair strategy or an explicit blocker. The `adaptiveRepair` feature is enabled by default and can be ablated with `MIDNIGHT_SERVER_HARNESS_FEATURES=-adaptiveRepair`.
+
+### Fixed
+
+- Fixed the session looking idle while harness checks ran after the model's last turn: a "Finishing up" indicator now shows during settlement, prompts submitted then are visibly queued, and Esc stops the running checks and escalation instead of waiting for them to finish. `agent_before_settle` handlers receive a `signal` that aborts on interrupt.
+
+## [0.87.1-midnight.1] - 2026-09-27
+
 ### Breaking Changes
 
 - Renamed all `PI_*` environment variables to `MIDNIGHT_SERVER_*` (for example `PI_OFFLINE` is now `MIDNIGHT_SERVER_OFFLINE`, and the bash tool exports `MIDNIGHT_SERVER_SESSION_ID`, `MIDNIGHT_SERVER_MODEL`, etc.). The old names are no longer read.
 
 ### Added
 
-- Added `app.message.sendNow` (Alt+N): interrupts the running turn, harness checks or compaction and sends the queued messages plus the editor text as the next prompt. The queued-message hint shows it next to the edit key.
-- Added adaptive repair feedback to the harness: repeated check failures now surface diagnostic lines hidden in long output and require a materially different repair strategy or an explicit blocker. The `adaptiveRepair` feature is enabled by default and can be ablated with `MIDNIGHT_SERVER_HARNESS_FEATURES=-adaptiveRepair`.
 - Added bundled extensions: packages pinned in `packaging/extensions` ship in `extensions/` beside the executable and load by default, skipped when settings configure the same npm package or `MIDNIGHT_SERVER_NO_BUNDLED_EXTENSIONS` is set. The first is [pi-mcp-adapter](docs/mcp.md), so `/mcp` works on a fresh install and reads `~/.midnight.server/agent/mcp.json`.
 - Added plan and build modes. Tab in an empty editor switches; plan mode limits the model to read-only tools (`read`, `grep`, `find`, `ls`, `delegate_local`), adds a planning instruction to the system prompt, and blocks other tool calls, and build mode restores the previous tool set. The mode shows in the header, footer, sidebar and editor border.
 - Added an opencode-style session sidebar in fullscreen mode with the session title, git branch and working-tree status (changed/staged counts, ahead/behind), context usage and cost, the model, local engine and drift-watch state, and files changed this session with line counts. The `sidebar` setting (`auto`, `always`, `hidden`) and `app.sidebar.toggle` (Alt+S) control it.
@@ -55,10 +66,8 @@
 
 ### Fixed
 
-- Fixed the session looking idle while harness checks ran after the model's last turn: a "Finishing up" indicator now shows during settlement, prompts submitted then are visibly queued, and Esc stops the running checks and escalation instead of waiting for them to finish. `agent_before_settle` handlers receive a `signal` that aborts on interrupt.
 - Fixed the process crashing with "This extension ctx is stale" when a session ended while a drift-watch check was running, for example at the end of a `-p` run.
 - Fixed the `bash` and `powershell` tool guidelines telling the model to inspect `PI_*` environment variables; the tools export `MIDNIGHT_SERVER_*`.
-
 - Fixed a duplicated footer line (and a stray "Starting local engine..." line) when the local engine started during an interactive session: engine progress was written straight to stderr underneath the TUI. It now shows in the footer and sidebar.
 - Fixed `--version`, `--help`, `--export`, `--list-models` and package/auth subcommands starting (and on a fresh install downloading) the local model when no provider is configured.
 - Fixed the startup update notice comparing against upstream Pi releases; it now checks midnight.server GitHub releases and links to the release page.
