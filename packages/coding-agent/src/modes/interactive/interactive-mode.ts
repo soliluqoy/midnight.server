@@ -494,6 +494,8 @@ export class InteractiveMode {
 	private workingVisible = true;
 	private workingIndicatorOptions: WorkingIndicatorOptions | undefined = undefined;
 	private readonly defaultWorkingMessage = "Working";
+	/** True while extensions run pre-settlement work (harness checks) after the model's last turn. */
+	private settling = false;
 	private readonly defaultHiddenThinkingLabel = "Thinking...";
 	private hiddenThinkingLabel = this.defaultHiddenThinkingLabel;
 
@@ -1084,6 +1086,7 @@ export class InteractiveMode {
 				rawKeyHint("!!", "to run bash (no context)"),
 				hint("app.message.followUp", "to queue follow-up"),
 				hint("app.message.dequeue", "to edit all queued messages"),
+				hint("app.message.sendNow", "to interrupt and send queued messages now"),
 				hint("app.clipboard.pasteImage", "to paste image (with text fallback)"),
 				rawKeyHint("drop files", "to attach"),
 				keyHint("app.agentMode.toggle", "to switch plan/build (empty editor)"),
@@ -2235,11 +2238,17 @@ export class InteractiveMode {
 		this.showStatusIndicator(
 			new WorkingStatusIndicator(
 				this.ui,
-				this.workingMessage ?? this.defaultWorkingMessage,
+				this.workingMessage ?? this.idleWorkingMessage(),
 				this.workingIndicatorOptions,
 				colorFn,
 			),
 		);
+	}
+
+	/** The working message when no extension has set one. */
+	private idleWorkingMessage(): string {
+		if (!this.settling) return this.defaultWorkingMessage;
+		return `Finishing up (${keyText("app.interrupt")} to stop, ${keyText("app.message.sendNow")} to send now)`;
 	}
 
 	private setWorkingVisible(visible: boolean): void {
@@ -2526,7 +2535,7 @@ export class InteractiveMode {
 			setWorkingMessage: (message) => {
 				this.workingMessage = message;
 				if (this.activeStatusIndicator?.kind === "working") {
-					this.activeStatusIndicator.setMessage(message ?? this.defaultWorkingMessage);
+					this.activeStatusIndicator.setMessage(message ?? this.idleWorkingMessage());
 				}
 			},
 			setWorkingVisible: (visible) => this.setWorkingVisible(visible),
@@ -3229,6 +3238,7 @@ export class InteractiveMode {
 		);
 		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
+		this.defaultEditor.onAction("app.message.sendNow", () => void this.handleSendNow());
 		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
 		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
 		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
@@ -3776,6 +3786,22 @@ export class InteractiveMode {
 
 			case "agent_settled":
 				await this.checkShutdownRequested();
+				break;
+
+			// Harness checks run after agent_end cleared the spinner; without one the session looks idle
+			// while submissions are still queued.
+			case "settle_start":
+				this.settling = true;
+				if (this.workingVisible && this.activeStatusIndicator?.kind !== "working") {
+					this.showWorkingStatusIndicator();
+				}
+				this.ui.requestRender();
+				break;
+
+			case "settle_end":
+				this.settling = false;
+				this.clearStatusIndicator("working");
+				this.ui.requestRender();
 				break;
 
 			case "compaction_start": {
@@ -4635,6 +4661,33 @@ export class InteractiveMode {
 		}
 	}
 
+	/**
+	 * Interrupt the running work (a turn, harness checks, compaction) and send the queued messages
+	 * plus the editor text as the next prompt right away.
+	 */
+	private async handleSendNow(): Promise<void> {
+		if (this.sideThreads.isComposing()) return;
+		const current = (this.editor.getExpandedText?.() ?? this.editor.getText()).trim();
+		if (!this.session.isStreaming && !this.session.isCompacting) {
+			if (current && this.editor.onSubmit) {
+				this.editor.setText("");
+				this.editor.onSubmit(current);
+			}
+			return;
+		}
+		const { steering, followUp } = this.clearAllQueues();
+		this.updatePendingMessagesDisplay();
+		const text = [...steering, ...followUp, current].filter((part) => part.trim()).join("\n\n");
+		if (!text) {
+			this.showStatus("No queued messages to send");
+			return;
+		}
+		this.editor.setText("");
+		this.showStatus("Interrupting to send now...");
+		await this.session.abort();
+		this.defaultEditor.onSubmit?.(text);
+	}
+
 	private handleDequeue(): void {
 		const restored = this.restoreQueuedMessagesToEditor();
 		if (restored === 0) {
@@ -4849,7 +4902,11 @@ export class InteractiveMode {
 				this.pendingMessagesContainer.addChild(new TruncatedText(text, 1, 0));
 			}
 			const dequeueHint = this.getAppKeyDisplay("app.message.dequeue");
-			const hintText = theme.fg("dim", `↳ ${dequeueHint} to edit all queued messages`);
+			const sendNowHint = this.getAppKeyDisplay("app.message.sendNow");
+			const hintText = theme.fg(
+				"dim",
+				`↳ ${dequeueHint} to edit all queued messages, ${sendNowHint} to interrupt and send now`,
+			);
 			this.pendingMessagesContainer.addChild(new TruncatedText(hintText, 1, 0));
 		}
 	}
@@ -6939,6 +6996,7 @@ export class InteractiveMode {
 		const copyMessage = this.getAppKeyDisplay("app.message.copy");
 		const followUp = this.getAppKeyDisplay("app.message.followUp");
 		const dequeue = this.getAppKeyDisplay("app.message.dequeue");
+		const sendNow = this.getAppKeyDisplay("app.message.sendNow");
 		const pasteImage = this.getAppKeyDisplay("app.clipboard.pasteImage");
 
 		let hotkeys = `
@@ -6983,6 +7041,7 @@ export class InteractiveMode {
 | \`${copyMessage}\` | Copy selection or last assistant message |
 | \`${followUp}\` | Queue follow-up message |
 | \`${dequeue}\` | Restore queued messages |
+| \`${sendNow}\` | Interrupt and send queued messages now |
 | \`${pasteImage}\` | Paste image or text from clipboard |
 | \`/\` | Slash commands |
 | \`!\` | Run bash command |
