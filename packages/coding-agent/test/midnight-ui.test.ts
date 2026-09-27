@@ -9,19 +9,14 @@ import { collectSessionFileChanges, countPatchLines } from "../src/core/session-
 import { type SessionEntry, SessionManager } from "../src/core/session-manager.ts";
 import agentModeExtension, { PLAN_MODE_TOOLS } from "../src/extensions/agent-mode.ts";
 import { cleanSessionTitle, generateSessionTitle, type TitleCompleter } from "../src/midnight/session-title.ts";
-import {
-	getMidnightStatus,
-	onMidnightStatusChange,
-	reportMidnightActivity,
-	updateMidnightStatus,
-} from "../src/midnight/status.ts";
+import { getMidnightStatus, onMidnightStatusChange, updateMidnightStatus } from "../src/midnight/status.ts";
 import { FooterComponent } from "../src/modes/interactive/components/footer.ts";
-import { describeDrift, describeGitStatus, SidebarComponent } from "../src/modes/interactive/components/sidebar.ts";
+import { describeGitStatus, SidebarComponent } from "../src/modes/interactive/components/sidebar.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 afterEach(() => {
-	updateMidnightStatus({ mode: undefined, engine: "off", drift: undefined, agentMode: "build" });
+	updateMidnightStatus({ agentMode: "build" });
 });
 
 describe("parseGitStatusPorcelainV2", () => {
@@ -179,7 +174,7 @@ function createFakePi(allTools: string[], active: string[]) {
 }
 
 describe("agent mode extension", () => {
-	const all = ["read", "bash", "edit", "write", "grep", "find", "ls", "delegate_local", "task", "custom"];
+	const all = ["read", "bash", "edit", "write", "grep", "find", "ls", "custom"];
 
 	it("restricts tools in plan mode and restores the build loadout afterwards", () => {
 		const fake = createFakePi(all, ["read", "bash", "edit", "write", "custom"]);
@@ -251,18 +246,15 @@ describe("sidebar and footer", () => {
 		initTheme(undefined, false);
 	});
 
-	it("describes git and drift state compactly", () => {
+	it("describes git state compactly", () => {
 		expect(describeGitStatus(gitStatus.getStatus())).toEqual(["↑1", "3 changed", "1 staged"]);
 		expect(describeGitStatus({ staged: 0, unstaged: 0, untracked: 0, conflicted: 0, changedFiles: 0 })).toEqual([
 			"clean",
 		]);
-		expect(describeDrift(getMidnightStatus())).toBe("off");
-		updateMidnightStatus({ drift: { checking: false, lastVerdict: "drifting", turnsUntilCheck: 4 } });
-		expect(describeDrift(getMidnightStatus())).toBe("drifting");
 	});
 
-	it("renders session, git, context, model, local and modified-file sections within width", () => {
-		updateMidnightStatus({ mode: "hybrid", engine: "ready", agentMode: "plan" });
+	it("renders session, git, context, model and modified-file sections within width", () => {
+		updateMidnightStatus({ agentMode: "plan" });
 		const sidebar = new SidebarComponent({
 			session: createSession,
 			footerData: createFooterData(),
@@ -275,14 +267,13 @@ describe("sidebar and footer", () => {
 		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(36);
 		const text = stripAnsi(lines.join("\n"));
 		for (const expected of [
-			"PLAN tab to switch",
+			" PLAN  tab or click to switch",
 			"Fix date parsing",
 			"feature/sidebar",
 			"↑1 · 3 changed · 1 staged",
 			"42%",
 			"claude-sonnet-5",
 			"anthropic · thinking high",
-			"engine ready",
 			"src/a.ts",
 			"+1 -1",
 		]) {
@@ -313,48 +304,78 @@ describe("sidebar and footer", () => {
 		expect(footerText()).toContain("• Renamed");
 	});
 
-	it("shows the mode badge, branch, dirty count and local status in the footer", () => {
-		updateMidnightStatus({ mode: "hybrid", engine: "ready" });
+	it("shows the mode badge, branch and dirty count in the footer", () => {
 		const footer = new FooterComponent(createSession(), createFooterData(), gitStatus);
 		const first = stripAnsi(footer.render(240)[0]!);
-		expect(first.startsWith("BUILD ")).toBe(true);
+		expect(first.startsWith(" BUILD  ")).toBe(true);
 		expect(first).toContain("⎇ feature/sidebar ●3 ↑1");
-		expect(first).toContain("☾ hybrid · local ready");
 		for (const line of footer.render(40)) expect(visibleWidth(line)).toBeLessThanOrEqual(40);
 	});
 
 	it("drops to one line with the model when the sidebar is visible", () => {
-		updateMidnightStatus({ mode: "hybrid", engine: "ready" });
 		const footer = new FooterComponent(createSession(), createFooterData(), gitStatus, () => true);
 		const lines = footer.render(240).map(stripAnsi);
 		expect(lines).toHaveLength(1);
 		expect(lines[0]).not.toContain("⎇");
 		expect(lines[0]).toContain("claude-sonnet-5 • high");
-		expect(lines[0]).not.toContain("☾");
 	});
 
-	it("routes engine progress into the status while a UI is subscribed instead of writing to stderr", () => {
-		const writes: string[] = [];
-		const write = process.stderr.write;
-		process.stderr.write = ((chunk: string) => {
-			writes.push(chunk);
-			return true;
-		}) as typeof process.stderr.write;
-		const unsubscribe = onMidnightStatusChange(() => {});
-		try {
-			updateMidnightStatus({ mode: "hybrid", engine: "starting" });
-			reportMidnightActivity("Starting local engine...");
-			expect(writes).toEqual([]);
-			expect(getMidnightStatus().activity).toBe("Starting local engine...");
-			const footer = new FooterComponent(createSession(), createFooterData(), gitStatus);
-			expect(stripAnsi(footer.render(240)[0]!)).toContain("☾ hybrid · Starting local engine...");
-			unsubscribe();
-			reportMidnightActivity("Preparing local model...");
-			expect(writes).toEqual(["Preparing local model...\n"]);
-		} finally {
-			unsubscribe();
-			process.stderr.write = write;
-			updateMidnightStatus({ activity: undefined });
-		}
+	it("runs the sidebar's actions for clicks on the mode chip, the model and a modified file", () => {
+		const actions: string[] = [];
+		const sidebar = new SidebarComponent({
+			session: createSession,
+			footerData: createFooterData(),
+			gitStatus,
+			getHeight: () => 40,
+			agentModeKey: () => "tab",
+			onToggleAgentMode: () => actions.push("mode"),
+			onSelectModel: () => actions.push("model"),
+			onOpenFile: (path) => actions.push(`file:${path}`),
+		});
+		const rows = sidebar.render(36).map(stripAnsi);
+		const click = (text: string) => {
+			const y = rows.findIndex((row) => row.includes(text));
+			expect(y).toBeGreaterThanOrEqual(0);
+			const event = { button: "left", x: 4, y, screenX: 4, screenY: y, width: 36, height: 40 } as const;
+			sidebar.handleMouse({ ...event, type: "press", shift: false, alt: false, ctrl: false });
+			return sidebar.handleMouse({ ...event, type: "click", shift: false, alt: false, ctrl: false });
+		};
+		expect(click("BUILD")?.handled).toBe(true);
+		expect(click("claude-sonnet-5")?.handled).toBe(true);
+		expect(click("src/a.ts")?.handled).toBe(true);
+		expect(click("Fix date parsing")).toBeUndefined();
+		expect(actions).toEqual(["mode", "model", "file:src/a.ts"]);
+	});
+
+	it("toggles the mode on a click on the footer's chip only", () => {
+		let toggles = 0;
+		const footer = new FooterComponent(createSession(), createFooterData(), gitStatus);
+		footer.onToggleAgentMode = () => toggles++;
+		const base = {
+			button: "left",
+			screenX: 0,
+			screenY: 0,
+			width: 240,
+			height: 2,
+			shift: false,
+			alt: false,
+			ctrl: false,
+		} as const;
+		footer.handleMouse({ ...base, type: "click", x: 3, y: 0 });
+		footer.handleMouse({ ...base, type: "click", x: 20, y: 0 });
+		footer.handleMouse({ ...base, type: "click", x: 3, y: 1 });
+		expect(toggles).toBe(1);
+	});
+
+	it("notifies subscribers of agent mode changes until they unsubscribe", () => {
+		let calls = 0;
+		const unsubscribe = onMidnightStatusChange(() => {
+			calls++;
+		});
+		updateMidnightStatus({ agentMode: "plan" });
+		expect(getMidnightStatus().agentMode).toBe("plan");
+		unsubscribe();
+		updateMidnightStatus({ agentMode: "build" });
+		expect(calls).toBe(1);
 	});
 });

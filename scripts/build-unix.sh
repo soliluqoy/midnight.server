@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Build the midnight.server Linux/macOS distribution layout (without the model) for
-# the host platform. The Windows equivalent is scripts/build.ps1.
+# Build the midnight.server Linux/macOS distribution layout for the host platform. The Windows equivalent is scripts/build.ps1.
 #
 # 1. Compiles the CLI from TypeScript sources with the pinned Bun into one executable.
 # 2. Copies runtime assets beside it, as Pi's release layout expects.
-# 3. Installs the pinned, SHA-256-verified llama.cpp engine into engine/<backend>,
-#    using the built CLI's own `engine fetch`.
+# 3. Installs the bundled extensions.
 # 4. Writes licenses and release-manifest.json (per-file SHA-256).
 #
 # Output: build/dist/midnight.server-<platform>/
@@ -28,8 +26,6 @@ case "$(uname -m)" in
 	*) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 platform="$os-$arch"
-# The backend every machine can run; `auto` may later pick a GPU build per user.
-if [[ "$platform" == darwin-arm64 ]]; then backend=metal; else backend=cpu; fi
 out="${OUT_DIR:-$repo_root/build/dist/midnight.server-$platform}"
 
 want_bun="$(node -p "require('$repo_root/scripts/toolchain.lock.json').bun.version")"
@@ -79,34 +75,13 @@ cp -R "$bundled/node_modules" "$out/extensions/"
 # agents back the async check() and are never loaded.
 rm -rf "$out/extensions/node_modules/.bin" "$out/extensions/node_modules"/recheck-*
 
-step "Installing engine ($backend)"
-# The built CLI downloads, verifies and unpacks its own pinned engine, so the bundled
-# copy is laid out (and marked) exactly like a first-run download.
-# .cache/engine-home keeps it between builds.
-fetched="$(MIDNIGHT_SERVER_HOME="$repo_root/.cache/engine-home" "$out/midnight.server" engine fetch "$backend" 2>&1)" || {
-	echo "$fetched" >&2
-	exit 1
-}
-engine_root="$(printf '%s\n' "$fetched" | sed -n 's/^Engine installed: //p' | tail -n 1)"
-if [[ -z "$engine_root" ]]; then
-	echo "engine fetch did not report an install directory:" >&2
-	echo "$fetched" >&2
-	exit 1
-fi
-mkdir -p "$out/engine"
-cp -R "$engine_root" "$out/engine/$backend"
-server="$(node -p "require('$out/engine/$backend/.midnight-engine.json').server")"
-[[ -x "$out/engine/$backend/$server" ]] || { echo "Bundled engine is missing $server" >&2; exit 1; }
-
 step "Writing licenses and notices"
-mkdir -p "$out/licenses" "$out/models"
+mkdir -p "$out/licenses"
 cp "$repo_root/LICENSE" "$out/licenses/pi-LICENSE.txt"
-cp "$repo_root"/packaging/licenses/* "$out/licenses/"
 cp "$repo_root/packaging/THIRD_PARTY_NOTICES.md" "$out/"
-cp "$repo_root/models/minicpm5-2b-q8_0.lock.json" "$out/models/model-manifest.json"
 
 step "Writing release-manifest.json"
-node "$repo_root/scripts/write-release-manifest.mjs" "$out" "$platform" "$backend" "$out/engine/$backend"
+node "$repo_root/scripts/write-release-manifest.mjs" "$out" "$platform"
 
 echo ""
-echo "Built $out ($(du -sh "$out" | cut -f1), without model)"
+echo "Built $out ($(du -sh "$out" | cut -f1))"

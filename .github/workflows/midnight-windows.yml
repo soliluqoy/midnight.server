@@ -5,11 +5,6 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
-    inputs:
-      model:
-        description: "Download the 2.5 GiB model and run real-inference tests"
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -34,34 +29,23 @@ jobs:
       - name: Check
         run: npm run check
 
-      - name: midnight unit tests (no model)
+      - name: midnight and harness tests
         working-directory: packages/coding-agent
         run: >-
           node ../../node_modules/vitest/dist/cli.js --run
-          test/midnight-local-runtime.test.ts test/midnight-helper.test.ts test/midnight-download.test.ts
-          test/midnight-model-integrity.test.ts test/midnight-config.test.ts test/suite/midnight-delegate.test.ts
+          test/midnight-config.test.ts test/midnight-ui.test.ts test/harness-units.test.ts
+          test/harness-v2.test.ts test/harness-drift.test.ts test/suite/harness.test.ts
+          test/suite/harness-v2.test.ts test/suite/harness-drift.test.ts
 
-      - name: Build and package (no model)
+      - name: Eval script tests
+        run: node --test scripts/harness-eval-design.test.mjs scripts/harness-eval-stats.test.mjs
+
+      - name: Build and package
         shell: pwsh
         run: |
           .\scripts\build.ps1
           .\scripts\package.ps1
           .\scripts\verify-release.ps1 -Package dist\midnight.server-windows-x64.zip
-
-      - name: Real-model tests
-        if: ${{ inputs.model }}
-        shell: pwsh
-        env:
-          MIDNIGHT_SERVER_ENGINE_TESTS: "1"
-        run: |
-          .\scripts\fetch-model.ps1
-          New-Item -ItemType Directory -Force build\engine | Out-Null
-          Copy-Item -Recurse build\dist\midnight.server-windows-x64-cpu\engine\cpu build\engine\cpu
-          Push-Location packages\coding-agent
-          node ..\..\node_modules\vitest\dist\cli.js --run test/midnight-engine.integration.test.ts
-          Pop-Location
-          .\scripts\package.ps1 -IncludeModel
-          .\scripts\verify-release.ps1 -Package dist\midnight.server-windows-x64-offline.zip -Smoke
 
       - name: Upload app archive
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

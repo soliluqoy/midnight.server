@@ -104,36 +104,20 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
-      - name: Engine host tests
-        working-directory: packages/coding-agent
-        run: node ../../node_modules/vitest/dist/cli.js --run test/midnight-engine-host.test.ts
-
       - name: Build and package
         run: |
           bash scripts/build-unix.sh
           # A dry run of a branch falls back to the package version.
           case "$RELEASE_TAG" in v*) bash scripts/package-unix.sh "$RELEASE_TAG" ;; *) bash scripts/package-unix.sh ;; esac
 
-      - name: Cache model
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .cache/model-home/models
-          key: model-${{ hashFiles('models/minicpm5-2b-q8_0.lock.json') }}
-
-      - name: Fetch model
-        run: MIDNIGHT_SERVER_HOME="$PWD/.cache/model-home" "build/dist/midnight.server-${{ matrix.platform }}/midnight.server" model fetch
-
-      - name: Verify (engine smoke and kill test)
-        run: |
-          model="$(ls "$PWD"/.cache/model-home/models/*.gguf | head -n 1)"
-          MIDNIGHT_SERVER_MODEL="$model" node scripts/verify-release.mjs "dist/midnight.server-${{ matrix.platform }}.tar.gz" --smoke
+      - name: Verify
+        run: node scripts/verify-release.mjs "dist/midnight.server-${{ matrix.platform }}.tar.gz"
 
       - name: Verify the .deb installs
         if: matrix.platform == 'linux-x64'
         run: |
           sudo apt-get install -y ./dist/midnight.server-linux-x64.deb
           midnight.server --version
-          midnight.server engine status
           sudo apt-get remove -y midnight.server
 
       - name: Upload

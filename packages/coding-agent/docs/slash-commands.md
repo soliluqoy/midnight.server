@@ -14,7 +14,6 @@ Extensions, prompt templates, and skills can add commands. The command menu in m
 | `/scoped-models` | Configure the models used by interactive cycling |
 | `/login [provider]` | Add provider authentication |
 | `/logout` | Remove provider authentication |
-| `/llama` | Manage models on the configured llama.cpp router |
 
 ## Sessions and context
 

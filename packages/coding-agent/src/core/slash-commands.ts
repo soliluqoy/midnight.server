@@ -36,7 +36,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{
 		name: "ask",
 		description: "Side question about the newest tool call or reply; answer stays out of the main context",
-		argumentHint: "[@local|@same|@provider/model] [question]",
+		argumentHint: "[@same|@provider/model] [question]",
 	},
 	{ name: "changelog", description: "Show changelog entries" },
 	{ name: "hotkeys", description: "Show all keyboard shortcuts" },

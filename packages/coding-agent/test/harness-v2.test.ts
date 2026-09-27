@@ -107,16 +107,9 @@ describe("masking scaled to the window", () => {
 });
 
 describe("features and model classes", () => {
-	it("classifies by provider and list price", () => {
-		expect(classifyModel({ provider: "midnight", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } })).toBe(
-			"local",
-		);
-		expect(
-			classifyModel({ provider: "anthropic", cost: { input: 5, output: 25, cacheRead: 0, cacheWrite: 0 } }),
-		).toBe("frontier");
-		expect(
-			classifyModel({ provider: "deepseek", cost: { input: 0.1, output: 0.4, cacheRead: 0, cacheWrite: 0 } }),
-		).toBe("fast");
+	it("classifies by list price", () => {
+		expect(classifyModel({ cost: { input: 5, output: 25, cacheRead: 0, cacheWrite: 0 } })).toBe("frontier");
+		expect(classifyModel({ cost: { input: 0.1, output: 0.4, cacheRead: 0, cacheWrite: 0 } })).toBe("fast");
 		expect(classifyModel(undefined)).toBe("fast");
 	});
 
@@ -125,9 +118,9 @@ describe("features and model classes", () => {
 		expect(resolveFeatures("frontier", {}, {}).escalation).toBe(false);
 		expect(resolveFeatures("fast", { contextPack: false }, {}).contextPack).toBe(false);
 		expect(resolveFeatures("fast", { contextPack: false }, { contextPack: true }).contextPack).toBe(true);
-		expect(parseFeatureOverrides("-contextPack, +contract,lookup")).toEqual({
+		expect(parseFeatureOverrides("-contextPack, +escalation,lookup")).toEqual({
 			contextPack: false,
-			contract: true,
+			escalation: true,
 			lookup: true,
 		});
 		expect(() => parseFeatureOverrides("-nope")).toThrow(/unknown feature/);
@@ -142,7 +135,7 @@ describe("features and model classes", () => {
 		expect(config.features).toEqual({ contextPack: false });
 		expect(config.escalation.maxCallsPerPrompt).toBe(1);
 		expect(config.checks[0].level).toBe(3);
-		expect(config.contract).toBe(false);
+		expect(() => parseHarnessConfig({ contract: true })).toThrow(/Unknown key "contract"/);
 		expect(() => parseHarnessConfig({ features: { typo: true } })).toThrow(/Unknown feature/);
 		expect(() => parseHarnessConfig({ escalation: { model: "opus" } })).toThrow(/provider\/model-id/);
 		expect(() => parseHarnessConfig({ checks: [{ name: "t", command: ["x"], level: 4 }] })).toThrow(/1, 2 or 3/);

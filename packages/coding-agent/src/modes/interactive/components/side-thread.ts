@@ -1,15 +1,10 @@
 import { type Component, Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { SideThread, SideThreadModelRef, SideThreadTurn } from "../../../core/side-threads.ts";
+import type { SideThread, SideThreadTurn } from "../../../core/side-threads.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { firstKeyText } from "./keybinding-hints.ts";
 
 const INDENT = "  ";
 const BAR = "│ ";
-
-export function modelRefLabel(ref: SideThreadModelRef): string {
-	if (ref.kind === "local") return "local";
-	return ref.id;
-}
 
 function firstLine(text: string, max = 60): string {
 	const line = text.replace(/\s+/g, " ").trim();
@@ -26,13 +21,12 @@ function elapsed(turn: SideThreadTurn): string {
 
 /** One line for a folded thread: count, models, and the latest exchange. */
 export function renderFoldedThread(thread: SideThread, width: number): string[] {
-	const models = [...new Set(thread.turns.map((turn) => modelRefLabel(turn.model)))].join(", ");
+	const models = [...new Set(thread.turns.map((turn) => turn.model.id))].join(", ");
 	const last = thread.turns[thread.turns.length - 1];
 	let summary = "";
 	if (last?.status === "running") summary = theme.fg("warning", ` answering… ${elapsed(last)}`);
 	else if (last?.status === "error") summary = theme.fg("error", ` ${firstLine(last.error ?? "failed", 50)}`);
 	else if (last?.status === "aborted") summary = theme.fg("muted", " stopped");
-	else if (last?.origin === "drift") summary = theme.fg("warning", ` ${firstLine(last.answer, 80)}`);
 	else if (last) summary = theme.fg("muted", ` "${firstLine(last.question, 30)}" → ${firstLine(last.answer, 50)}`);
 	const sent = thread.sentTurns > 0 ? theme.fg("dim", " · sent to main") : "";
 	const line = `${INDENT}${theme.fg("accent", `▸ ${turnWord(thread.turns.length)}`)}${theme.fg("dim", " · ")}${theme.fg("accent", models)}${summary}${sent}`;
@@ -44,7 +38,7 @@ export function renderFoldedThread(thread: SideThread, width: number): string[] 
  * Markdown so code blocks and lists render like the main transcript.
  */
 export function renderOpenThread(thread: SideThread, width: number): string[] {
-	const models = [...new Set(thread.turns.map((turn) => modelRefLabel(turn.model)))].join(", ");
+	const models = [...new Set(thread.turns.map((turn) => turn.model.id))].join(", ");
 	const lines = [
 		truncateToWidth(
 			`${INDENT}${theme.fg("accent", "▾ thread")}${theme.fg("dim", " · ")}${theme.fg("accent", models)}${theme.fg("muted", `  ${turnWord(thread.turns.length)}`)}`,
@@ -56,11 +50,11 @@ export function renderOpenThread(thread: SideThread, width: number): string[] {
 	const markdownTheme = getMarkdownTheme();
 	for (const [index, turn] of thread.turns.entries()) {
 		if (index > 0) lines.push(bar);
-		const asker = turn.origin === "drift" ? theme.fg("warning", "drift watch") : theme.fg("accent", "you");
+		const asker = theme.fg("accent", "you");
 		for (const line of wrapTextWithAnsi(`${asker}  ${turn.question}`, innerWidth)) {
 			lines.push(bar + line);
 		}
-		const who = theme.fg("accent", modelRefLabel(turn.model));
+		const who = theme.fg("accent", turn.model.id);
 		if (turn.answer.trim()) {
 			lines.push(bar + who);
 			for (const line of new Markdown(turn.answer, 0, 0, markdownTheme).render(innerWidth)) lines.push(bar + line);

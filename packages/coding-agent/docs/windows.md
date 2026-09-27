@@ -36,14 +36,10 @@ JSON uses backslashes for escape sequences. When you write a Windows path with b
 
 Without `shellPath`, the `bash` tool looks for Git Bash under `Program Files` or `Program Files (x86)`, then `bash.exe` on `PATH`. See [Configure shell commands](shell-aliases.md) for command prefixes, aliases, and the complete shell-resolution behavior.
 
-## Local model
-
-See [the midnight.server README](../../../README.md) for `--local`, `--hybrid`, `model fetch`, `engine fetch` and `doctor`. The engine runs in a Windows Job Object owned by the CLI, so it exits when the CLI exits, including after a crash.
-
 ## Configure Windows Terminal
 
 Windows Terminal reserves or rewrites some modified keys. See [Windows Terminal](terminal-setup.md#windows-terminal) to configure `Shift+Enter` and `Alt+Enter`, and [Keybindings](keybindings.md) for midnight.server's Windows and WSL shortcut defaults.
 
 ## Security note
 
-A shell tool runs with your user's full permissions. midnight.server does not sandbox PowerShell or Bash. The local helper (`delegate_local`, `helper`) has no shell access and reads only the files it is given inside the workspace.
+A shell tool runs with your user's full permissions. midnight.server does not sandbox PowerShell or Bash.

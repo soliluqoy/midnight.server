@@ -21,7 +21,6 @@ import {
 	deleteSideThreadFile,
 	formatThreadForBranch,
 	formatThreadForMain,
-	LOCAL_EXCERPT_CHARS,
 	latestAnchor,
 	recentTranscript,
 	type SideThread,
@@ -37,12 +36,6 @@ const model = {
 	api: "openai-completions",
 	maxTokens: 32_000,
 } as unknown as Model<Api>;
-const local = {
-	id: "minicpm5-2b-q8_0",
-	provider: "midnight",
-	api: "openai-completions",
-	maxTokens: 8192,
-} as Model<Api>;
 
 function thread(overrides: Partial<SideThread> = {}): SideThread {
 	return {
@@ -100,7 +93,7 @@ describe("side thread store", () => {
 		store.getOrCreate("tool:call-1", "bash ls", "output").turns.push({
 			question: "why?",
 			answer: "partial",
-			model: { provider: "midnight", id: "minicpm5-2b-q8_0", kind: "local" },
+			model: { provider: "cloud", id: "cloud-model", kind: "other" },
 			status: "running",
 			startedAt: 1,
 		});
@@ -189,34 +182,6 @@ describe("side thread requests", () => {
 		expect(request.context.tools).toBeUndefined();
 		expect(request.context.messages).toHaveLength(1);
 		expect(userText(request)).toContain("User: fix the lint errors");
-	});
-
-	it("gives the local model only the clipped item and prior answers", () => {
-		const request = buildSideThreadRequest({
-			model: local,
-			kind: "local",
-			thread: thread({
-				excerpt: "x".repeat(50_000),
-				turns: [
-					{
-						question: "first?",
-						answer: "first answer",
-						model: { provider: "midnight", id: local.id, kind: "local" },
-						status: "done",
-						startedAt: 1,
-					},
-				],
-			}),
-			question: "second?",
-			lastRequest: undefined,
-			transcript: [{ role: "user", content: "secret main prompt", timestamp: 1 }] as AgentMessage[],
-			signal,
-		});
-		const text = userText(request);
-		expect(text).not.toContain("secret main prompt");
-		expect(text).toContain("Q: first?\nA: first answer");
-		expect(text.length).toBeLessThan(LOCAL_EXCERPT_CHARS + 2000);
-		expect(request.options.maxTokens).toBe(1024);
 	});
 
 	it("keeps recent conversation text within its budget, newest last", () => {
@@ -319,14 +284,6 @@ describe("branching from a side thread", () => {
 });
 
 describe("shared thread store", () => {
-	const finding = {
-		question: "Drift check: is the agent still on track?",
-		answer: "[check: drifting] lost the goal",
-		model: { provider: "midnight", id: "minicpm5-2b-q8_0", kind: "local" as const },
-		status: "done" as const,
-		startedAt: 1,
-		origin: "drift" as const,
-	};
 	const anchor = { id: "tool:call-1", label: "bash npm run check", excerpt: "Tool call: bash" };
 
 	it("gives every writer of a session the same store and tells subscribers about saves", () => {
@@ -336,19 +293,11 @@ describe("shared thread store", () => {
 		expect(sideThreadStoreFor(SessionManager.inMemory())).not.toBe(store);
 		let changes = 0;
 		const unsubscribe = store.subscribe(() => changes++);
-		store.appendTurn(anchor, finding);
+		store.getOrCreate(anchor.id, anchor.label, anchor.excerpt);
+		store.save();
 		unsubscribe();
-		store.appendTurn(anchor, finding);
+		store.save();
 		expect(changes).toBe(1);
-		expect(store.get(anchor.id)?.turns).toHaveLength(2);
-	});
-
-	it("adds a finding before a running answer so the running turn stays last", () => {
-		const store = sideThreadStoreFor(SessionManager.inMemory());
-		const thread = store.getOrCreate(anchor.id, anchor.label, anchor.excerpt);
-		thread.turns.push({ ...finding, question: "mine", status: "running", origin: undefined });
-		store.appendTurn(anchor, finding);
-		expect(thread.turns.map((turn) => turn.status)).toEqual(["done", "running"]);
 	});
 
 	it("finds the newest item: the last tool call of the newest reply that made one, else its text", () => {

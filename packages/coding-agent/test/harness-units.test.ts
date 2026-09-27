@@ -1,7 +1,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import type { ProjectedSessionEntry } from "../src/core/session-manager.ts";
@@ -15,19 +14,9 @@ import {
 	workspaceRelative,
 } from "../src/harness/checks.ts";
 import { DEFAULT_CHECK_TIMEOUT_MS, defaultHarnessConfig, parseHarnessConfig } from "../src/harness/config.ts";
-import {
-	ContractError,
-	createContract,
-	formatContract,
-	latestContract,
-	openCriteria,
-	updateContract,
-} from "../src/harness/contract.ts";
 import harnessExtension from "../src/harness/extension.ts";
 import { remapForeignPath, repairPowerShellCommand } from "../src/harness/interface-repair.ts";
-import { capToolOutput, splitContextFiles, withGreedyDefault } from "../src/harness/local-profile.ts";
 import { planMasking } from "../src/harness/masking.ts";
-import { labelProbabilities } from "../src/midnight/gate.ts";
 
 describe("harness config", () => {
 	it("fills defaults and validates checks", () => {
@@ -50,55 +39,6 @@ describe("harness config", () => {
 		[{ masking: { batchBytes: "big" } }, /masking.batchBytes/],
 	])("rejects %j", (value, message) => {
 		expect(() => parseHarnessConfig(value)).toThrow(message);
-	});
-});
-
-describe("task contract", () => {
-	const base = { objective: "Fix the parser", constraints: ["no new deps"], criteria: ["tests pass", "handles NaN"] };
-
-	it("requires an objective and at least one criterion", () => {
-		expect(() => createContract({ objective: " ", criteria: ["x"] })).toThrow(ContractError);
-		expect(() => createContract({ objective: "x", criteria: [" "] })).toThrow(/at least one/);
-	});
-
-	it("requires evidence to mark a criterion and reports what stays open", () => {
-		const contract = createContract(base);
-		expect(openCriteria(contract).map((item) => item.id)).toEqual([1, 2]);
-		expect(() => updateContract(contract, { criteria: [{ id: 1, status: "met", evidence: " " }] })).toThrow(
-			/evidence is required/,
-		);
-		expect(() => updateContract(contract, { criteria: [{ id: 3, status: "met", evidence: "x" }] })).toThrow(
-			/no criterion 3/,
-		);
-		const next = updateContract(contract, {
-			criteria: [
-				{ id: 1, status: "met", evidence: "npm test: 12 passed" },
-				{ id: 2, status: "unmet", evidence: "NaN still returned" },
-			],
-			addCriteria: ["docs updated"],
-		});
-		expect(next.version).toBe(2);
-		expect(contract.criteria[0].status).toBe("open");
-		expect(openCriteria(next).map((item) => item.id)).toEqual([2, 3]);
-		expect(formatContract(next)).toContain("[x] 1. tests pass (npm test: 12 passed)");
-		expect(formatContract(next)).toContain("[!] 2. handles NaN");
-	});
-
-	it("reads the newest successful contract from task tool results", () => {
-		const first = createContract(base);
-		const second = updateContract(first, { criteria: [{ id: 1, status: "waived", evidence: "user said skip" }] });
-		const result = (details: unknown, isError = false): AgentMessage =>
-			({
-				role: "toolResult",
-				toolName: "task",
-				toolCallId: "c",
-				content: [],
-				details,
-				isError,
-				timestamp: 0,
-			}) as AgentMessage;
-		expect(latestContract([result(first), result(second), result({ nope: true }, true)])).toEqual(second);
-		expect(latestContract([])).toBeUndefined();
 	});
 });
 
@@ -258,12 +198,10 @@ describe("observation masking", () => {
 		expect(stub).toEqual({ content: expect.stringContaining('read {"path":"a.ts"} output elided') });
 	});
 
-	it("skips already-edited, task and small results", () => {
+	it("skips already-edited and small results", () => {
 		const entries = [
 			assistant("c1", {}),
 			result("r1", "c1", 5_000),
-			assistant("c2", {}),
-			result("r2", "c2", 5_000, "task"),
 			assistant("c3", {}),
 			result("r3", "c3", 50),
 			{
@@ -285,49 +223,7 @@ describe("observation masking", () => {
 	});
 });
 
-describe("local profile", () => {
-	it("caps long tool output with head, tail and a hint", () => {
-		expect(capToolOutput([{ type: "text", text: "short" }], "read", 100)).toBeUndefined();
-		const capped = capToolOutput([{ type: "text", text: `${"h".repeat(500)}${"t".repeat(500)}` }], "read", 100);
-		const text = capped?.[0].type === "text" ? capped[0].text : "";
-		expect(text.startsWith("h".repeat(40))).toBe(true);
-		expect(text.endsWith("t".repeat(60))).toBe(true);
-		expect(text).toContain("offset and limit");
-	});
-
-	it("moves large context files out of the prompt and lists them", () => {
-		const small = [{ path: "AGENTS.md", content: "short" }];
-		expect(splitContextFiles(small, 100)).toEqual({ keep: small });
-		const large = [{ path: "/repo/AGENTS.md", content: "x".repeat(4096) }];
-		const split = splitContextFiles(large, 100);
-		expect(split.keep).toEqual([]);
-		expect(split.note).toContain("/repo/AGENTS.md (4.0 KB)");
-	});
-
-	it("defaults to greedy decoding without overriding an explicit temperature", () => {
-		expect(withGreedyDefault({ model: "m" })).toEqual({ model: "m", temperature: 0 });
-		expect(withGreedyDefault({ temperature: 0.7 })).toEqual({ temperature: 0.7 });
-		expect(withGreedyDefault(null)).toBeNull();
-	});
-});
-
-describe("label gate", () => {
-	it("normalizes first-token mass over labels and drops other tokens", () => {
-		const probabilities = labelProbabilities(
-			[
-				{ token: "yes", logprob: Math.log(0.6) },
-				{ token: "no", logprob: Math.log(0.2) },
-				{ token: "The", logprob: Math.log(0.2) },
-			],
-			["yes", "no"] as const,
-		);
-		expect(probabilities?.yes).toBeCloseTo(0.75);
-		expect(probabilities?.no).toBeCloseTo(0.25);
-		expect(labelProbabilities([{ token: "The", logprob: 0 }], ["yes", "no"] as const)).toBeUndefined();
-	});
-});
-
-describe("local profile tool set", () => {
+describe("harness tool set", () => {
 	type Handler = (event: Record<string, unknown>, ctx: unknown) => unknown;
 
 	function fakePi(active: string[]) {
@@ -360,13 +256,10 @@ describe("local profile tool set", () => {
 		return { start, activeTools: () => activeTools, handlers };
 	}
 
-	it("keeps only core tools for the local model and restores the rest for another model", () => {
-		const fake = fakePi(["read", "edit", "mcp", "mcpScript", "task"]);
-		// The task contract is off by default; lookup is on for cloud models and off for the local one.
-		fake.start("midnight");
-		expect(fake.activeTools()).toEqual(["read", "edit"]);
-		fake.start("midnight");
-		expect(fake.activeTools()).toEqual(["read", "edit"]);
+	it("adds lookup and leaves the other tools alone", () => {
+		const fake = fakePi(["read", "edit", "mcp", "mcpScript"]);
+		fake.start("anthropic");
+		expect(fake.activeTools().sort()).toEqual(["edit", "lookup", "mcp", "mcpScript", "read"]);
 		fake.start("anthropic");
 		expect(fake.activeTools().sort()).toEqual(["edit", "lookup", "mcp", "mcpScript", "read"]);
 	});

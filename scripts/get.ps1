@@ -10,7 +10,7 @@ Web installer, meant to be piped into PowerShell:
 Downloads midnight.server-windows-x64.zip from the newest GitHub release
 (pre-releases included), verifies it against the release's SHA256SUMS, installs
 it into %LOCALAPPDATA%\Programs\midnight.server and adds that directory to the
-user PATH. The model downloads on first use, as with the zip release.
+user PATH.
 
 Self-contained on purpose: `iex` runs it without $PSScriptRoot, so it cannot
 dot-source lib.ps1. scripts\install.ps1 is the equivalent for a local build.
@@ -105,5 +105,5 @@ public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wP
 
 	Write-Host ""
 	Write-Host "Installed midnight.server $($release.tag_name) to $installDir"
-	Write-Host "Run: midnight.server doctor"
+	Write-Host "Run: midnight.server"
 }

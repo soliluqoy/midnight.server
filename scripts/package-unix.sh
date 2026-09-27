@@ -3,7 +3,6 @@
 #   dist/midnight.server-<platform>.tar.gz   (all platforms)
 #   dist/midnight.server-linux-x64.deb       (linux-x64; installs to /opt/midnight.server)
 #   dist/SHA256SUMS-<platform>               (merged into SHA256SUMS by the release workflow)
-# The model is not included; it downloads on first use.
 # Usage: scripts/package-unix.sh [version]   (version defaults to the git tag, e.g. v0.87.1-midnight.4)
 set -euo pipefail
 
@@ -51,14 +50,13 @@ Version: $deb_version
 Architecture: amd64
 Maintainer: soliluqoy <soliluqoy@users.noreply.github.com>
 Installed-Size: $(du -sk "$root/opt" | cut -f1)
-Depends: libc6, libstdc++6, libgomp1
+Depends: libc6, libstdc++6
 Section: devel
 Priority: optional
 Homepage: https://github.com/soliluqoy/midnight.server
-Description: Coding agent CLI with a local MiniCPM model
- A terminal coding agent that works with cloud model providers and a local
- MiniCPM5-2B model served by a bundled llama.cpp engine. The model (2.5 GiB)
- downloads on first use into ~/.local/share/midnight.server.
+Description: Coding agent CLI with a built-in harness for fast models
+ A terminal coding agent that works with cloud model providers. Its harness
+ moves exploration, edit repair and verification out of the model and into code.
 EOF
 	dpkg-deb --root-owner-group --build "$root" "$deb"
 	assets+=("$deb")

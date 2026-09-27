@@ -4,7 +4,7 @@
  *
  * Two ways to name variants:
  *
- * - `--variants bare,harness,no-pack=-contextPack,+contract`: a token that starts with + or -
+ * - `--variants bare,harness,no-pack=-contextPack,-escalation`: a token that starts with + or -
  *   belongs to the variant before it, so a variant can switch several features.
  * - `--manifest <file>`: an explicit design. Every harness variant gets its complete feature
  *   assignment (the manifest's `fixed` switches plus the variant's own), so no default can
@@ -17,7 +17,7 @@
  *     "task_split": "dev" | "holdout" | "all",
  *     "only": ["task", ...],                      optional
  *     "factor_order": ["driftGuard", "blockerExit"],
- *     "fixed": { "escalation": false, "decisions": false },
+ *     "fixed": { "escalation": false },
  *     "variants": [
  *       { "id": "00", "features": { "driftGuard": false, "blockerExit": false } },
  *       { "id": "bare", "harness": false }

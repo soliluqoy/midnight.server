@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { CONFIG_DIR_NAME } from "../../src/config.ts";
-import harnessExtension, { CHECK_MESSAGE_TYPE, CONTRACT_MESSAGE_TYPE } from "../../src/harness/extension.ts";
+import harnessExtension, { CHECK_MESSAGE_TYPE } from "../../src/harness/extension.ts";
 import { createHarness, type Harness } from "./harness.ts";
 
 /** A check that passes only when `answer.txt` contains "good". */
@@ -40,7 +40,7 @@ describe("harness", () => {
 	});
 
 	it("runs checks before settling and feeds a failure back for one repair round", async () => {
-		const harness = await harnessWith({ checks: [CHECK], contract: false, features: { inRunChecks: false } });
+		const harness = await harnessWith({ checks: [CHECK], features: { inRunChecks: false } });
 		harnesses.push(harness);
 		const requests: string[] = [];
 		harness.setResponses([
@@ -69,7 +69,6 @@ describe("harness", () => {
 	it("stops after the configured repair rounds and reports", async () => {
 		const harness = await harnessWith({
 			checks: [CHECK],
-			contract: false,
 			maxRepairRounds: 1,
 			features: { inRunChecks: false },
 		});
@@ -92,7 +91,7 @@ describe("harness", () => {
 	});
 
 	it("does not run checks when nothing changed", async () => {
-		const harness = await harnessWith({ checks: [CHECK], contract: false });
+		const harness = await harnessWith({ checks: [CHECK] });
 		harnesses.push(harness);
 		harness.setResponses([fauxAssistantMessage("just an answer")]);
 		await harness.session.prompt("explain");
@@ -100,7 +99,7 @@ describe("harness", () => {
 	});
 
 	it("blocks edits to protected files and to its own config", async () => {
-		const harness = await harnessWith({ protect: ["tests/**"], contract: false });
+		const harness = await harnessWith({ protect: ["tests/**"] });
 		harnesses.push(harness);
 		const results: string[] = [];
 		harness.setResponses([
@@ -126,63 +125,8 @@ describe("harness", () => {
 		expect(existsSync(join(harness.tempDir, "tests", "spec.txt"))).toBe(false);
 	});
 
-	it("holds the run to open acceptance criteria once, then settles", async () => {
-		const harness = await harnessWith({ contract: true });
-		harnesses.push(harness);
-		const requests: string[] = [];
-		harness.setResponses([
-			fauxAssistantMessage(
-				fauxToolCall("task", {
-					action: "set",
-					objective: "Answer the question",
-					criteria: ["answer cites the source"],
-				}),
-				{ stopReason: "toolUse" },
-			),
-			fauxAssistantMessage("here is the answer"),
-			(context) => {
-				requests.push(JSON.stringify(context.messages));
-				return fauxAssistantMessage(
-					fauxToolCall("task", {
-						action: "update",
-						mark: [{ id: 1, status: "met", evidence: "cited README.md line 3" }],
-					}),
-					{ stopReason: "toolUse" },
-				);
-			},
-			fauxAssistantMessage("verified"),
-		]);
-
-		await harness.session.prompt("answer it");
-
-		expect(requests).toHaveLength(1);
-		expect(requests[0]).toContain("1. answer cites the source");
-		expect(customMessages(harness, CONTRACT_MESSAGE_TYPE)).toHaveLength(1);
-		expect(harness.getPendingResponseCount()).toBe(0);
-		expect(harness.eventsOfType("agent_settled")).toHaveLength(1);
-	});
-
-	it("rejects update before set and marking without evidence", async () => {
-		const harness = await harnessWith({ contract: true });
-		harnesses.push(harness);
-		const results: string[] = [];
-		harness.setResponses([
-			fauxAssistantMessage(fauxToolCall("task", { action: "update", mark: [] }), { stopReason: "toolUse" }),
-			(context) => {
-				for (const message of context.messages) {
-					if (message.role === "toolResult") results.push(JSON.stringify(message));
-				}
-				return fauxAssistantMessage("ok");
-			},
-		]);
-		await harness.session.prompt("go");
-		expect(results[0]).toContain("No task contract yet");
-		expect(results[0]).toContain('"isError":true');
-	});
-
 	it("elides old large tool results in one batch through context edits", async () => {
 		const harness = await harnessWith({
-			contract: false,
 			masking: { keepRecentResults: 1, minResultBytes: 1_000, batchBytes: 5_000 },
 		});
 		harnesses.push(harness);
@@ -216,13 +160,12 @@ describe("harness", () => {
 		]);
 		await harness.session.prompt("go");
 		expect(customMessages(harness, CHECK_MESSAGE_TYPE)).toEqual([]);
-		expect(harness.session.getActiveToolNames()).not.toContain("task");
 	});
 });
 
 describe("harness interface repair", () => {
 	it("remaps an invented absolute path and tells the model", async () => {
-		const harness = await harnessWith({ contract: false });
+		const harness = await harnessWith();
 		writeFileSync(join(harness.tempDir, "math.js"), "module.exports = 1;\n");
 		const results: string[] = [];
 		harness.setResponses([

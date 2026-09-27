@@ -6,20 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-midnight.server is a native Windows coding CLI/TUI built as a source derivative of the Pi monorepo (`@earendil-works/*` packages, still named that way). It adds a local MiniCPM5-2B Q8_0 model served by a SHA-256-pinned prebuilt llama.cpp `llama-server`. The cloud provider leads; the local model does delegated read-only jobs (`delegate_local`) and background drift checks. `README.md` describes user-facing behavior; `docs/IMPLEMENTATION_STATUS.md` records what is verified, deviations from `IMPLEMENTATION_PLAN.md`, and known failing tests.
+midnight.server is a coding CLI/TUI (Windows first, also Linux and macOS) built as a source derivative of the Pi monorepo (`@earendil-works/*` packages, still named that way). Its core is a model-agnostic harness that moves work out of the model and into code, aimed at making a fast model (GPT-6 Luna) approach a strong one (GPT-6 Astra). `docs/HARNESS_REBUILD_PLAN.md` is the plan and states what is measured versus targeted; `README.md` describes user-facing behavior; `docs/IMPLEMENTATION_STATUS.md` records what is verified and known failing tests.
 
 ## Commands
 
 - `npm run check`: biome (with `--write`), dependency/lockfile/shrinkwrap/import checks, `tsgo --noEmit`, browser smoke. Run after code changes.
-- `./test.sh`: all non-e2e tests in an isolated HOME with no API keys (`PI_NO_LOCAL_LLM=1`).
+- `./test.sh`: all non-e2e tests in an isolated HOME with no API keys.
 - Single test, from the package root (e.g. `packages/coding-agent`):
-  `node "$(git rev-parse --show-toplevel)/node_modules/vitest/dist/cli.js" --run test/midnight-helper.test.ts`
+  `node "$(git rev-parse --show-toplevel)/node_modules/vitest/dist/cli.js" --run test/harness-units.test.ts`
 - `packages/tui` uses `node:test`: `node --test test/specific.test.ts`.
-- Real-model engine test: `test/midnight-engine.integration.test.ts` runs only with `MIDNIGHT_SERVER_ENGINE_TESTS=1` and an installed model/engine.
+- Eval script tests: `node --test scripts/harness-eval-design.test.mjs scripts/harness-eval-stats.test.mjs`.
 - Run from source: `.\pi-test.ps1 <args>` (PowerShell) or `./pi-test.sh` (Bash); `--no-env` strips provider API keys.
-- Windows release build (PowerShell): `scripts\bootstrap.ps1 -Install`, `scripts\build.ps1`, `scripts\fetch-model.ps1`, `scripts\package.ps1 -IncludeModel`, `scripts\verify-release.ps1`. `build.ps1` compiles the CLI with pinned Bun and `native\midnight-host` with the in-box C# compiler.
-- Linux/macOS release build (Bash, host platform only): `bash scripts/build-unix.sh`, `bash scripts/package-unix.sh [tag]`, `node scripts/verify-release.mjs <tarball> [--smoke]`. Pushing a `v*-midnight.*` tag runs `.github/workflows/midnight-release.yml`: it builds and verifies Windows x64, Linux x64 and macOS arm64/x64 and attaches everything to a draft release.
-- Re-pin engine builds: `node scripts/generate-engine-pins.mjs <llama.cpp tag>` (writes `src/midnight/engine-builds.generated.ts`; do not hand-edit it).
+- Windows release build (PowerShell): `scripts\bootstrap.ps1 -Install`, `scripts\build.ps1`, `scripts\package.ps1`, `scripts\verify-release.ps1 -Package dist\midnight.server-windows-x64.zip`. `build.ps1` compiles the CLI with pinned Bun.
+- Linux/macOS release build (Bash, host platform only): `bash scripts/build-unix.sh`, `bash scripts/package-unix.sh [tag]`, `node scripts/verify-release.mjs <tarball>`. Pushing a `v*-midnight.*` tag runs `.github/workflows/midnight-release.yml`: it builds and verifies Windows x64, Linux x64 and macOS arm64/x64 and attaches everything to a draft release.
 
 Known baseline: on Windows, `./test.sh` has pre-existing non-midnight failures (config-dir rename `.pi` vs `.midnight.server`, `pi` vs `midnight.server` strings, Windows path/EPERM issues, unbuilt `dist/` exports). See `docs/IMPLEMENTATION_STATUS.md` before assuming a failure is yours.
 
@@ -32,35 +31,20 @@ Workspace packages build in dependency order: `chord` → `tui` → `telemetry` 
 - `packages/tui`: terminal UI library.
 - `packages/coding-agent`: the product CLI. Almost all midnight-specific code lives here.
 
-### Startup flow (`packages/coding-agent/src/cli.ts`)
-
-1. `midnight/commands.ts` `runMidnightCommand` handles subcommands that never start a session (`helper`, `model`, `engine`, `doctor`) and returns an exit code.
-2. Otherwise `midnight/local-runtime.ts` `prepareLocalRuntime` parses the mode (`default`/`hybrid`/`local`) and returns rewritten args plus extension factories. `--local` starts the engine, forces offline, and uses `ModelRuntime.restrictRequestProviders()` to block every other provider. Default keeps the configured provider (the local model is only a `/model` choice); `--hybrid` also adds `delegate_local` and drift watch; with no provider configured it silently falls back to the local model. Non-session invocations (`--version`, `--help`) must not start or download the engine.
-3. Pi's `main()` runs the session with those extension factories.
-
-### `packages/coding-agent/src/midnight/`
-
-The local-model integration is kept in this directory (not separate packages) to avoid lockfile/shrinkwrap churn.
-
-- `pins.ts`, `engine-builds.generated.ts`, `models/*.lock.json`, `docs/upstreams.lock.json`: pinned model and engine identities. A test keeps the compiled model pin equal to its JSON lock.
-- `store.ts`, `download.ts`, `model-integrity.ts`, `paths.ts`: locate bundled / per-user (`MIDNIGHT_SERVER_HOME`) / override artifacts; resumable, SHA-256-verified downloads with atomic rename. Explicit overrides that point at nothing fail closed.
-- `engine.ts`: one `llama-server` on loopback with a random port and a per-session key passed through a key file (never argv or env). On Windows it runs under `native/midnight-host`, which owns a Job Object that kills the engine tree when the CLI exits; on Linux/macOS it runs under the `POSIX_HOST` `/bin/sh` wrapper, which kills it when the stdin ownership pipe closes.
-- `engine-manager.ts`: lazy start, idle stop, and first-use fetch of model and engine. `backend.ts`: `auto` GPU vs CPU probe, saved per engine release, with CPU fallback.
-- `extension.ts`: registers provider `midnight` / model `minicpm5-2b-q8_0` (openai-completions) and the `delegate_local` tool.
-- `helper.ts`: typed helper tasks (summarize/classify/inspect/plan/patch), workspace confinement via realpath, byte budget (~6 KB), schema-constrained output with one repair, evidence validation, fixed-argv read-only git ops. Patches are exact `oldText`/`newText` edits rendered as an unapplied diff.
-- `drift-watch.ts`: background local-model checks in cloud-led sessions. `session-title.ts`: names the session with the session model after the first exchange.
-- `status.ts`: shared status store read by the UI (sidebar, footer) and `extensions/agent-mode.ts` (plan/build mode tool swap).
-
-Built-in extensions are registered in `src/extensions/index.ts` (`llama.cpp` server provider, `agent-mode`, `harness`).
+`packages/coding-agent/src/cli.ts` calls Pi's `main()`. Built-in extensions are registered in `src/extensions/index.ts`: `agent-mode` (plan/build tool swap), `harness`, and the session title extension (`src/midnight/session-title.ts`, names the session with the session model after the first exchange). `src/midnight/status.ts` is the shared plan/build mode store read by the sidebar, footer and `agent-mode`.
 
 ### `packages/coding-agent/src/harness/`
 
-Model-agnostic built-in extension (`docs/harness.md`) that moves work out of the model into code. `extension.ts` wires the parts: `features.ts` (model classes fast/frontier/local and per-feature flags), `workspace-index.ts`/`outline.ts`/`context-pack.ts` (BM25 file ranking and the first-request context pack), `parse-gate.ts` and `edit-repair.ts` (syntax gate, indentation repair, closest-match and path hints, loop notices), `lsp.ts`/`semantic.ts` (language-server client, `lookup` tool, new-error diagnostics), `detect-checks.ts`/`checks.ts` (detected or configured checks as a ladder, in-run and at settle), `checkpoints.ts` (private-ref snapshots and rollback), `escalate.ts` (advice from a stronger model), `decisions.ts` (typed intake and completion review by a local Laya server over `/v1/systemone`, loopback only), `masking.ts` (window-scaled observation masking), `contract.ts` (the `task` tool, off by default), `local-profile.ts` and `telemetry.ts`. Project config is `.midnight.server/harness.json` and requires project trust. `scripts/harness-eval.mjs` measures it with 27 hidden-test tasks in `evals/harness/tasks/` (dev/holdout split, ablation variants, paired statistics); `scripts/harness-eval-validate.mjs` checks the tasks without a model. Product identity (`APP_NAME`, config dir `.midnight.server`) comes from `piConfig` in `packages/coding-agent/package.json` via `src/config.ts`.
+Model-agnostic built-in extension (`docs/harness.md`). `extension.ts` wires the parts: `features.ts` (model classes fast/frontier and per-feature flags), `workspace-index.ts`/`outline.ts`/`context-pack.ts` (BM25 file ranking and the first-request context pack), `parse-gate.ts` and `edit-repair.ts` (syntax gate, indentation repair, closest-match and path hints, loop notices), `interface-repair.ts`, `lsp.ts`/`semantic.ts` (language-server client, `lookup` tool, new-error diagnostics), `detect-checks.ts`/`checks.ts` (detected or configured checks as a ladder, in-run and at settle), `checkpoints.ts` (private-ref snapshots and rollback), `drift.ts` (drift guard detectors and the blocker rule), `escalate.ts` (advice from a stronger model; on by default for fast models), `masking.ts` (window-scaled observation masking) and `telemetry.ts`. Project config is `.midnight.server/harness.json` and requires project trust. Product identity (`APP_NAME`, config dir `.midnight.server`) comes from `piConfig` in `packages/coding-agent/package.json` via `src/config.ts`.
+
+### Evals
+
+`scripts/harness-eval.mjs` runs tasks from `evals/harness/tasks/` (dev/holdout split, ablation variants via `MIDNIGHT_SERVER_HARNESS_FEATURES`, manifests via `scripts/harness-eval-design.mjs`, paired statistics in `scripts/harness-eval-stats.mjs`); `scripts/harness-eval-validate.mjs` checks the tasks without a model. `evals/drift/` holds the drift pilots and re-scoring scripts; `evals/sensitivity-lab/` analyzes factorial experiments. Pure-Luna claims require `-escalation` in every arm.
 
 ### Tests
 
-- Midnight unit tests: `packages/coding-agent/test/midnight-*.test.ts`.
-- Session-level tests: `packages/coding-agent/test/suite/` with `harness.ts` and the faux provider (see `test/suite/README.md`); e.g. `midnight-delegate.test.ts`, `midnight-drift-watch.test.ts`.
+- Harness unit tests: `packages/coding-agent/test/harness-*.test.ts`; UI and config: `test/midnight-*.test.ts`.
+- Session-level tests: `packages/coding-agent/test/suite/` with `harness.ts` and the faux provider (see `test/suite/README.md`); e.g. `harness.test.ts`, `harness-v2.test.ts`, `harness-drift.test.ts`.
 
 ## Platform notes
 

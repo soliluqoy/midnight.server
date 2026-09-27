@@ -149,6 +149,7 @@ import { FooterComponent, formatTokens } from "./components/footer.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { createMermaidMarkdownTransformer } from "./components/mermaid.ts";
+import { modeChip } from "./components/mode-chip.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
 import {
 	type AuthSelectorProvider,
@@ -158,14 +159,7 @@ import {
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
-import {
-	describeDrift,
-	describeEngine,
-	describeSessionMode,
-	SIDEBAR_MIN_TERMINAL_WIDTH,
-	SIDEBAR_WIDTH,
-	SidebarComponent,
-} from "./components/sidebar.ts";
+import { SIDEBAR_MIN_TERMINAL_WIDTH, SIDEBAR_WIDTH, SidebarComponent } from "./components/sidebar.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
 import {
 	BranchSummaryStatusIndicator,
@@ -344,12 +338,6 @@ export function formatResumeCommand(sessionManager: SessionManager): string | un
 
 function hasDefaultModelProvider(providerId: string): providerId is keyof typeof defaultModelPerProvider {
 	return providerId in defaultModelPerProvider;
-}
-
-function llamaCppPostLoginGuidance(actionLabel: string, loadedModelCount: number): string {
-	return loadedModelCount === 0
-		? `${actionLabel}. No llama.cpp models are loaded. Use /llama to load a model, then /model to select it.`
-		: `${actionLabel}. Use /model to select a loaded llama.cpp model, or /llama to manage models.`;
 }
 
 type LoginProviderCompletionOption = {
@@ -679,7 +667,11 @@ export class InteractiveMode {
 			gitStatus: this.gitStatusTracker,
 			getHeight: () => this.ui.terminal.rows,
 			agentModeKey: () => keyText("app.agentMode.toggle") || undefined,
+			onToggleAgentMode: () => this.toggleAgentMode(),
+			onSelectModel: () => this.showModelSelector(),
+			onOpenFile: (filePath) => this.showFilePreview(filePath),
 		});
+		this.footer.onToggleAgentMode = () => this.toggleAgentMode();
 		this.explorer = new FileExplorerComponent({
 			rootName: () => path.basename(this.sessionManager.getCwd()) || this.sessionManager.getCwd(),
 			sessionChanges: () => this.getSessionChangedPaths(),
@@ -1049,13 +1041,7 @@ export class InteractiveMode {
 		// Add header with keybindings from config (unless silenced)
 		if (this.options.verbose || !this.settingsManager.getQuietStartup()) {
 			const logo = () => {
-				const status = getMidnightStatus();
-				const badge =
-					status.agentMode === "plan"
-						? theme.bold(theme.fg("warning", "PLAN"))
-						: theme.bold(theme.fg("success", "BUILD"));
-				const mode = describeSessionMode(status.mode);
-				return `${theme.fg("accent", "☾ ")}${theme.bold(theme.fg("accent", APP_NAME))}${theme.fg("dim", ` v${this.version}`)}  ${badge}${mode ? theme.fg("dim", ` · ${mode}`) : ""}`;
+				return `${theme.fg("accent", "☾ ")}${theme.bold(theme.fg("text", APP_NAME))}${theme.fg("dim", ` v${this.version}`)}  ${modeChip(getMidnightStatus().agentMode)}`;
 			};
 
 			// Build startup instructions using keybinding hint helpers
@@ -1151,8 +1137,7 @@ export class InteractiveMode {
 		void this.gitStatusTracker.refresh();
 		this.unsubscribeMidnightStatus = onMidnightStatusChange(() => {
 			// The sidebar and footer read the status on every render; only the startup header caches
-			// text built from it. Invalidating the whole UI here would re-wrap every transcript message
-			// on each drift check and engine progress update.
+			// text built from it. Invalidating the whole UI here would re-wrap every transcript message.
 			this.builtInHeader?.invalidate();
 			this.ui.requestRender();
 		});
@@ -3089,12 +3074,6 @@ export class InteractiveMode {
 				description: withKey("File explorer, fullscreen mode only", "app.explorer.toggle"),
 				keywords: "explorer files tree browse",
 			},
-			{
-				id: "action:local-status",
-				label: "Local model status",
-				description: `engine ${describeEngine(status.engine)} · drift ${describeDrift(status)}`,
-				keywords: "minicpm engine drift local",
-			},
 		];
 		const builtinNames = new Set(BUILTIN_SLASH_COMMANDS.map((command) => command.name));
 		for (const command of BUILTIN_SLASH_COMMANDS) {
@@ -3147,12 +3126,7 @@ export class InteractiveMode {
 		if (id === "action:agent-mode") this.toggleAgentMode();
 		else if (id === "action:sidebar") this.toggleSidebar();
 		else if (id === "action:explorer") this.toggleExplorer();
-		else if (id === "action:local-status") {
-			const status = getMidnightStatus();
-			this.showStatus(
-				`Local model: engine ${describeEngine(status.engine)}, drift watch ${describeDrift(status)}${status.mode ? `, session ${describeSessionMode(status.mode)}` : ""}`,
-			);
-		} else if (id.startsWith("run:")) void this.defaultEditor.onSubmit?.(id.slice("run:".length));
+		else if (id.startsWith("run:")) void this.defaultEditor.onSubmit?.(id.slice("run:".length));
 		else if (id.startsWith("insert:")) this.editor.setText(id.slice("insert:".length));
 		this.ui.requestRender();
 	}
@@ -4588,11 +4562,10 @@ export class InteractiveMode {
 	private updateEditorBorderColor(): void {
 		if (this.isBashMode) {
 			this.editor.borderColor = theme.getBashModeBorderColor();
-		} else if (getMidnightStatus().agentMode === "plan") {
-			this.editor.borderColor = (text: string) => theme.fg("warning", text);
 		} else {
-			const level = this.session.thinkingLevel || "off";
-			this.editor.borderColor = theme.getThinkingBorderColor(level);
+			// One colored element for the input: the mode's color. The thinking level is in the footer.
+			const color = getMidnightStatus().agentMode === "plan" ? "warning" : "accent";
+			this.editor.borderColor = (text: string) => theme.fg(color, text);
 		}
 		this.activeStatusIndicator?.invalidate();
 		this.ui.requestRender();
@@ -6180,10 +6153,7 @@ export class InteractiveMode {
 			if (isUnknownModel(previousModel)) {
 				const availableModels = this.session.modelRuntime.getAvailableSnapshot();
 				const providerModels = availableModels.filter((model) => model.provider === providerId);
-				// Matches LLAMA_PROVIDER_ID from extensions/llama/provider.ts; kept inline to avoid coupling interactive mode to the built-in extension.
-				if (providerId === "llama.cpp") {
-					selectionError = llamaCppPostLoginGuidance(actionLabel, providerModels.length);
-				} else if (!hasDefaultModelProvider(providerId)) {
+				if (!hasDefaultModelProvider(providerId)) {
 					selectionError = `${actionLabel}, but no default model is configured for provider "${providerId}". Use /model to select a model.`;
 				} else if (providerModels.length === 0) {
 					selectionError = `${actionLabel}, but no models are available for that provider. Use /model to select a model.`;
@@ -6723,7 +6693,7 @@ export class InteractiveMode {
 		const match = /^@(\S+)\s*/.exec(args);
 		const choice = match ? this.sideThreads.resolveModel(match[1]!) : undefined;
 		if (match && !choice) {
-			this.showError(`Unknown model for /ask: ${match[1]}. Use @local, @same, or @provider/model.`);
+			this.showError(`Unknown model for /ask: ${match[1]}. Use @same or @provider/model.`);
 			return;
 		}
 		const question = match ? args.slice(match[0].length).trim() : args;

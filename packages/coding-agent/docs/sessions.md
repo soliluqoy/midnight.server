@@ -50,25 +50,22 @@ See [Compaction Reference](compaction.md) for thresholds, retained boundaries, b
 
 A side thread is a short question about one item in the transcript, such as a failed command or a reply. The answer appears folded under that item. The main agent never sees it, keeps running while you ask, and your prompt draft is kept.
 
-1. Press `alt+t`. The editor becomes a question box for the newest tool call or reply, which is highlighted; one line above the editor shows the item and the model. While the box is empty, up/down picks another item (or alt+click it). Tab (in the empty box) and Shift+Tab pick the next and previous model from a short list: the local model, the session model, and your `ctrl+p` models. `ctrl+p` and `alt+p` cycle the same list, and `ctrl+l` searches all available models. None of these change the main session model or thinking level while the box is open.
+1. Press `alt+t`. The editor becomes a question box for the newest tool call or reply, which is highlighted; one line above the editor shows the item and the model. While the box is empty, up/down picks another item (or alt+click it). Tab (in the empty box) and Shift+Tab pick the next and previous model from a short list: the session model and your `ctrl+p` models. `ctrl+p` and `alt+p` cycle the same list, and `ctrl+l` searches all available models. None of these change the main session model or thinking level while the box is open.
 2. Type the question and press Enter. Escape goes back to your prompt without asking.
 3. The answer streams under the item. To manage threads, press `alt+t` again from the question box (a half-typed question is kept). Then up/down picks an item, Enter asks a follow-up, Space opens or folds its thread, `m` sends it to the main agent, `b` branches from before the item (see below), `d` deletes it, and `x` stops a running answer. `alt+t` or Escape leaves.
 
-`/ask [question]` asks about the newest item without selecting it. Start the question with `@local`, `@same`, or `@provider/model` to choose the model.
+`/ask [question]` asks about the newest item without selecting it. Start the question with `@same` or `@provider/model` to choose the model.
 
 The model decides how much context the question carries:
 
 | Model | Request |
 |---|---|
 | Same model as the session | The main agent's last request plus the question, so the provider can reuse its prompt cache |
-| Local model | The item only, clipped to about 6 KB, plus earlier answers in the thread |
 | Another model | The item, recent conversation text, and earlier answers in the thread |
 
-The default is the local model for tool output when it is installed, otherwise the session model. The model you choose is kept for later questions until you quit.
+The default is the session model. The model you choose is kept for later questions until you quit.
 
 Threads are saved beside the session file as `<session>.threads.json`, so they come back when you resume. They are not session entries: `/tree`, `/fork`, and compaction ignore them, and a fork starts without threads. `m` is the only way a thread reaches the main agent: it adds the unsent questions and answers as a visible message. If the agent is running, the message is added when the current turn ends. No turn is started.
-
-Drift watch (hybrid mode) reports its findings the same way: a thread from `drift watch` under the newest item when the check ran, shown in the warning color. It is not sent to the agent; use `m` or `b` as with any thread.
 
 ### Redo an item from a side thread
 

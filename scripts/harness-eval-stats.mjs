@@ -4,7 +4,7 @@
  * `--report` and the math can be unit-tested without running a model.
  */
 
-const EXPLORE_TOOLS = new Set(["read", "ls", "find", "grep", "lookup", "delegate_local"]);
+const EXPLORE_TOOLS = new Set(["read", "ls", "find", "grep", "lookup"]);
 const EDIT_TOOLS = new Set(["edit", "write"]);
 const SHELL_TOOLS = new Set(["bash", "powershell"]);
 const VERIFY_COMMAND = /\b(test|tests|vitest|jest|mocha|pytest|go\s+test|cargo\s+(test|check)|tsc|tsgo|lint|eslint|biome|mypy|node\s+(--test\s+)?\S*test\S*\.m?js|python3?\s+\S*test\S*\.py)\b/i;

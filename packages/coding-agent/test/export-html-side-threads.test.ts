@@ -27,7 +27,7 @@ describe("export HTML side threads", () => {
 		store.getOrCreate("tool:call-1", "bash npm run check", "output").turns.push({
 			question: "is it only lint?",
 			answer: "Yes, **lint only**.",
-			model: { provider: "midnight", id: "minicpm5-2b-q8_0", kind: "local" },
+			model: { provider: "anthropic", id: "claude-sonnet-5", kind: "other" },
 			status: "done",
 			startedAt: 1,
 			finishedAt: 2,

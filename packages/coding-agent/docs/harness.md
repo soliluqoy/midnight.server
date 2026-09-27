@@ -8,7 +8,6 @@ Everything works with any session model, and nothing the harness adds sends your
 | --- | --- | --- |
 | `fast` | List input price under $2 per million tokens, or unknown | Everything on, including escalation |
 | `frontier` | Input price $2 per million tokens or more | No escalation |
-| `local` | The embedded MiniCPM model | Local profile on; no `lookup` tool (tool schemas cost prompt time on a CPU) |
 
 `/harness` shows the class, the active features, the checks, and what the harness did in this session.
 
@@ -16,7 +15,7 @@ Everything works with any session model, and nothing the harness adds sends your
 
 Problem: a fast model starts most tasks with `ls`, `find`, `grep` and `read`. Each of those turns resends the whole prompt.
 
-The harness indexes the workspace (git's file list; paths, declarations and content) and ranks files for the request with identifier-aware BM25: `parsePortNumber` matches "parse", "port" and "number"; a file named in the request, or declaring a symbol the request names in code form (`parsePort`, `parse_port`, backticks), ranks first; tests are paired with their sources. The first request then carries, within a token budget (2,000 for fast models, 2,500 frontier, 600 local, and never more than 10% of the context window):
+The harness indexes the workspace (git's file list; paths, declarations and content) and ranks files for the request with identifier-aware BM25: `parsePortNumber` matches "parse", "port" and "number"; a file named in the request, or declaring a symbol the request names in code form (`parsePort`, `parse_port`, backticks), ranks first; tests are paired with their sources. The first request then carries, within a token budget (2,000 for fast models, 2,500 frontier, and never more than 10% of the context window):
 
 - the environment: OS, shell tool (and that PowerShell is not bash), package manager, test command, the checks the harness will run;
 - the git branch and changed files;
@@ -59,6 +58,8 @@ Related tests are found by name (`port.js` and `port.test.js`, `test_port.py`, `
 
 Checks run as a ladder: level by level, stopping at the first level that fails, so a type error is reported without waiting for the test suite.
 
+A check's result is reused while nothing it could depend on has changed: no successful `edit` or `write`, no shell command (it may install a dependency or start a service), no rollback, and no new request since it ran with the same command. The common case is the settle ladder right after an in-run check: levels 1 and 2 already ran on the same files, so only level 3 runs. Timeouts are never reused. `features: { "checkCache": false }` turns it off; `/harness` shows how many results were reused.
+
 - **During the run**: after a turn that edited files, levels 1 and 2 run (a check that took more than 90 s is skipped here), and the result goes into the next request: failures in full, or "checks pass; you do not need to rerun them".
 - **Before the run settles**: the full ladder runs on everything changed. On failure the model gets the output and another turn, up to `maxRepairRounds` (default 2). Ending again without changes does not skip the check: the same files are checked again.
 
@@ -89,26 +90,7 @@ Both are on by default. `evals/drift/` has the drift benchmark, the detector che
 
 ## Escalation
 
-When a fast model is stuck (the same checks failed twice, or it repeated itself three times), the harness asks a stronger model for one piece of advice and hands control back. The advisor gets the request, the current diff (new files included), the failing output and the model's last message, not the transcript. Default advisor: `anthropic/claude-opus-5-5`; it is used only if that model has credentials, and never when it is the session model. Limits: 2 calls per prompt, 6 per session. `/harness` shows the calls and their cost.
-
-## Independent review (Laya, local; off by default)
-
-Off by default (`features: { "decisions": true }` turns it on). In `evals/laya-review`, base Laya answered all four review questions at chance on held-out tasks (AUC 0.37-0.52) and cost about 7 s per review on a laptop CPU; the drift guard now covers weakened tests and unsupported claims exactly.
-
-The model that wrote a change should not be the one that decides it is done. When [Laya](https://github.com/NandhaKishorM/laya) is available, the harness asks it narrow typed questions and code applies the answers. Laya is an open-source (Apache 2.0) System One model: a ~400M-parameter encoder that returns calibrated probabilities for yes/no (`noul`), label (`choice`) and rubric (`score`) questions in one forward pass, with no generated text.
-
-- **Review, once per prompt**, before the run settles, when the checks pass or none exist: does the diff do everything the request asks, including what it implies? does it change unrelated things? does the final message claim results the checks do not show? does it weaken tests? Only confident negative answers (P(does what was asked) < 0.3, the others > 0.85, weakened tests > 0.8) give the model one more turn with the reasons. A favorable answer never overrides a failing check, and no answer means no decision, not approval.
-- **Intake**, on the first prompt: whether the request can be read two ways that lead to different code, and how deep it is. The answers only add a short note to the context pack.
-
-The state sent to Laya is compacted for its 512-token (English) or 1,024-token (multilingual) window, most important first: the request, the model's final message, the check results, then the changed lines of the diff.
-
-Everything stays on the machine. The harness talks only to a loopback address and refuses any other URL:
-
-- `MIDNIGHT_SERVER_LAYA_URL=http://127.0.0.1:8000` uses a running `laya-serve` (`MIDNIGHT_SERVER_LAYA_API_KEY` if it requires a key).
-- Otherwise, if `laya-serve` is on PATH (`pip install "laya[serve]"`), the harness starts it on a random loopback port with a per-session key, loads the checkpoint in the background (the first start downloads it from Hugging Face; in offline mode it never downloads), and stops it with the session. Until it answers, reviews are skipped.
-- `MIDNIGHT_SERVER_LAYA_MODEL` picks the checkpoint (`english`, `multilingual`, `typed-decisions`); by default the server picks per request. `MIDNIGHT_SERVER_LAYA=0` turns it off.
-
-Each question and answer is written to the telemetry log as a receipt (question version, state digest, probabilities, latency). The thresholds are starting points, not calibrated values: calibrate them on the eval before relying on them. It is off for the local model, whose engine would compete for the same CPU.
+When a fast model is stuck (the same checks failed twice, or it repeated itself three times), the harness asks a stronger model for one piece of advice and hands control back. The advisor gets the request, the current diff (new files included), the failing output and the model's last message, not the transcript. Default advisor: `anthropic/claude-opus-5-5`; it is used only if that model has credentials, and never when it is the session model. Limits: 2 calls per prompt, 6 per session. `/harness` shows the calls and their cost, and each call is written to the telemetry log with its model, tokens and cost. With escalation on, a result is a cascade result: to measure a fast model alone, turn it off (`-escalation`).
 
 ## Protected files
 
@@ -117,14 +99,6 @@ Each question and answer is written to the telemetry log as a receipt (question 
 ## Observation masking
 
 Old, large tool results are replaced with a one-line stub (tool, arguments, size and line count). Thresholds scale with the model's context window: a batch is elided once 15% of the window is eligible, and the newest results are kept while they fit in a quarter of it (at least one). With a large window the configured byte values are the limits. Elision is recorded as `context_edit` entries, so it follows `/tree`.
-
-## Task contract (off by default)
-
-The `task` tool records an objective, constraints and checkable acceptance criteria, and reminds the model of open criteria before it finishes. It is off by default: on GPT-6 Luna it added 73% tokens with no measured gain. Turn it on with `"contract": true` or `features: { "contract": true }`.
-
-## Local-model profile
-
-When the session model is the embedded MiniCPM model: only core tools stay active, tool output is capped at 6 KB, large project context files are listed instead of inlined, and requests without a temperature use greedy decoding.
 
 ## Configuration
 
@@ -150,12 +124,12 @@ When the session model is the embedded MiniCPM model: only core tools stay activ
 - `level` (1-3) places a check on the ladder; configured checks without one are level 1.
 - Unknown keys and unknown feature names are rejected, so a typo does not silently disable anything.
 
-Features: `contextPack`, `parseGate`, `editRepair`, `pathHints`, `loopGuard`, `inRunChecks`, `checkpoints`, `lookup`, `diagnostics`, `escalation`, `decisions`, `masking`, `contract`, `localProfile`, `driftGuard`, `blockerExit`.
+Features: `contextPack`, `parseGate`, `editRepair`, `pathHints`, `loopGuard`, `inRunChecks`, `checkCache`, `checkpoints`, `lookup`, `diagnostics`, `escalation`, `masking`, `driftGuard`, `blockerExit`.
 
 Environment:
 
 - `MIDNIGHT_SERVER_HARNESS=0` turns the harness off.
-- `MIDNIGHT_SERVER_HARNESS_FEATURES=-contextPack,+contract` switches features for one run (the eval uses this for ablations).
+- `MIDNIGHT_SERVER_HARNESS_FEATURES=-contextPack,-escalation` switches features for one run (the eval uses this for ablations).
 - `MIDNIGHT_SERVER_HARNESS_TELEMETRY=<file>` appends one JSON line per harness decision (pack built, edit rejected, check run, rollback, escalation). Nothing is sent anywhere.
 
 ## Measuring it

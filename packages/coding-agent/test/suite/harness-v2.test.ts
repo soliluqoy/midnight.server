@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { createServer, type Server } from "node:http";
 import { join } from "node:path";
 import { type Context, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
@@ -144,6 +143,43 @@ describe("harness v2 in a session", () => {
 		expect(harness.getPendingResponseCount()).toBe(0);
 	});
 
+	it.each([
+		["reuses", true, 1],
+		["reruns without checkCache", false, 2],
+	])("%s the in-run result at settle when nothing changed in between", async (_label, cache, runs) => {
+		const harness = await setup();
+		writeProject(harness.tempDir);
+		// The check counts its own runs in a file its `when` pattern does not match.
+		writeFileSync(
+			join(harness.tempDir, ".midnight.server", "harness.json"),
+			JSON.stringify({
+				checks: [
+					{
+						name: "value",
+						command: ["node", "-e", "require('fs').appendFileSync('runs.log', 'x'); require('./check.js')"],
+						when: ["*.js"],
+					},
+				],
+				features: { checkCache: cache },
+			}),
+		);
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("edit", {
+						path: "value.js",
+						edits: [{ oldText: "module.exports = 1;", newText: "module.exports = 1; // ok" }],
+					}),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("add a comment to value.js");
+		expect(readFileSync(join(harness.tempDir, "runs.log"), "utf8")).toHaveLength(runs);
+		expect(harness.getPendingResponseCount()).toBe(0);
+	});
+
 	it("restores the last passing state after the same check fails twice", async () => {
 		const harness = await setup();
 		writeProject(harness.tempDir);
@@ -273,93 +309,5 @@ describe("harness v2 in a session", () => {
 		expect(advisorPrompt).toContain("expected 1, got 2");
 		expect(adviceSeen).toContain("Advice from faux/strong");
 		expect(adviceSeen).toContain("Root cause: value.js must export 1");
-	});
-
-	describe("independent review by a local Laya server", () => {
-		let server: Server;
-		let noul = 0.9;
-		const states: unknown[] = [];
-		const saved = process.env.MIDNIGHT_SERVER_LAYA_URL;
-		const savedFeatures = process.env.MIDNIGHT_SERVER_HARNESS_FEATURES;
-		afterEach(() => {
-			server?.close();
-			if (saved === undefined) delete process.env.MIDNIGHT_SERVER_LAYA_URL;
-			else process.env.MIDNIGHT_SERVER_LAYA_URL = saved;
-			if (savedFeatures === undefined) delete process.env.MIDNIGHT_SERVER_HARNESS_FEATURES;
-			else process.env.MIDNIGHT_SERVER_HARNESS_FEATURES = savedFeatures;
-		});
-
-		async function startFakeLaya(): Promise<void> {
-			server = createServer((req, res) => {
-				let body = "";
-				req.on("data", (chunk) => {
-					body += chunk;
-				});
-				req.on("end", () => {
-					const request = JSON.parse(body) as { state: unknown; questions: Record<string, { type: string }> };
-					states.push(request.state);
-					const answers: Record<string, unknown> = {};
-					for (const [name, question] of Object.entries(request.questions)) {
-						// Only the "does it do what was asked" question varies; the rest look clean.
-						if (question.type === "noul")
-							answers[name] = { type: "noul", noul: name === "addresses_request" ? noul : 0.05 };
-						else
-							answers[name] = { type: "score", score: 0, confidence: 0.9, legend: {}, probabilities: { 0: 1 } };
-					}
-					res.writeHead(200, { "content-type": "application/json" });
-					res.end(JSON.stringify({ model: "laya-fake", answers, usage: { input_tokens: 1, output_tokens: 1 } }));
-				});
-			});
-			await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-			const address = server.address();
-			process.env.MIDNIGHT_SERVER_LAYA_URL = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
-			// The review is off by default (evals/laya-review); these tests turn it on.
-			process.env.MIDNIGHT_SERVER_HARNESS_FEATURES = "+decisions";
-		}
-
-		const editValue = () =>
-			fauxAssistantMessage(
-				[
-					fauxToolCall("edit", {
-						path: "value.js",
-						edits: [{ oldText: "module.exports = 1;", newText: "module.exports = 1; // x" }],
-					}),
-				],
-				{ stopReason: "toolUse" },
-			);
-
-		it("gives one revision turn when the review judges the change incomplete", async () => {
-			noul = 0.1;
-			await startFakeLaya();
-			const harness = await setup();
-			writeProject(harness.tempDir);
-			let reviewSeen = "";
-			harness.setResponses([
-				editValue(),
-				fauxAssistantMessage("Done, all good."),
-				(context) => {
-					reviewSeen = contextText(context);
-					return fauxAssistantMessage("Rechecked the request; the change covers it.");
-				},
-			]);
-			await harness.session.prompt("add a comment to value.js");
-			expect(reviewSeen).toContain("An independent review of your change");
-			expect(reviewSeen).toContain("addresses_request 10%");
-			expect(harness.getPendingResponseCount()).toBe(0);
-			const reviewed = states.at(-1) as { request: string; final_message: string; change: { diff: string } };
-			expect(reviewed.request).toBe("add a comment to value.js");
-			expect(reviewed.final_message).toBe("Done, all good.");
-			expect(reviewed.change.diff).toContain("+module.exports = 1; // x");
-		});
-
-		it("accepts without an extra turn when the review is favorable", async () => {
-			noul = 0.9;
-			await startFakeLaya();
-			const harness = await setup();
-			writeProject(harness.tempDir);
-			harness.setResponses([editValue(), fauxAssistantMessage("Done.")]);
-			await harness.session.prompt("add a comment to value.js");
-			expect(harness.getPendingResponseCount()).toBe(0);
-		});
 	});
 });

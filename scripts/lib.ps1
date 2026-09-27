@@ -46,11 +46,6 @@ function Get-BunPath {
 	return Join-Path $RepoRoot ".cache\tools\bun-$($lock.version)\bun.exe"
 }
 
-function Get-CscPath {
-	$lock = (Read-JsonFile (Join-Path $PSScriptRoot "toolchain.lock.json")).csc
-	return Join-Path $env:SystemRoot $lock.path
-}
-
 # Windows PowerShell 5.1 turns any native stderr output into a terminating error
 # under $ErrorActionPreference = "Stop"; judge native tools by exit code instead.
 function Invoke-Checked([string]$FilePath, [string[]]$Arguments) {

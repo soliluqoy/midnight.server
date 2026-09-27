@@ -21,7 +21,7 @@ import type { ModelRuntime } from "./model-runtime.ts";
 import type { SessionEntry } from "./session-manager.ts";
 
 /** How a turn chose its model; this decides how much context the request carries. */
-export type SideThreadModelKind = "local" | "same" | "other";
+export type SideThreadModelKind = "same" | "other";
 
 export interface SideThreadModelRef {
 	provider: string;
@@ -39,8 +39,6 @@ export interface SideThreadTurn {
 	error?: string;
 	startedAt: number;
 	finishedAt?: number;
-	/** Set when a background check wrote the turn instead of the user asking it. */
-	origin?: "drift";
 }
 
 export interface SideThread {
@@ -61,12 +59,9 @@ interface SideThreadFile {
 	threads: SideThread[];
 }
 
-/** Largest excerpt sent to cloud models; the local model gets LOCAL_EXCERPT_BYTES. */
+/** Largest excerpt of the anchored item sent with a side question. */
 export const MAX_EXCERPT_CHARS = 24_000;
-/** Matches the delegate_local byte budget: a 2B model answers well only on small inputs. */
-export const LOCAL_EXCERPT_CHARS = 6_000;
 const RECENT_TRANSCRIPT_CHARS = 12_000;
-const LOCAL_MAX_TOKENS = 1024;
 const OTHER_MAX_TOKENS = 4096;
 
 export function sideThreadFileFor(sessionFile: string | undefined): string | undefined {
@@ -85,8 +80,8 @@ export function deleteSideThreadFile(sessionFile: string): void {
 const openStores = new Map<string, SideThreadStore>();
 
 /**
- * The live store for a session. The interactive UI and background writers such as drift
- * watch share it, so neither overwrites the other's threads when saving.
+ * The live store for a session. Every writer in the process shares it, so none overwrites
+ * another's threads when saving.
  */
 export function sideThreadStoreFor(session: {
 	getSessionFile(): string | undefined;
@@ -150,18 +145,6 @@ export class SideThreadStore {
 			thread = { anchorId, anchorLabel, excerpt, turns: [], sentTurns: 0, createdAt: Date.now() };
 			this.threads.set(anchorId, thread);
 		}
-		return thread;
-	}
-
-	/**
-	 * Add a finished turn to the item's thread, creating the thread if needed. It goes before
-	 * a running answer, which stays last (send-to-main relies on that).
-	 */
-	appendTurn(anchor: ThreadAnchor, turn: SideThreadTurn): SideThread {
-		const thread = this.getOrCreate(anchor.id, anchor.label, anchor.excerpt);
-		const last = thread.turns[thread.turns.length - 1];
-		thread.turns.splice(last?.status === "running" ? thread.turns.length - 1 : thread.turns.length, 0, turn);
-		this.save();
 		return thread;
 	}
 
@@ -280,7 +263,6 @@ export interface SideThreadRequest {
  *   provider reuses the cached prefix and the model sees the whole session. Tools stay
  *   declared because providers reject tool calls in history without their declarations.
  * - `other`: a short system prompt, recent conversation text, and the item.
- * - `local`: the item only, clipped to the delegate_local budget.
  */
 export function buildSideThreadRequest(params: {
 	model: Model<Api>;
@@ -304,16 +286,6 @@ export function buildSideThreadRequest(params: {
 				messages: [...sameRequest.context.messages, userMessage(sideQuestion(thread, question, MAX_EXCERPT_CHARS))],
 			},
 			options: { ...sameRequest.options, signal },
-		};
-	}
-	if (kind === "local") {
-		return {
-			model,
-			context: {
-				systemPrompt: SIDE_SYSTEM_PROMPT,
-				messages: [userMessage(sideQuestion(thread, question, LOCAL_EXCERPT_CHARS))],
-			},
-			options: { signal, maxTokens: Math.min(LOCAL_MAX_TOKENS, model.maxTokens) },
 		};
 	}
 	const recent = recentTranscript(transcript, RECENT_TRANSCRIPT_CHARS);

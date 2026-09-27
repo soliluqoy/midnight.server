@@ -1,7 +1,7 @@
 {
 	"name": "@earendil-works/pi-coding-agent",
 	"version": "0.87.1",
-	"description": "midnight.server Windows coding harness with local MiniCPM",
+	"description": "midnight.server coding agent CLI with a built-in harness for fast models",
 	"type": "module",
 	"piConfig": {
 		"name": "midnight.server",
