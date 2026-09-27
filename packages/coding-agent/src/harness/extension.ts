@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
@@ -13,7 +13,14 @@ import type {
 	SessionBoundaryDraft,
 } from "../core/extensions/types.ts";
 import { getMidnightStatus } from "../midnight/status.ts";
-import { CheckpointStore, gitRoot, isGitWorkTree, workingTreeChanges, writeWorkingTree } from "./checkpoints.ts";
+import {
+	type Checkpoint,
+	CheckpointStore,
+	gitRoot,
+	isGitWorkTree,
+	workingTreeChanges,
+	writeWorkingTree,
+} from "./checkpoints.ts";
 import {
 	type CheckOutcome,
 	expandCommand,
@@ -188,13 +195,16 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	let trusted = false;
 	let cwd = process.cwd();
 	let facts: ProjectFacts = { languages: [], checks: [] };
+	/** Project detection in progress (it probes for Python); requests wait for it. */
+	let factsReady: Promise<void> = Promise.resolve();
+	let stateGeneration = 0;
 	let index: WorkspaceIndex | undefined;
 	let indexDirty = true;
 	let indexBuild: Promise<WorkspaceIndex> | undefined;
 	let packSent = false;
 	let lsp: LspManager | undefined;
 	let checkpoints: CheckpointStore | undefined;
-	let lastGreen: ReturnType<CheckpointStore["snapshot"]>;
+	let lastGreen: Checkpoint | undefined;
 	const checkDurations = new Map<string, number>();
 	/**
 	 * Bumped by anything that can change a check's result: a successful edit or write, any shell
@@ -267,11 +277,17 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		return lsp;
 	}
 
-	function checkpointStore(): CheckpointStore | undefined {
-		if (checkpoints === undefined && isGitWorkTree(cwd)) {
-			checkpoints = new CheckpointStore(cwd, `${process.pid}-${Date.now().toString(36)}`);
+	async function checkpointStore(): Promise<CheckpointStore | undefined> {
+		if (checkpoints === undefined && (await isGitWorkTree(cwd))) {
+			checkpoints ??= new CheckpointStore(cwd, `${process.pid}-${Date.now().toString(36)}`);
 		}
 		return checkpoints;
+	}
+
+	/** Snapshot the working tree as the last state where the checks passed. */
+	async function snapshotGreen(label: string): Promise<void> {
+		const store = await checkpointStore();
+		lastGreen = (await store?.snapshot(label)) ?? lastGreen;
 	}
 
 	pi.registerTool({
@@ -327,8 +343,18 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			else throw error;
 		}
 		// Detection reads manifests only; the detected commands run only in trusted projects.
-		facts = detectProjectChecks(ctx.cwd, { python: trusted ? pythonInterpreter() : undefined });
-		if (!trusted || !config.autoChecks) facts = { ...facts, checks: [] };
+		// Finding a Python interpreter spawns processes, so it runs in the background.
+		const generation = ++stateGeneration;
+		const root = ctx.cwd;
+		const withChecks = trusted && config.autoChecks;
+		factsReady = (async () => {
+			const python = trusted ? await pythonInterpreter() : undefined;
+			if (generation !== stateGeneration) return;
+			facts = detectProjectChecks(root, { python });
+			if (!withChecks) facts = { ...facts, checks: [] };
+		})();
+		// Awaited before each request; this only keeps a failure from being unhandled until then.
+		factsReady.catch(() => undefined);
 	}
 
 	pi.on("session_start", (_event, ctx) => {
@@ -474,7 +500,9 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					after = undefined;
 				}
 				const error =
-					after === undefined ? undefined : introducedSyntaxError(snapshot.before, after, snapshot.path, ctx.cwd);
+					after === undefined
+						? undefined
+						: await introducedSyntaxError(snapshot.before, after, snapshot.path, ctx.cwd);
 				if (error) {
 					if (snapshot.before === undefined) rmSync(snapshot.path, { force: true });
 					else writeFileSync(snapshot.path, snapshot.before);
@@ -602,6 +630,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", async (event, ctx) => {
 		// Trust can be granted during a session; checks and servers follow it.
 		if (ctx.isProjectTrusted() !== trusted || ctx.cwd !== cwd) loadState(ctx);
+		await factsReady;
 		run = freshRun(event.prompt);
 		run.startedAt = Date.now();
 		changeEpoch++;
@@ -614,8 +643,9 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		const planning = getMidnightStatus().agentMode === "plan";
 		if (on(ctx, "blockerExit") && !planning) event.systemPromptOptions.promptGuidelines.push(BLOCKER_GUIDELINE);
 		// The drift inventory compares against the tree as the request found it, so edits made by
-		// shell commands count too. Outside git, it falls back to files changed through edit/write.
-		if (on(ctx, "driftGuard") && !planning && isGitWorkTree(ctx.cwd)) run.baselineTree = writeWorkingTree(ctx.cwd);
+		// shell commands count too. Outside git, it falls back to files changed through edit/write
+		// (writeWorkingTree is undefined there).
+		if (on(ctx, "driftGuard") && !planning) run.baselineTree = await writeWorkingTree(ctx.cwd);
 		if (!on(ctx, "contextPack") || getMidnightStatus().agentMode === "plan" || !event.prompt.trim()) return;
 		try {
 			const started = Date.now();
@@ -635,7 +665,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					checks: activeChecks(),
 					platform: process.platform,
 					shell: active.includes("powershell") ? "powershell" : active.includes("bash") ? "bash" : undefined,
-					git: gitSummary(ctx.cwd),
+					git: await gitSummary(ctx.cwd),
 					budgetTokens: budget,
 				});
 				text = pack?.text;
@@ -705,7 +735,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 				});
 				if (result.failed.length === 0) run.verifiedAt = Date.now();
 				if (result.failed.length === 0 && on(ctx, "checkpoints")) {
-					lastGreen = checkpointStore()?.snapshot("checks passed during the run") ?? lastGreen;
+					await snapshotGreen("checks passed during the run");
 				}
 				entries.push({
 					type: "custom_message",
@@ -910,11 +940,10 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	 * Every file that differs from the start of the request, workspace-relative. With a git
 	 * baseline this includes shell edits and deletions; otherwise only edit/write changes.
 	 */
-	function driftInventory(ctx: ExtensionContext): FileChange[] {
+	async function driftInventory(ctx: ExtensionContext): Promise<FileChange[]> {
 		const inWorkspace = (path: string) => !path.startsWith(`${CONFIG_DIR_NAME}/`);
 		if (run.baselineTree) {
-			const root = gitRoot(ctx.cwd);
-			const changes = root ? workingTreeChanges(ctx.cwd, run.baselineTree) : undefined;
+			const [root, changes] = await Promise.all([gitRoot(ctx.cwd), workingTreeChanges(ctx.cwd, run.baselineTree)]);
 			if (root && changes) {
 				return changes.flatMap((change) => {
 					const path = workspaceRelative(ctx.cwd, resolve(root, change.path));
@@ -988,7 +1017,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			telemetry.record({ type: "settle_check", passed: failed.length === 0, round: run.repairRound });
 			if (failed.length === 0) {
 				run.verifiedAt = Date.now();
-				if (on(ctx, "checkpoints")) lastGreen = checkpointStore()?.snapshot("checks passed") ?? lastGreen;
+				if (on(ctx, "checkpoints")) await snapshotGreen("checks passed");
 			} else {
 				stats.checkFailures++;
 				// The sanctioned stop: after a repair round, a model that reports why the checks cannot
@@ -1044,7 +1073,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 				let rollbackNote = "";
 				if (repeated && on(ctx, "checkpoints") && lastGreen) {
 					// Only files the agent edited in this prompt: others may hold the user's own work.
-					const restored = checkpointStore()?.restore(
+					const restored = await (await checkpointStore())?.restore(
 						lastGreen,
 						[...run.allChanged].map((path) => resolve(ctx.cwd, path)),
 					);
@@ -1084,7 +1113,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		// Implementation drift, once the checks pass or there are none: failing checks already send
 		// the model back, and weakening a test to get past them shows up here on the next settle.
 		if (on(ctx, "driftGuard") && !run.lastCheckFailed) {
-			const changes = driftInventory(ctx);
+			const changes = await driftInventory(ctx);
 			if (changes.length > 0 || run.shellCommands.length > 0) {
 				const workspaceIndex = await workspace();
 				const signals = detectDrift({
@@ -1160,15 +1189,17 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	});
 }
 
-function gitSummary(cwd: string): { branch?: string; changed: string[] } | undefined {
-	const status = spawnSync("git", ["status", "--porcelain=v1", "-z", "--branch"], {
-		cwd,
-		encoding: "utf8",
-		windowsHide: true,
-		timeout: 10_000,
+async function gitSummary(cwd: string): Promise<{ branch?: string; changed: string[] } | undefined> {
+	const stdout = await new Promise<string | undefined>((done) => {
+		execFile(
+			"git",
+			["status", "--porcelain=v1", "-z", "--branch"],
+			{ cwd, encoding: "utf8", windowsHide: true, timeout: 10_000, maxBuffer: 16 * 1024 * 1024 },
+			(error, out) => done(error ? undefined : out),
+		);
 	});
-	if (status.status !== 0 || typeof status.stdout !== "string") return undefined;
-	const [header, ...rest] = status.stdout.split("\0");
+	if (stdout === undefined) return undefined;
+	const [header, ...rest] = stdout.split("\0");
 	const branch = /^## (?:No commits yet on )?([^.\s]+)/.exec(header ?? "")?.[1];
 	// The harness's own config directory is not a change the model should look at.
 	const changed = parsePorcelainZ(rest.join("\0")).filter((path) => !path.startsWith(`${CONFIG_DIR_NAME}/`));
