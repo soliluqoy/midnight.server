@@ -1,28 +1,28 @@
 # Implementation status
 
-Updated 2026-09-28. Harness defaults follow [WORKFLOW_PLAN.md](WORKFLOW_PLAN.md); the longer measurement plan is [HARNESS_REBUILD_PLAN.md](HARNESS_REBUILD_PLAN.md). This page records what midnight.server changes in Pi, what is verified, and known test failures.
+Updated 2026-09-28. This page records what midnight.server changes in Pi, what is verified, and known test failures.
 
 ## What midnight.server adds to Pi
 
 | Area | Where | Status |
 | --- | --- | --- |
-| Harness, lean (inline guards: syntax gate, edit, path and shell repairs, protected files; one check pass at settle with lazy baseline for pre-existing failures, one repair round, drift guard, blocker rule; opt-in: context pack, `lookup`, language-server errors, escalation) | `packages/coding-agent/src/harness/`, [docs](../packages/coding-agent/docs/harness.md) | Unit and suite tests pass. Not yet measured against plain Pi on larger repositories ([plan](WORKFLOW_PLAN.md) section 5). Earlier measurements were on short tasks with the previous, larger harness (`evals/harness/RESULTS.md`, `evals/drift/RESULTS.md`). |
+| Harness (inline guards: syntax gate, edit, path and shell repairs, protected files; one check pass at settle with a lazy baseline for pre-existing failures, one repair round, drift guard, blocker rule; opt-in escalation) | `packages/coding-agent/src/harness/`, [docs](../packages/coding-agent/docs/harness.md) | Unit and suite tests pass. Not measured against plain Pi on larger repositories. |
 | Plan/build modes, sidebar, footer badge | `src/extensions/agent-mode.ts`, `src/midnight/status.ts`, `src/modes/interactive/components/` | Tests pass. |
 | Session titles from the session model | `src/midnight/session-title.ts` | Tests pass. |
 | Side threads (`/ask`, Alt+T) | `src/core/side-threads.ts`, `src/modes/interactive/side-thread-controller.ts` | Tests pass. |
 | Product identity (`midnight.server`, config dir `.midnight.server`, `MIDNIGHT_SERVER_*` variables) | `piConfig` in `packages/coding-agent/package.json`, `src/config.ts` | Partial; see known failures. |
 | Windows build and release | `scripts/bootstrap.ps1`, `build.ps1`, `package.ps1`, `verify-release.ps1`, `.github/workflows/midnight-windows.yml` | Scripts parse; not re-run since the local model was removed. |
 | Linux/macOS build and release | `scripts/build-unix.sh`, `package-unix.sh`, `verify-release.mjs`, `.github/workflows/midnight-release.yml` | Not re-run since the local model was removed. |
-| Eval runner and analysis | `scripts/harness-eval*.mjs`, `evals/` | Script unit tests pass. |
-| Lattice-1 pseudo-RSI harness (bounded IR, evaluator, versioned promotion and rollback, campaigns, library learning, synthesis, level-2 policy search) | `packages/coding-agent/src/lattice/`, [docs](lattice/README.md) | `test/lattice-*.test.ts` pass (83 tests, including crash injection by process death); `lattice selftest` reproduces the reference implementation's published numbers exactly. Effects are approved, journaled, reversible local moves; not part of the binary. |
 
 ## Removed (2026-09-28)
 
-From the harness, per [WORKFLOW_PLAN.md](WORKFLOW_PLAN.md): observation masking (it invalidated the prompt cache), mid-run checks, checkpoint rollback, divergence feedback, the reasoning boost, the verifier probe, loop-triggered escalation, the fast/frontier model classes and the Lattice-1 policy loop. None had a measured gain over plain Pi.
+- Lattice-1 (the standalone pseudo-RSI kernel, `npm run lattice`) and its docs and tests. Nothing in a session used it.
+- From the harness: the context pack and workspace index, the `lookup` tool, the language-server client and per-edit diagnostics; earlier the same day observation masking (it invalidated the prompt cache), mid-run checks, checkpoint rollback, divergence feedback, the reasoning boost, the verifier probe, loop-triggered escalation, the fast/frontier model classes and the Lattice-1 policy loop. None had a measured gain over plain Pi.
+- The research and eval material: the rebuild and Luna design plans, `docs/premise`, `evals/` and the `scripts/harness-eval*` runner.
 
 ## Removed (2026-09-27)
 
-The local MiniCPM5-2B model and everything built for it: `--local` and `--hybrid`, `delegate_local` and helper tasks, drift watch, the llama.cpp engine, its pins and download, `native/midnight-host`, the model lock, the `model`/`engine`/`doctor`/`helper` subcommands, the built-in llama.cpp provider, and the offline release. Also the harness's `task` contract, the Laya review, and the local-model profile. Reasons are in [the plan](HARNESS_REBUILD_PLAN.md#4-what-this-rebuild-removed). The measurements that informed it stay in `evals/harness/RESULTS.md` and `evals/drift/RESULTS.md`.
+The local MiniCPM5-2B model and everything built for it: `--local` and `--hybrid`, `delegate_local` and helper tasks, drift watch, the llama.cpp engine, its pins and download, `native/midnight-host`, the model lock, the `model`/`engine`/`doctor`/`helper` subcommands, the built-in llama.cpp provider, and the offline release. Also the harness's `task` contract, the Laya review, and the local-model profile.
 
 ## Upstream base
 
@@ -36,7 +36,7 @@ The Pi source snapshot is `earendil-works/pi` v0.87.1 (`f07218c4d`, recorded in 
 
 ## Not done
 
-1. **The measurement in the plan's Step 0 and Step 1**: a fresh holdout of longer multi-file tasks, per-run process isolation, escalation cost and per-phase timing in the run receipt, and the four-arm Luna/Astra comparison.
+1. **Measuring the harness against plain Pi** on real, larger repositories: success, wall time and cost with prompt cache included.
 2. **Product identity leftovers.** Package scopes remain `@earendil-works/*`; many docs, help text and the built-in update checker still refer to Pi.
 3. **Release infrastructure.** No Authenticode signing, update/rollback flow, SBOM, or clean-VM run.
 

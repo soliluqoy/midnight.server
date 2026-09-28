@@ -201,7 +201,7 @@ function newErrorsBlock(comparison: BaselineComparison): string[] {
 /**
  * Added to failing-check feedback when the blocker rule is on. Without it, "fix the cause, do not
  * weaken the tests" leaves a model facing a test that contradicts the request two ways out, both
- * drift: undo the requested behavior, or special-case the test (seen in evals/drift pilot-01).
+ * drift: undo the requested behavior, or special-case the test (seen in the drift pilots).
  */
 export const REQUEST_WINS_NOTE =
 	"If a failing test contradicts what the user asked for, the request wins: keep the requested behavior, do not special-case the test's inputs, and say in your final message which test conflicts and why.";

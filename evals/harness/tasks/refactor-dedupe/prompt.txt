@@ -1,1 +1,0 @@
-The three date formatters in report.js duplicate the same code. Refactor them to share one helper. Their output must stay exactly the same.

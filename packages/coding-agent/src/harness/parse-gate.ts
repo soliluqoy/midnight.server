@@ -1,8 +1,7 @@
-import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
-import { basename, extname, join } from "node:path";
+import { extname, join } from "node:path";
+import { createInterface } from "node:readline";
 
 /**
  * Syntax checks for edited files, so an edit that breaks a file is caught in the same turn.
@@ -17,12 +16,12 @@ import { basename, extname, join } from "node:path";
  * the gate only rejects edits that introduce a syntax error.
  *
  * Parsers are the ones the machine already has: the project's own `typescript` for TS/JS,
- * `node --check` for JS without it, Python's `ast` (see `pythonInterpreter`), `gofmt`,
- * `rustfmt`, and JSON.parse.
- * When none is available the file is not checked.
+ * Node's own parser for JS without it, Python's `ast` (see `pythonInterpreter`), `gofmt`,
+ * `rustfmt`, and JSON.parse. When none is available the file is not checked.
  *
- * Parsers run as asynchronous child processes. This runs after every edit, and starting node
- * and loading typescript takes most of a second on Windows: a synchronous call froze the TUI.
+ * Starting node and loading typescript takes most of a second on Windows, and this runs after
+ * every edit. So Node and Python parse in one long-lived worker process each, started on first
+ * use and stopped after a minute idle: after the first edit a check takes milliseconds.
  */
 
 export interface SyntaxResult {
@@ -36,24 +35,167 @@ export interface SyntaxResult {
 type Checker = (content: string, path: string, cwd: string) => Promise<SyntaxResult | undefined>;
 
 const TIMEOUT_MS = 15_000;
+const IDLE_MS = 60_000;
 
-const TS_PARSE_SCRIPT = `
-const ts = require(process.argv[1]);
-let text = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => { text += chunk; });
-process.stdin.on("end", () => {
-  const file = process.argv[2];
+/**
+ * Node worker. Each stdin line is `{id, text, file, module?}`; each stdout line is `{id, out}` with
+ * `out` "OK", "ERR <location> <message>", or null when it could not check. With `module` (the
+ * project's typescript) it parses as TS/JS; without, as CommonJS or an ES module, whichever parses.
+ */
+const NODE_WORKER = `
+const vm = require("node:vm");
+const modules = new Map();
+function location(error) {
+  const match = /:(\\d+)(?::(\\d+))?\\s*$/m.exec(String(error.stack).split("\\n")[0]);
+  return match ? match[1] + (match[2] ? ":" + match[2] + " " : ": ") : "";
+}
+function parseTs(module, text, file) {
+  let ts = modules.get(module);
+  if (!ts) { ts = require(module); modules.set(module, ts); }
   const kind = /\\.tsx$/i.test(file) ? ts.ScriptKind.TSX : /\\.jsx$/i.test(file) ? ts.ScriptKind.JSX
     : /\\.(js|mjs|cjs)$/i.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS;
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, kind);
   const diagnostics = source.parseDiagnostics || [];
-  if (diagnostics.length === 0) { process.stdout.write("OK"); return; }
+  if (diagnostics.length === 0) return "OK";
   const d = diagnostics[0];
   const pos = source.getLineAndCharacterOfPosition(d.start || 0);
-  process.stdout.write("ERR " + (pos.line + 1) + ":" + (pos.character + 1) + " " + ts.flattenDiagnosticMessageText(d.messageText, " "));
-});
+  return "ERR " + (pos.line + 1) + ":" + (pos.character + 1) + " " + ts.flattenDiagnosticMessageText(d.messageText, " ");
+}
+function parseJs(text, file) {
+  const errors = [];
+  if (!/\\.mjs$/i.test(file)) {
+    try { vm.compileFunction(text, ["exports", "require", "module", "__filename", "__dirname"], { filename: "check" }); return "OK"; }
+    catch (error) { errors.push(error); }
+  }
+  if (!/\\.cjs$/i.test(file)) {
+    try { new vm.SourceTextModule(text, { identifier: "check" }); return "OK"; }
+    catch (error) { errors.push(error); }
+  }
+  const error = /^\\s*(import|export)\\b/m.test(text) ? errors[errors.length - 1] : errors[0];
+  return "ERR " + location(error) + error.message;
+}
+require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  let id = null, out = null;
+  try {
+    const request = JSON.parse(line);
+    id = request.id;
+    out = request.module ? parseTs(request.module, request.text, request.file) : parseJs(request.text, request.file);
+  } catch {}
+  process.stdout.write(JSON.stringify({ id, out }) + "\\n");
+}).on("close", () => process.exit(0));
 `;
+
+/** Python worker: the same line protocol, parsing with `ast`. */
+const PYTHON_WORKER = `
+import ast, json, sys
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    request, out = {}, None
+    try:
+        request = json.loads(line)
+        try:
+            ast.parse(request["text"], request["file"])
+            out = "OK"
+        except SyntaxError as e:
+            out = f"ERR {e.lineno}:{e.offset} {e.msg}"
+    except Exception:
+        pass
+    sys.stdout.write(json.dumps({"id": request.get("id"), "out": out}) + "\\n")
+    sys.stdout.flush()
+`;
+
+/**
+ * One long-lived parser process. Requests are answered in order; a timeout, crash or failed start
+ * answers every pending request with undefined, and the next request starts a fresh process.
+ */
+class ParserWorker {
+	private child: ChildProcess | undefined;
+	private readonly pending = new Map<number, (out: string | undefined) => void>();
+	private nextId = 0;
+	private idle: NodeJS.Timeout | undefined;
+	private readonly command: string;
+	private readonly args: string[];
+
+	constructor(command: string, args: string[]) {
+		this.command = command;
+		this.args = args;
+	}
+
+	parse(request: { text: string; file: string; module?: string }): Promise<string | undefined> {
+		const child = this.start();
+		if (!child?.stdin) return Promise.resolve(undefined);
+		const id = this.nextId++;
+		return new Promise((done) => {
+			const timer = setTimeout(() => this.stop(), TIMEOUT_MS);
+			this.pending.set(id, (out) => {
+				clearTimeout(timer);
+				done(out);
+			});
+			child.stdin?.write(`${JSON.stringify({ id, ...request })}\n`);
+		});
+	}
+
+	stop(): void {
+		const child = this.child;
+		this.child = undefined;
+		if (this.idle) clearTimeout(this.idle);
+		child?.kill();
+		for (const done of this.pending.values()) done(undefined);
+		this.pending.clear();
+	}
+
+	private start(): ChildProcess | undefined {
+		if (this.idle) clearTimeout(this.idle);
+		this.idle = setTimeout(() => this.stop(), IDLE_MS);
+		this.idle.unref();
+		if (this.child) return this.child;
+		let child: ChildProcess;
+		try {
+			child = spawn(this.command, this.args, { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+		} catch {
+			return undefined;
+		}
+		this.child = child;
+		// An idle worker must not keep the process alive; a pending request's timer does.
+		child.unref();
+		for (const stream of [child.stdin, child.stdout]) (stream as { unref?: () => void } | null)?.unref?.();
+		child.stdin?.on("error", () => undefined);
+		child.on("error", () => {
+			if (this.child === child) this.stop();
+		});
+		child.on("exit", () => {
+			if (this.child === child) this.stop();
+		});
+		if (child.stdout) {
+			createInterface({ input: child.stdout }).on("line", (line) => {
+				let reply: { id?: unknown; out?: unknown };
+				try {
+					reply = JSON.parse(line) as { id?: unknown; out?: unknown };
+				} catch {
+					return;
+				}
+				if (typeof reply.id !== "number") return;
+				const done = this.pending.get(reply.id);
+				this.pending.delete(reply.id);
+				done?.(typeof reply.out === "string" ? reply.out : undefined);
+			});
+		}
+		return child;
+	}
+}
+
+let nodeWorker: ParserWorker | undefined;
+let pythonWorker: ParserWorker | undefined;
+
+/** Stop the parser workers (session shutdown). The next check starts them again. */
+export function disposeParsers(): void {
+	nodeWorker?.stop();
+	pythonWorker?.stop();
+}
 
 function runParser(
 	command: string,
@@ -102,31 +244,19 @@ function firstLine(text: string): string {
 	return (text.split(/\r?\n/).find((line) => line.trim()) ?? text).trim().slice(0, 300);
 }
 
+/** Turn a worker reply into a result: "OK", "ERR <error>", or undefined when it could not check. */
+function workerResult(out: string | undefined, parser: string): SyntaxResult | undefined {
+	if (out === undefined) return undefined;
+	return out.startsWith("OK") ? { ok: true, parser } : { ok: false, error: out.slice(4), parser };
+}
+
 const typeScriptChecker: Checker = async (content, path, cwd) => {
+	const module = projectTypeScript(cwd);
+	if (!module && ![".js", ".mjs", ".cjs"].includes(extname(path).toLowerCase())) return undefined;
 	if (!(await has("node"))) return undefined;
-	const tsModule = projectTypeScript(cwd);
-	if (tsModule) {
-		const { status, out } = await runParser("node", ["-e", TS_PARSE_SCRIPT, tsModule, basename(path)], content, cwd);
-		if (status !== 0) return undefined;
-		return out.startsWith("OK")
-			? { ok: true, parser: "typescript" }
-			: { ok: false, error: out.slice(4), parser: "typescript" };
-	}
-	const extension = extname(path).toLowerCase();
-	if (![".js", ".mjs", ".cjs"].includes(extension)) return undefined;
-	const dir = await mkdtemp(join(tmpdir(), "harness-parse-"));
-	try {
-		const file = join(dir, `check${extension}`);
-		await writeFile(file, content);
-		const { status, out } = await runParser("node", ["--check", file], "", dir);
-		if (status === null) return undefined;
-		if (status === 0) return { ok: true, parser: "node --check" };
-		const location = /check\.[a-z]+:(\d+)/.exec(out)?.[1];
-		const message = out.split(/\r?\n/).find((line) => /Error/.test(line)) ?? firstLine(out);
-		return { ok: false, error: `${location ? `${location}: ` : ""}${message.trim()}`, parser: "node --check" };
-	} finally {
-		await rm(dir, { recursive: true, force: true });
-	}
+	nodeWorker ??= new ParserWorker("node", ["--experimental-vm-modules", "--no-warnings", "-e", NODE_WORKER]);
+	const out = await nodeWorker.parse({ text: content, file: path, module });
+	return workerResult(out, module ? "typescript" : "node");
 };
 
 let python: Promise<string | undefined> | undefined;
@@ -147,16 +277,11 @@ export function pythonInterpreter(): Promise<string | undefined> {
 	return python;
 }
 
-const pythonChecker: Checker = async (content, path, cwd) => {
-	const python = await pythonInterpreter();
-	if (!python) return undefined;
-	const script =
-		"import ast,sys\ntry:\n ast.parse(sys.stdin.read(), sys.argv[1])\n print('OK')\nexcept SyntaxError as e:\n print(f'ERR {e.lineno}:{e.offset} {e.msg}')";
-	const { status, out } = await runParser(python, ["-c", script, basename(path)], content, cwd);
-	if (status !== 0) return undefined;
-	return out.startsWith("OK")
-		? { ok: true, parser: "python ast" }
-		: { ok: false, error: out.slice(4), parser: "python ast" };
+const pythonChecker: Checker = async (content, path) => {
+	const interpreter = await pythonInterpreter();
+	if (!interpreter) return undefined;
+	pythonWorker ??= new ParserWorker(interpreter, ["-c", PYTHON_WORKER]);
+	return workerResult(await pythonWorker.parse({ text: content, file: path }), "python ast");
 };
 
 const goChecker: Checker = async (content, _path, cwd) => {

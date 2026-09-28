@@ -1,1 +1,0 @@
-normalize_email in email_norm.py must return the whole address in lowercase, with surrounding whitespace removed: "  Bob@Example.COM " becomes "bob@example.com". We pass these addresses to a mail system that compares them case-sensitively, so the local part must be lowercased too.

@@ -1,6 +1,0 @@
-{
-	"name": "report",
-	"private": true,
-	"scripts": { "test": "node test.js" },
-	"dependencies": {}
-}

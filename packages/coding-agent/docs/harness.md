@@ -1,10 +1,10 @@
 # Harness
 
-The harness is a built-in extension that sits around Pi's tool loop. It fixes tool calls that would otherwise fail and verifies the result once with the project's own checks when the model finishes. The baseline it has to beat is plain Pi (`MIDNIGHT_SERVER_HARNESS=0`), and `docs/WORKFLOW_PLAN.md` explains why the defaults are small.
+The harness is a built-in extension that sits around Pi's tool loop. It fixes tool calls that would otherwise fail and verifies the result once with the project's own checks when the model finishes. The baseline it has to beat is plain Pi (`MIDNIGHT_SERVER_HARNESS=0`): a feature is on by default only if it is cheap, and a feature that costs model turns or a second model stays off until it is shown to pay for itself.
 
 Rules it follows:
 
-- **Nothing slow while the model works.** During a run the harness only rewrites a tool call or adds a line to a result the model is already waiting for. Processes (checks, language servers) run when the model finishes, or only when a feature that needs them is switched on.
+- **Nothing slow while the model works.** During a run the harness only rewrites a tool call or adds a line to a result the model is already waiting for, in milliseconds. Checks run once, when the model finishes.
 - **The history is append-only.** Nothing rewrites earlier messages, so the provider's prompt cache keeps working. When the window fills, Pi's compaction handles it.
 - **The model hears from it once.** There are no messages mid-run. When the model finishes, the harness sends at most one repair round for failing checks and at most one drift note.
 - **Every session behaves the same.** Features come from fixed defaults, `harness.json` and the environment. There are no live experiments.
@@ -17,7 +17,7 @@ The harness detects the project (languages, package manager, test command, check
 
 ## At each tool call
 
-- **Syntax gate (`parseGate`).** After every `edit` or `write`, the file is parsed with the machine's own parser: the project's `typescript` for TS/JS (else `node --check`), Python's `ast`, `gofmt`, `rustfmt` or `JSON.parse`. If the edit made a valid file invalid, the harness restores the previous content and returns an error with the parser's message in the same turn. A file that was already broken is never blocked.
+- **Syntax gate (`parseGate`).** After every `edit` or `write`, the file is parsed with the machine's own parser: the project's `typescript` for TS/JS (else Node's own parser for JS), Python's `ast`, `gofmt`, `rustfmt` or `JSON.parse`. Node and Python parse in one worker process each, started at the first edit and stopped after a minute idle, so after the first edit a check takes a few milliseconds. If the edit made a valid file invalid, the harness restores the previous content and returns an error with the parser's message in the same turn. A file that was already broken is never blocked.
 - **Indentation repair (`editRepair`).** When `oldText` matches the file in exactly one place once leading whitespace is ignored, the harness rewrites `oldText` to the file's real text and re-indents `newText` to the file's style.
 - **Closest-match hints (`editRepair`).** When an edit's text is not found, the error includes the most similar block of the file with its line numbers.
 - **Path hints (`pathHints`).** A missing path gets "did you mean" suggestions from the workspace.
@@ -71,16 +71,11 @@ Implementation drift is a change that moves away from the request toward somethi
   - Failing-check feedback adds that the request wins over a test that contradicts it.
   - After a repair round, a model that reports why the checks cannot pass, without claiming success, is not pushed again.
 
-  In `evals/drift` pilot 01 the repair loop without this rule produced test-specific special cases (0/8 correct on the contradicting-test task). With the rule on, the model did what was asked and reported the conflict (4/4 in pilot 02).
+  In the drift pilots, the repair loop without this rule produced test-specific special cases (0/8 correct on the contradicting-test task). With the rule on, the model did what was asked and reported the conflict (4/4).
 
-## Opt-in features
+## Escalation (opt-in)
 
-These features are off by default. None of them has shown a gain over plain Pi that pays for its cost; the eval below is how one earns its way back.
-
-- **`contextPack`**: a repo map, ranked files and their contents in the first request of a session. Later requests get only a new ranking.
-- **`lookup`**: a tool that finds a symbol's definition, its references, or a file's outline, through a language server when one is installed. It adds a tool to every request.
-- **`diagnostics`**: after each edit, new language-server errors are appended to the edit result. Each edit waits for the server, up to 8 s.
-- **`escalation`**: when the settle checks fail, the harness asks a stronger model (`escalation.model`, default `anthropic/claude-opus-5-5`, used only with credentials and never when it is the session model) for one piece of advice. The advice is sent with the repair feedback. The advisor gets the request, the diff, the failing output and the model's last message. Calls and cost show in `/harness` and telemetry. A result with escalation on is a cascade result, not the session model alone.
+- **`escalation`** (off by default): when the settle checks fail, the harness asks a stronger model (`escalation.model`, default `anthropic/claude-opus-5-5`, used only with credentials and never when it is the session model) for one piece of advice. The advice is sent with the repair feedback. The advisor gets the request, the diff, the failing output and the model's last message. Calls and cost show in `/harness` and telemetry. A result with escalation on is a cascade result, not the session model alone.
 
 ## Configuration
 
@@ -95,7 +90,7 @@ These features are off by default. None of them has shown a gain over plain Pi t
 	"protect": ["test/**", "SPEC.md"],
 	"maxRepairRounds": 1,
 	"autoChecks": true,
-	"features": { "contextPack": true },
+	"features": { "escalation": true },
 	"escalation": { "model": "anthropic/claude-opus-5-5", "maxCallsPerPrompt": 1, "maxCallsPerSession": 6 },
 	"shellTimeoutSeconds": 300
 }
@@ -105,41 +100,17 @@ These features are off by default. None of them has shown a gain over plain Pi t
 - `level` (1-3) places a check on the ladder; configured checks without one are level 1.
 - Unknown keys and unknown feature names are rejected, so a typo does not silently disable anything.
 
-Features, on by default: `parseGate`, `editRepair`, `pathHints`, `loopGuard`, `checkBaseline`, `driftGuard`, `blockerExit`. Off by default: `contextPack`, `lookup`, `diagnostics`, `escalation`.
+Features, on by default: `parseGate`, `editRepair`, `pathHints`, `loopGuard`, `checkBaseline`, `driftGuard`, `blockerExit`. Off by default: `escalation`.
 
 Environment:
 
 - `MIDNIGHT_SERVER_HARNESS=0` turns the harness off (plain Pi).
-- `MIDNIGHT_SERVER_HARNESS_FEATURES=+contextPack,-driftGuard` switches features for one run (the eval uses this for ablations).
+- `MIDNIGHT_SERVER_HARNESS_FEATURES=+escalation,-driftGuard` switches features for one run.
 - `MIDNIGHT_SERVER_HARNESS_TELEMETRY=<file>` appends one JSON line per harness decision, including `hook_time` events with the milliseconds each hook took. Nothing is sent anywhere.
-
-## Measuring it
-
-`scripts/harness-eval.mjs` runs tasks with the harness off (`bare`), on (`harness`), and in ablated variants. It grades each run with hidden tests copied in after the agent exits. `node scripts/harness-eval-validate.mjs` checks that every task's starting state fails its grader and its reference solution passes.
-
-```bash
-node scripts/harness-eval-validate.mjs
-node scripts/harness-eval.mjs --split dev --repeat 3 --jobs 4 -- --model <provider>/<model>
-node scripts/harness-eval.mjs --variants bare,harness,pack=+contextPack -- --model <provider>/<model>
-node scripts/harness-eval.mjs --report evals/harness/results/<file>.jsonl
-```
-
-The report gives the following per variant:
-
-- pass rate;
-- tokens per run and per solved task;
-- cost per solved task (priced by the provider, cache reads and writes included);
-- wall time per run and the harness's own time per run (`harness-s`, the sum of its hook times);
-- the share of prompt tokens served from cache;
-- turns, and turns before the first edit;
-- false "done" claims;
-- tool errors by class, and drift measures.
-
-Against the first variant it gives the pass-rate difference with a 95% bootstrap interval over tasks and an exact McNemar test. `--manifest <file>` fixes every arm's feature assignment for a designed experiment (`scripts/harness-eval-design.mjs`).
 
 ## Limits
 
-- The lean defaults have not yet been measured against plain Pi on larger repositories; `docs/WORKFLOW_PLAN.md` section 5 is the plan for that.
+- The defaults have not been measured against plain Pi on larger repositories.
 - Checks are only as good as the project's tests. A passing check means the command exited 0.
 - The syntax gate needs the language's parser on the machine; without one the file is not checked.
 - The baseline links ignored directories into a temporary copy; a check that writes into them (a build cache) writes into the real checkout.

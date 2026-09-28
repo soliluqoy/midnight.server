@@ -34,11 +34,8 @@ jobs:
         run: >-
           node ../../node_modules/vitest/dist/cli.js --run
           test/midnight-config.test.ts test/midnight-ui.test.ts test/harness-units.test.ts
-          test/harness-v2.test.ts test/harness-drift.test.ts test/suite/harness.test.ts
-          test/suite/harness-v2.test.ts test/suite/harness-drift.test.ts
-
-      - name: Eval script tests
-        run: node --test scripts/harness-eval-design.test.mjs scripts/harness-eval-stats.test.mjs
+          test/harness-v2.test.ts test/harness-drift.test.ts test/harness-baseline.test.ts
+          test/suite/harness.test.ts test/suite/harness-v2.test.ts test/suite/harness-drift.test.ts
 
       - name: Build and package
         shell: pwsh

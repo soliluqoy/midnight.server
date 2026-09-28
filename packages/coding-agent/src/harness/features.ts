@@ -4,11 +4,10 @@
  * The default set is what stays cheap: guards that fix a tool call or add a line to a result the
  * model is already waiting for, and one verification pass when the run settles. Everything that
  * costs model turns, process time on every request or a second model is opt-in until a receipt
- * against vanilla Pi shows it pays for itself (docs/WORKFLOW_PLAN.md).
+ * against plain Pi shows it pays for itself.
  *
- * Every feature can be switched in `harness.json` (`features: { name: true }`) and, for
- * measurement, with `MIDNIGHT_SERVER_HARNESS_FEATURES=+contextPack,-driftGuard`. The eval
- * (`scripts/harness-eval.mjs`) builds ablation variants from that variable.
+ * Every feature can be switched in `harness.json` (`features: { name: true }`) and, for a
+ * single run, with `MIDNIGHT_SERVER_HARNESS_FEATURES=+escalation,-driftGuard`.
  */
 export const FEATURE_NAMES = [
 	/** Reject edits that break a file's syntax, restoring the previous content. */
@@ -32,12 +31,6 @@ export const FEATURE_NAMES = [
 	"driftGuard",
 	/** One rule offering a sanctioned way to stop: report what blocks the request instead of substituting. */
 	"blockerExit",
-	/** Opt-in. Repo map, ranked files and their contents in the first request of a session. */
-	"contextPack",
-	/** Opt-in. The `lookup` tool: definitions, references and outlines through LSP or syntax outlines. */
-	"lookup",
-	/** Opt-in. New language-server errors reported with each edit result (waits for the server). */
-	"diagnostics",
 	/** Opt-in. Ask a stronger model for advice with the repair feedback when the checks fail. */
 	"escalation",
 ] as const;
@@ -52,14 +45,8 @@ export const DEFAULT_FEATURES: Record<FeatureName, boolean> = {
 	checkBaseline: true,
 	driftGuard: true,
 	blockerExit: true,
-	contextPack: false,
-	lookup: false,
-	diagnostics: false,
 	escalation: false,
 };
-
-/** Context pack token budget: enough for a map and a few files, well under the window. */
-export const CONTEXT_PACK_TOKENS = 2_000;
 
 /** Parse `+name,-name,name` into switches. Unknown names throw so a typo cannot silently do nothing. */
 export function parseFeatureOverrides(text: string | undefined): Partial<Record<FeatureName, boolean>> {

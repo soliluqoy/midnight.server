@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, rm, stat, symlink, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { isGeneratedPath } from "./workspace-index.ts";
+import { isGeneratedPath } from "./workspace.ts";
 
 /**
  * Git helpers for the harness: the working tree as a git tree object, what changed since one, and

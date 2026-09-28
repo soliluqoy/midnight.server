@@ -1,1 +1,0 @@
-compareVersions in version.js sorts prerelease versions wrong. Make it follow semver precedence.

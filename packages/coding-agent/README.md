@@ -2,9 +2,9 @@
 
 A coding CLI and terminal UI for Windows, Linux and macOS, built from a modified [Pi](https://github.com/soliluqoy/pi).
 
-Its core is **[the harness](packages/coding-agent/docs/harness.md)**: it does in code what a model would otherwise spend turns and tokens on, so fast, cheap models solve more and waste less. Before the first request it hands the model the files that matter. At every edit it catches broken syntax, bad paths and mismatched text in the same turn. After edits it runs the project's own checks, cheapest first, and rolls back to the last passing state when a fix keeps failing. When a fast model is stuck, it asks a stronger one for advice.
+Its core is **[the harness](packages/coding-agent/docs/harness.md)**, a deliberately small layer around Pi's tool loop. At every edit it catches broken syntax, bad paths and mismatched text in the same turn, without extra model turns. When the model finishes, it runs the project's own checks once on the changed files and gives one repair round for new failures. It then checks the change for drift from the request. It never rewrites the conversation (the prompt cache keeps working), and plain Pi is the baseline it has to beat.
 
-**Status: pre-release.** The goal is a measured one: a fast model (GPT-6 Luna) with midnight.server within 5 success points of a strong model (GPT-6 Astra, thinking high) on fresh repository tasks, with latency and cost reported alongside. That gap has not been measured yet. The plan and the evidence so far are in [the rebuild plan](docs/HARNESS_REBUILD_PLAN.md), [harness results](evals/harness/RESULTS.md) and [drift results](evals/drift/RESULTS.md).
+**Status: pre-release.** What is verified and what is not is in [implementation status](docs/IMPLEMENTATION_STATUS.md).
 
 ## Quick start
 
@@ -24,18 +24,25 @@ Then run `midnight.server`, and `/login` or set an API key for your provider. Se
 
 ## Features
 
-- **Harness.** A context pack before the first request (environment, ranked files, their contents), a syntax gate and edit repairs at every action, language-server errors with each edit, a `lookup` tool for definitions and references, the project's checks (configured or detected) run as a ladder during and after the run, rollback to the last passing state, a drift guard that asks once to fix or disclose a change that does not match the request, a sanctioned way to stop and report a blocker, and advice from a stronger model when a fast one is stuck. [Details](packages/coding-agent/docs/harness.md).
+- **Harness.** Several parts:
+  - a syntax gate and edit, path and shell repairs at every tool call;
+  - the project's checks (configured or detected) run once when the model finishes, with failures the project already had held back;
+  - one repair round;
+  - a drift guard that asks once to fix or disclose a change that does not match the request;
+  - a sanctioned way to stop and report a blocker.
+
+  Opt-in: advice from a stronger model when the checks fail. [Details](packages/coding-agent/docs/harness.md).
 - **Plan and build modes.** Press Tab in an empty editor to switch. Plan mode limits the model to read-only tools (read, grep, find, ls) and asks it for a step-by-step plan; build mode restores the full tool set.
 - **Session sidebar.** In fullscreen mode (`/settings` → TUI mode) a sidebar shows the session title, git branch with changed/staged counts and ahead/behind, context usage and cost, the model, and the files changed this session with +/- line counts. Click the BUILD/PLAN chip to switch modes (also in the footer), the model to change it, and a changed file to preview it. It appears automatically on terminals 110+ columns wide; Alt+S toggles it.
 - **File explorer.** Alt+E opens a file tree on the left (fullscreen mode) with git status marks. Enter adds `@path` to the prompt, Space previews the file, Escape goes back. It shows on its own only on terminals 150+ columns wide.
 - **Side threads.** Alt+T turns the editor into a question box about the newest tool call or reply (Up/Down picks another). Ask with the session model or another model. The answer folds under that item, the main agent never sees it, and it can keep running. Alt+T again manages threads: `m` sends one to the main agent, `b` redoes the item from before it with the thread in your prompt. `/ask` asks about the newest item. [Details](packages/coding-agent/docs/sessions.md#ask-side-questions).
 - **Command palette.** Alt+X opens a fuzzy-searchable list of actions and slash commands.
-- **Automatic session titles.** After the first exchange the session model names the session, unless you already named it.
+- **Automatic session titles.** After the first exchange the session model names the session, then updates the title as the work moves on (at most every 3 runs and 5 minutes). A name you set with `--name` or `/name` is kept. The title shows in the sidebar and terminal title, not the footer.
 - **Native Windows.** PowerShell is the default shell tool; no Node.js, Python, WSL, or Git Bash is needed to run it.
 
 ## Escalation
 
-When a fast model is stuck (the same checks keep failing, or it repeats itself), the harness asks a stronger model for one piece of advice and hands control back. It is on by default for fast models and uses `anthropic/claude-opus-5-5` when you have credentials for it; set another model or caps in `.midnight.server/harness.json` (`escalation`), or turn it off with `features: { "escalation": false }`. `/harness` shows the calls made and their cost. A result with escalation on is a cascade result, not the fast model alone.
+Off by default. With `features: { "escalation": true }` in `.midnight.server/harness.json`, the harness asks a stronger model for one piece of advice when the checks fail, and sends it with the repair feedback. It uses `anthropic/claude-opus-5-5` when you have credentials for it; set another model or caps with `escalation`. `/harness` shows the calls made and their cost. A result with escalation on is a cascade result, not the session model alone.
 
 ## Install
 
@@ -114,7 +121,7 @@ From a source checkout you can also run `.\pi-test.ps1 <args>`. Set `TSX_TSCONFI
 ## Security
 
 - The PowerShell/Bash tools run with your full user permissions; nothing is sandboxed.
-- Project checks, detected checks and language servers run project code, so they require project trust.
+- Project checks and detected checks run project code, so they require project trust.
 - Extensions run in-process with full privileges.
 
 ## Sources and licenses

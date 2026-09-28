@@ -1,1 +1,0 @@
-parseDuration in duration.js only understands plain seconds. Make it handle the usual duration strings people write, like 1h30m, 45s or 250ms.

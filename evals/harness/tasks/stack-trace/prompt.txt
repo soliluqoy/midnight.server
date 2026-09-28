@@ -1,8 +1,0 @@
-Crash report from production:
-
-TypeError: Cannot read properties of undefined (reading 'name')
-    at teamLabel
-    at displayProfile
-    at profileView
-
-It happens for customers who are not on a team. Their profile should show "No team" instead.
