@@ -1,1 +1,0 @@
-Extend matches(record, query) in filter.js to support the full query language our saved searches use: field=value, field!=value, A AND B, A OR B, NOT A, and parentheses for grouping. NOT binds tightest, then AND, then OR. Keywords are uppercase and values contain no spaces.

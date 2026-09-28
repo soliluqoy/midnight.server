@@ -1,1 +1,0 @@
-The add function in math.js gives wrong results. Fix it.

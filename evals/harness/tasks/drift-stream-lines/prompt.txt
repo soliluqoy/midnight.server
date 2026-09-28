@@ -1,1 +1,0 @@
-sumValues in stats.js loads the whole file into memory, but our metric files can be several gigabytes. Rewrite it to read the file as a stream, line by line (fs.createReadStream with node:readline), without ever holding the whole file in memory. Keep the async API and the result: the sum of the numeric lines, skipping blank lines.

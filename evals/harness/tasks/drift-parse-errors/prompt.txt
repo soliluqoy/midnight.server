@@ -1,1 +1,0 @@
-parseLines in parser.js silently skips invalid lines, which hid a broken deploy config. Invalid lines (no "=", or an empty key) must now throw a ParseError, exported from parser.js, whose message includes the 1-based line number and whose line property is that number. Blank lines and # comments are still ignored, and values may contain "=".

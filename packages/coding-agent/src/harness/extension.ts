@@ -1,10 +1,8 @@
-import { execFile } from "node:child_process";
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { createTwoFilesPatch } from "diff";
-import { type Static, Type } from "typebox";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import type {
 	BoundaryResult,
@@ -37,9 +35,9 @@ import {
 	harnessConfigPath,
 	loadHarnessConfig,
 } from "./config.ts";
-import { buildContextPack, buildFollowUpPack, describeEnvironment } from "./context-pack.ts";
 import {
 	type DetectedCheck,
+	describeEnvironment,
 	detectProjectChecks,
 	expandTests,
 	isStaticCheck,
@@ -57,40 +55,16 @@ import {
 } from "./drift.ts";
 import { LoopGuard, notFoundHint, repairIndentation, suggestPaths, type TextEdit } from "./edit-repair.ts";
 import { formatAdvice, requestAdvice } from "./escalate.ts";
-import { CONTEXT_PACK_TOKENS, type FeatureName, parseFeatureOverrides, resolveFeatures } from "./features.ts";
+import { type FeatureName, parseFeatureOverrides, resolveFeatures } from "./features.ts";
 import { gitRoot, materializeTree, workingTreeChanges, writeWorkingTree } from "./git.ts";
 import { remapForeignPath, repairPowerShellCommand, toolNeedsExistingPath } from "./interface-repair.ts";
-import { LspManager } from "./lsp.ts";
-import { canCheckSyntax, introducedSyntaxError, pythonInterpreter } from "./parse-gate.ts";
-import { formatDiagnostics, newErrors, runLookup } from "./semantic.ts";
+import { canCheckSyntax, disposeParsers, introducedSyntaxError, pythonInterpreter } from "./parse-gate.ts";
 import { HarnessTelemetry } from "./telemetry.ts";
-import {
-	buildWorkspaceIndex,
-	isTestPath,
-	listWorkspaceFiles,
-	testsFor,
-	type WorkspaceIndex,
-} from "./workspace-index.ts";
+import { isTestPath, listWorkspaceFiles, testsFor } from "./workspace.ts";
 
 export const CHECK_MESSAGE_TYPE = "harness_check";
-export const CONTEXT_MESSAGE_TYPE = "harness_context";
 export const ADVICE_MESSAGE_TYPE = "harness_advice";
 export const DRIFT_MESSAGE_TYPE = "harness_drift";
-export const LOOKUP_TOOL_NAME = "lookup";
-
-const lookupParameters = Type.Object({
-	op: Type.Union([Type.Literal("definition"), Type.Literal("references"), Type.Literal("outline")], {
-		description:
-			"definition: where a symbol is declared, with its body. references: every use of a symbol. outline: the declarations in one file.",
-	}),
-	symbol: Type.Optional(
-		Type.String({ description: "definition/references: the name, e.g. parsePort or Parser.parse." }),
-	),
-	path: Type.Optional(
-		Type.String({ description: "outline: the file. definition/references: optional file to prefer." }),
-	),
-});
-
 function textOf(content: readonly (TextContent | ImageContent)[]): string {
 	return content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
 }
@@ -181,7 +155,7 @@ export function commandKey(command: string): string {
 
 /**
  * The harness: cheap guards around Pi's tool calls and one verification pass when a run
- * settles. See docs/harness.md and docs/WORKFLOW_PLAN.md.
+ * settles. See docs/harness.md.
  *
  * - Session: environment facts (OS, shell, check commands) in the system prompt, where the
  *   provider caches them.
@@ -203,11 +177,6 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	/** Project detection in progress (it probes for Python); requests wait for it. */
 	let factsReady: Promise<void> = Promise.resolve();
 	let stateGeneration = 0;
-	let index: WorkspaceIndex | undefined;
-	let indexDirty = true;
-	let indexBuild: Promise<WorkspaceIndex> | undefined;
-	let packSent = false;
-	let lsp: LspManager | undefined;
 	/**
 	 * Bumped by anything that can change a check's result: a successful edit or write, any shell
 	 * command, and each new request. A command the model ran counts for a check only at the same value.
@@ -224,8 +193,6 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		repairs: 0,
 		escalations: 0,
 		escalationCostUsd: 0,
-		packs: 0,
-		packBytes: 0,
 		driftChecks: 0,
 		driftNudges: 0,
 		blockersAccepted: 0,
@@ -270,57 +237,10 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		return config.checks.length > 0 ? checks : checks.filter((check) => (check.level ?? 1) < 3);
 	}
 
-	/**
-	 * The workspace index, rebuilt when a change marked it dirty. Concurrent callers share one
-	 * build; a change during a build marks the result dirty again for the next caller.
-	 */
-	function workspace(): Promise<WorkspaceIndex> {
-		if (index && !indexDirty) return Promise.resolve(index);
-		if (!indexBuild) {
-			indexDirty = false;
-			const root = cwd;
-			indexBuild = buildWorkspaceIndex(root, index)
-				.then((built) => {
-					if (root === cwd) index = built;
-					return built;
-				})
-				.finally(() => {
-					indexBuild = undefined;
-				});
-		}
-		return indexBuild;
-	}
-
-	/**
-	 * Workspace-relative paths, from the index when one is current (opt-in features build it),
-	 * else from one `git ls-files` (or a directory walk outside git): no file is read.
-	 */
+	/** Workspace-relative paths from one `git ls-files` (or a directory walk outside git): no file is read. */
 	async function workspaceFiles(): Promise<string[]> {
-		if (index && !indexDirty) return index.files.map((file) => file.path);
 		return (await listWorkspaceFiles(cwd)).files;
 	}
-
-	function lspManager(): LspManager | undefined {
-		if (!trusted) return undefined;
-		lsp ??= new LspManager(cwd);
-		return lsp;
-	}
-
-	pi.registerTool({
-		name: LOOKUP_TOOL_NAME,
-		label: "lookup",
-		description:
-			"Find code by symbol name instead of searching and reading: definition returns where a symbol is declared with its body, references lists every use, outline lists the declarations in a file. Uses the project's language server when available.",
-		promptSnippet: "Find a symbol's definition (with body), its references, or a file's outline",
-		promptGuidelines: ["To find where something is defined or used, call lookup with its name before grep or read."],
-		parameters: lookupParameters,
-		executionMode: "parallel",
-		async execute(_toolCallId, params: Static<typeof lookupParameters>, signal) {
-			const text = await runLookup(params, await workspace(), lspManager(), signal);
-			telemetry.record({ type: "lookup", op: params.op });
-			return { content: [{ type: "text", text }], details: undefined };
-		},
-	});
 
 	const renderHarnessMessage =
 		(tag: string): MessageRenderer =>
@@ -378,20 +298,11 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		stateLoaded = true;
 		loadState(ctx);
-		index = undefined;
-		indexDirty = true;
-		packSent = false;
-		syncTools();
-		// Index in the background while the user types, for the opt-in features that rank files.
-		// The default features need only the file list (`git ls-files`), read when they need it.
-		if (config.enabled && (on("contextPack") || on("lookup"))) {
-			void workspace().catch(() => undefined);
-		}
 	});
 
 	pi.on("session_shutdown", () => {
 		controller.abort();
-		void lsp?.dispose();
+		disposeParsers();
 	});
 
 	pi.on("agent_start", () => {
@@ -401,17 +312,6 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	pi.on("agent_settled", () => {
 		run = freshRun();
 	});
-
-	/** Keep the `lookup` tool active only when its feature is on. */
-	function syncTools(): void {
-		const active = pi.getActiveTools();
-		const has = active.includes(LOOKUP_TOOL_NAME);
-		if (on("lookup") && !has && getMidnightStatus().agentMode !== "plan") {
-			pi.setActiveTools([...active, LOOKUP_TOOL_NAME]);
-		} else if (!on("lookup") && has) {
-			pi.setActiveTools(active.filter((name) => name !== LOOKUP_TOOL_NAME));
-		}
-	}
 
 	// Argument repairs made in tool_call, reported to the model with the tool's result.
 	const repairNotes = new Map<string, string[]>();
@@ -502,7 +402,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					telemetry.record({ type: "edit_repair" });
 				}
 			}
-			if (on("parseGate") || on("diagnostics")) beforeEdit.set(event.toolCallId, { path: absolute, before });
+			if (on("parseGate")) beforeEdit.set(event.toolCallId, { path: absolute, before });
 			return undefined;
 		}),
 	);
@@ -552,12 +452,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					run.changed.add(rel);
 					run.allChanged.add(rel);
 					run.lastChangeAt = Date.now();
-					indexDirty = true;
 					run.loopGuard.noteChange();
-					if (snapshot && on("diagnostics") && trusted) {
-						const note = await diagnosticsNote(snapshot.path, snapshot.before, rel);
-						if (note) extra.push(note);
-					}
 				}
 			}
 
@@ -608,7 +503,6 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			if (SHELL_TOOLS.has(event.toolName)) {
 				changeEpoch++;
 				run.shellRan = true;
-				indexDirty = true;
 				const command = (event.input as { command?: unknown }).command;
 				if (!event.isError) {
 					// A command that succeeded may have changed files: rereads and reruns are new information.
@@ -632,51 +526,18 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		}),
 	);
 
-	/** New language-server errors caused by an edit, or undefined. */
-	async function diagnosticsNote(path: string, before: string | undefined, rel: string): Promise<string | undefined> {
-		const manager = lspManager();
-		if (!manager) return undefined;
-		const client = await manager.clientFor(path);
-		if (!client) return undefined;
-		try {
-			const since = Date.now();
-			client.sync(path);
-			const after = await client.diagnosticsFor(path, since, 8_000);
-			if (!after || after.every((item) => (item.severity ?? 1) !== 1)) return undefined;
-			let previous: typeof after | undefined;
-			if (before !== undefined) {
-				const beforeSince = Date.now();
-				client.sync(path, before);
-				previous = await client.diagnosticsFor(path, beforeSince, 8_000);
-				client.sync(path);
-			}
-			const fresh = newErrors(previous, after);
-			if (fresh.length === 0) return undefined;
-			telemetry.record({ type: "diagnostics_new", count: fresh.length, server: client.spec.id });
-			return formatDiagnostics(rel, fresh, `${client.spec.id} language server`);
-		} catch {
-			return undefined;
-		}
-	}
-
 	pi.on("before_agent_start", (event, ctx) =>
 		timed("before_agent_start", async () => {
 			if (!stateLoaded) {
 				stateLoaded = true;
 				loadState(ctx);
 			}
-			// Trust can be granted during a session; checks and servers follow it.
+			// Trust can be granted during a session; checks follow it.
 			if (ctx.isProjectTrusted() !== trusted || ctx.cwd !== cwd) loadState(ctx);
 			run = freshRun(event.prompt);
 			run.startedAt = Date.now();
 			changeEpoch++;
 			if (!config.enabled) return;
-			syncTools();
-			const planning = getMidnightStatus().agentMode === "plan";
-			const packing = on("contextPack") && !planning && event.prompt.trim() !== "";
-			const indexed = packing ? workspace() : undefined;
-			const git = packing && !packSent ? gitSummary(ctx.cwd) : undefined;
-			indexed?.catch(() => undefined);
 			await factsReady;
 			telemetry.record({ type: "features", features: features() });
 			const active = pi.getActiveTools();
@@ -686,46 +547,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 				platform: process.platform,
 				shell: active.includes("powershell") ? "powershell" : active.includes("bash") ? "bash" : undefined,
 			});
-			if (on("blockerExit") && !planning) event.systemPromptOptions.promptGuidelines.push(BLOCKER_GUIDELINE);
-			if (!indexed) return;
-			try {
-				const workspaceIndex = await indexed;
-				let text: string | undefined;
-				if (!packSent) {
-					const window = ctx.model?.contextWindow ?? 0;
-					const budget = Math.min(
-						CONTEXT_PACK_TOKENS,
-						window > 0 ? Math.floor(window * 0.1) : Number.POSITIVE_INFINITY,
-					);
-					const pack = buildContextPack({
-						index: workspaceIndex,
-						request: event.prompt,
-						git: await git,
-						budgetTokens: budget,
-					});
-					text = pack?.text;
-					if (pack) {
-						telemetry.record({
-							type: "context_pack",
-							bytes: pack.bytes,
-							inlined: pack.inlined.length,
-							files: workspaceIndex.files.length,
-						});
-					}
-				} else {
-					text = buildFollowUpPack(workspaceIndex, event.prompt);
-				}
-				if (!text) return;
-				packSent = true;
-				stats.packs++;
-				stats.packBytes += Buffer.byteLength(text);
-				return { message: { customType: CONTEXT_MESSAGE_TYPE, content: text, display: false } };
-			} catch (error) {
-				telemetry.record({
-					type: "context_pack_error",
-					message: error instanceof Error ? error.message : String(error),
-				});
-				return;
+			if (on("blockerExit") && getMidnightStatus().agentMode !== "plan") {
+				event.systemPromptOptions.promptGuidelines.push(BLOCKER_GUIDELINE);
 			}
 		}),
 	);
@@ -773,7 +596,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		let tests: string[] | undefined;
 		for (const item of selectChecks(levelChecks, changed)) {
 			if (item.check.command.includes("{tests}")) {
-				tests ??= testsFor(await workspace(), changed);
+				tests ??= await testsFor(cwd, await workspaceFiles(), changed);
 				const argv = expandTests(item.check, tests);
 				if (!argv) continue;
 				selected.push({ ...item, argv });
@@ -1201,41 +1024,22 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					.map(([name]) => name)
 					.join(", ") || "none";
 			const lines = [
-				`Harness config: ${harnessConfigPath(ctx.cwd)}${ctx.isProjectTrusted() ? "" : " (project not trusted: project checks, detected checks and language servers are off)"}`,
+				`Harness config: ${harnessConfigPath(ctx.cwd)}${ctx.isProjectTrusted() ? "" : " (project not trusted: project and detected checks are off)"}`,
 				`Features on: ${onList(true)}`,
 				`Features off: ${onList(false)}`,
 				`Checks: ${checks.length > 0 ? checks.map((check) => `${check.name} (level ${check.level ?? 1}${"source" in check ? `, from ${check.source}` : ""})`).join(", ") : "none configured or detected"}`,
 				`Protected: ${["harness.json", ...config.protect].join(", ")}`,
 				`Check runs: ${stats.checkRuns} (${stats.checkFailures} failed, ${stats.repairs} repair rounds, ${stats.checksReused} reused from the model's own runs, ${stats.checksKnown} failures held back as pre-existing)`,
 				`Drift: ${stats.driftChecks} check(s), ${stats.driftNudges} fix-or-disclose request(s), ${stats.blockersAccepted} reported blocker(s) accepted`,
-				`Context packs: ${stats.packs} (${(stats.packBytes / 1024).toFixed(1)} KB)`,
 				`Escalation: ${on("escalation") ? config.escalation.model : "off"}, ${stats.escalations} call(s), $${stats.escalationCostUsd.toFixed(4)}`,
 				`Time in harness: ${
 					[...hookMs.entries()]
 						.map(([hook, entry]) => `${hook} ${(entry.ms / 1000).toFixed(2)} s over ${entry.calls}`)
 						.join(", ") || "none yet"
 				}`,
-				`Language servers: ${lsp?.running.join(", ") || "none running"}`,
 				`Events: ${telemetry.summary()}`,
 			];
 			ctx.ui.notify(lines.join("\n"));
 		},
 	});
-}
-
-async function gitSummary(cwd: string): Promise<{ branch?: string; changed: string[] } | undefined> {
-	const stdout = await new Promise<string | undefined>((done) => {
-		execFile(
-			"git",
-			["status", "--porcelain=v1", "-z", "--branch"],
-			{ cwd, encoding: "utf8", windowsHide: true, timeout: 10_000, maxBuffer: 16 * 1024 * 1024 },
-			(error, out) => done(error ? undefined : out),
-		);
-	});
-	if (stdout === undefined) return undefined;
-	const [header, ...rest] = stdout.split("\0");
-	const branch = /^## (?:No commits yet on )?([^.\s]+)/.exec(header ?? "")?.[1];
-	// The harness's own config directory is not a change the model should look at.
-	const changed = parsePorcelainZ(rest.join("\0")).filter((path) => !path.startsWith(`${CONFIG_DIR_NAME}/`));
-	return { branch, changed };
 }

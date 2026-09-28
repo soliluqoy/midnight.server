@@ -191,23 +191,11 @@ describe("harness tool set", () => {
 		return { start, activeTools: () => activeTools, handlers };
 	}
 
-	it("leaves the tool set alone by default and adds lookup when it is switched on", async () => {
-		const previous = process.env.MIDNIGHT_SERVER_HARNESS_FEATURES;
-		try {
-			const plain = fakePi(["read", "edit", "mcp", "mcpScript"]);
-			const sections = await plain.start("anthropic");
-			expect(plain.activeTools().sort()).toEqual(["edit", "mcp", "mcpScript", "read"]);
-			expect(sections.environment).toMatch(/^OS: /);
-			process.env.MIDNIGHT_SERVER_HARNESS_FEATURES = "+lookup";
-			const fake = fakePi(["read", "edit", "mcp", "mcpScript"]);
-			await fake.start("anthropic");
-			expect(fake.activeTools().sort()).toEqual(["edit", "lookup", "mcp", "mcpScript", "read"]);
-			await fake.start("anthropic");
-			expect(fake.activeTools().sort()).toEqual(["edit", "lookup", "mcp", "mcpScript", "read"]);
-		} finally {
-			if (previous === undefined) delete process.env.MIDNIGHT_SERVER_HARNESS_FEATURES;
-			else process.env.MIDNIGHT_SERVER_HARNESS_FEATURES = previous;
-		}
+	it("leaves the tool set alone and puts the environment in the system prompt", async () => {
+		const plain = fakePi(["read", "edit", "mcp", "mcpScript"]);
+		const sections = await plain.start("anthropic");
+		expect(plain.activeTools().sort()).toEqual(["edit", "mcp", "mcpScript", "read"]);
+		expect(sections.environment).toMatch(/^OS: /);
 	});
 
 	it("gives shell calls without a timeout the default one, and keeps an explicit timeout", () => {

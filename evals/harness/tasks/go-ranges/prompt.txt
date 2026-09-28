@@ -1,1 +1,0 @@
-ParseRanges in ranges.go mishandles input from users, like spaces, single numbers and overlapping ranges. Make it robust: sorted output without duplicates, and an error for invalid input.

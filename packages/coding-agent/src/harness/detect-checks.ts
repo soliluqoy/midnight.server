@@ -272,3 +272,33 @@ export function expandTests(
 	if (tests.length === 0) return undefined;
 	return check.command.flatMap((arg) => (arg === "{tests}" ? [...tests] : [arg]));
 }
+
+export interface EnvironmentInput {
+	facts: ProjectFacts;
+	/** Checks the harness runs when the model finishes, if any. */
+	checks: ReadonlyArray<Pick<DetectedCheck, "name" | "command">>;
+	platform: NodeJS.Platform;
+	shell: "powershell" | "bash" | undefined;
+}
+
+/**
+ * The environment facts for the system prompt: stable for a session, so they sit in the cached
+ * prompt prefix and cost nothing after the first request.
+ */
+export function describeEnvironment(input: EnvironmentInput): string {
+	const os = input.platform === "win32" ? "Windows" : input.platform === "darwin" ? "macOS" : "Linux";
+	const lines = [
+		`OS: ${os}${input.shell ? `, shell tool: ${input.shell}${input.shell === "powershell" ? " (PowerShell syntax, not bash)" : ""}` : ""}.`,
+	];
+	const project: string[] = [];
+	if (input.facts.languages.length > 0) project.push(`languages: ${input.facts.languages.join(", ")}`);
+	if (input.facts.packageManager) project.push(`package manager: ${input.facts.packageManager}`);
+	if (input.facts.testCommand) project.push(`tests: \`${input.facts.testCommand}\``);
+	if (project.length > 0) lines.push(`Project: ${project.join("; ")}.`);
+	if (input.checks.length > 0) {
+		lines.push(
+			`When you finish, the harness runs these checks on the files you changed and shows you any failure: ${input.checks.map((check) => check.name).join(", ")}.`,
+		);
+	}
+	return lines.join("\n");
+}

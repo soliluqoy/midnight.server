@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-midnight.server is a coding CLI/TUI (Windows first, also Linux and macOS) built as a source derivative of the Pi monorepo (`@earendil-works/*` packages, still named that way). Its core is a lean, model-agnostic harness around Pi's tool loop, measured against plain Pi. `docs/WORKFLOW_PLAN.md` sets its defaults and how a feature earns a place; `docs/HARNESS_REBUILD_PLAN.md` holds the longer Luna-versus-Astra measurement plan; `README.md` describes user-facing behavior; `docs/IMPLEMENTATION_STATUS.md` records what is verified and known failing tests.
+midnight.server is a coding CLI/TUI (Windows first, also Linux and macOS) built as a source derivative of the Pi monorepo (`@earendil-works/*` packages, still named that way). Its core is a lean, model-agnostic harness around Pi's tool loop; plain Pi is the baseline it must beat, so nothing slow runs while the model works and unmeasured features stay off or out. `README.md` describes user-facing behavior; `docs/IMPLEMENTATION_STATUS.md` records what is verified, what was removed, and known failing tests.
 
 ## Commands
 
@@ -15,7 +15,6 @@ midnight.server is a coding CLI/TUI (Windows first, also Linux and macOS) built 
 - Single test, from the package root (e.g. `packages/coding-agent`):
   `node "$(git rev-parse --show-toplevel)/node_modules/vitest/dist/cli.js" --run test/harness-units.test.ts`
 - `packages/tui` uses `node:test`: `node --test test/specific.test.ts`.
-- Eval script tests: `node --test scripts/harness-eval-design.test.mjs scripts/harness-eval-stats.test.mjs`.
 - Run from source: `.\pi-test.ps1 <args>` (PowerShell) or `./pi-test.sh` (Bash); `--no-env` strips provider API keys.
 - Windows release build (PowerShell): `scripts\bootstrap.ps1 -Install`, `scripts\build.ps1`, `scripts\package.ps1`, `scripts\verify-release.ps1 -Package dist\midnight.server-windows-x64.zip`. `build.ps1` compiles the CLI with pinned Bun.
 - Linux/macOS release build (Bash, host platform only): `bash scripts/build-unix.sh`, `bash scripts/package-unix.sh [tag]`, `node scripts/verify-release.mjs <tarball>`. Pushing a `v*-midnight.*` tag runs `.github/workflows/midnight-release.yml`: it builds and verifies Windows x64, Linux x64 and macOS arm64 and creates a draft release whose notes come from the tag's changelog section (`npm run release:notes -- <tag>`). Full steps: `.midnight.server/skills/release.md`.
@@ -35,15 +34,7 @@ Workspace packages build in dependency order: `chord` → `tui` → `telemetry` 
 
 ### `packages/coding-agent/src/harness/`
 
-Model-agnostic built-in extension (`docs/harness.md`), deliberately lean: plain Pi is the baseline it must beat (`docs/WORKFLOW_PLAN.md`). `extension.ts` wires the parts: inline guards at each tool call (`parse-gate.ts`, `edit-repair.ts`, `interface-repair.ts`, protected files) and one verification pass at settle (`detect-checks.ts`/`checks.ts` for the check ladder, `baseline.ts` with `git.ts`'s `materializeTree` for pre-existing failures, `drift.ts` for the drift guard and blocker rule). `features.ts` holds the flags and defaults; opt-in features are `contextPack` (`workspace-index.ts`/`outline.ts`/`context-pack.ts`), `lookup` and `diagnostics` (`lsp.ts`/`semantic.ts`) and `escalation` (`escalate.ts`). Hook timings go to `telemetry.ts`. Project config is `.midnight.server/harness.json` and requires project trust. Product identity (`APP_NAME`, config dir `.midnight.server`) comes from `piConfig` in `packages/coding-agent/package.json` via `src/config.ts`.
-
-### Evals
-
-`scripts/harness-eval.mjs` runs tasks from `evals/harness/tasks/` (dev/holdout split, ablation variants via `MIDNIGHT_SERVER_HARNESS_FEATURES`, manifests via `scripts/harness-eval-design.mjs`, paired statistics in `scripts/harness-eval-stats.mjs`); `scripts/harness-eval-validate.mjs` checks the tasks without a model. `evals/drift/` holds the drift pilots and re-scoring scripts; `evals/sensitivity-lab/` analyzes factorial experiments. Escalation is off by default; an arm that switches it on is a cascade result, not the session model alone.
-
-### Lattice-1
-
-`packages/coding-agent/src/lattice/` implements the Lattice-1 pseudo-RSI harness spec (design, results and deviations in `docs/lattice/README.md`): a bounded typed IR run under fuel, kernel-owned contracts and evaluator, SQLite store with compare-and-swap promotion, rollback and an audit chain, improvement campaigns, library learning, synthesis and a level-2 policy loop. It is a standalone research tool, not part of a coding session: `npm run lattice -- <command>` (`selftest` for a quick end-to-end check); `sqlite.ts` lets the store run under Bun (`bun:sqlite`). Tests: `test/lattice-*.test.ts`.
+Model-agnostic built-in extension (`docs/harness.md`), deliberately lean. `extension.ts` wires the parts: inline guards at each tool call (`parse-gate.ts` with long-lived Node/Python parser workers, `edit-repair.ts`, `interface-repair.ts`, protected files) and one verification pass at settle (`detect-checks.ts`/`checks.ts` for the check ladder, `workspace.ts` for the file list and related tests, `baseline.ts` with `git.ts`'s `materializeTree` for pre-existing failures, `drift.ts` with `outline.ts` for the drift guard and blocker rule). `features.ts` holds the flags and defaults; the only opt-in feature is `escalation` (`escalate.ts`). Hook timings go to `telemetry.ts`. Project config is `.midnight.server/harness.json` and requires project trust. Product identity (`APP_NAME`, config dir `.midnight.server`) comes from `piConfig` in `packages/coding-agent/package.json` via `src/config.ts`.
 
 ### Tests
 

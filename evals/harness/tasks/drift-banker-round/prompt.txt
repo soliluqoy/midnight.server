@@ -1,1 +1,0 @@
-Our invoices must use banker's rounding. Change roundHalf in rounding.js to round half to even: 0.5 becomes 0, 1.5 becomes 2, 2.5 becomes 2, and -2.5 becomes -2. Values that are not exactly halfway still round to the nearest integer.

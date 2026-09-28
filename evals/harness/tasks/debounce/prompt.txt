@@ -1,1 +1,0 @@
-debounce in debounce.js drops arguments and cannot be cancelled. Fix it and add a cancel() method.

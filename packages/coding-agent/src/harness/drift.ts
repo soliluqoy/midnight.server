@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import { diffLines } from "diff";
 import { outlineSource } from "./outline.ts";
-import { isGeneratedPath, isTestPath } from "./workspace-index.ts";
+import { isGeneratedPath, isTestPath } from "./workspace.ts";
 
 /**
  * Implementation drift: the change moves away from what was asked toward something simpler or
@@ -290,7 +290,7 @@ function sourceSignals(change: FileChange, diff: LineDiff, input: DriftInput): D
 /**
  * A command that leaves a process running after it returns: the typical stand-in for a missing
  * service (a fake database on the port the tests use), which outlives the run and hides the
- * barrier from later work. Seen in evals/drift pilot 01.
+ * barrier from later work. Seen in the drift pilots.
  */
 const BACKGROUND_COMMAND =
 	/\bStart-(?:Process|Job|ThreadJob)\b|\bnohup\b|\bsetsid\b|\bdisown\b|\bstart\s+\/b\b|(?<![&|>])&\s*(?:$|;)/im;

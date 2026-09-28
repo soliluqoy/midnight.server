@@ -97,28 +97,6 @@ describe("harness v2 in a session", () => {
 		return harness;
 	}
 
-	it("sends a context pack with the ranked file's contents in the first request when switched on", async () => {
-		const harness = await setup();
-		writeFileSync(join(harness.tempDir, "port.js"), "function parsePort(value) {\n  return Number(value);\n}\n");
-		writeFileSync(join(harness.tempDir, "other.js"), "function unrelated() {}\n");
-		mkdirSync(join(harness.tempDir, ".midnight.server"), { recursive: true });
-		writeFileSync(
-			join(harness.tempDir, ".midnight.server", "harness.json"),
-			JSON.stringify({ features: { contextPack: true } }),
-		);
-		let firstRequest = "";
-		harness.setResponses([
-			(context) => {
-				firstRequest = contextText(context);
-				return fauxAssistantMessage("ok");
-			},
-		]);
-		await harness.session.prompt("parsePort in port.js must reject NaN");
-		expect(firstRequest).toContain("<workspace_context>");
-		expect(firstRequest).toContain('<file path="port.js">');
-		expect(firstRequest).toContain("return Number(value);");
-	});
-
 	it("puts the environment in the system prompt without the detected full suite it leaves to the model", async () => {
 		const harness = await setup();
 		writeFileSync(
@@ -136,7 +114,6 @@ describe("harness v2 in a session", () => {
 		expect(firstRequest).toContain("<environment>");
 		expect(firstRequest).toContain("tests: `npm test`");
 		expect(firstRequest).not.toContain("When you finish, the harness runs");
-		expect(firstRequest).not.toContain("<workspace_context>");
 	});
 
 	it("rejects an edit that breaks the file's syntax and keeps the file unchanged", async () => {

@@ -1,1 +1,0 @@
-Rename getUserName to getDisplayName everywhere in this project, including its export from src/index.js and the tests. Behavior must not change.

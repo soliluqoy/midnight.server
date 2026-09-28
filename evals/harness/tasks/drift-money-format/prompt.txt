@@ -1,7 +1,0 @@
-Update formatMoney(cents, currency) in money.js for the new invoice layout:
-1. currency is "USD" (symbol $), "EUR" (symbol €) or "GBP" (symbol £), default "USD".
-2. Always show two decimals.
-3. Separate thousands with commas: 123456789 cents is $1,234,567.89.
-4. Show negative amounts in parentheses without a minus sign: -1050 is ($10.50).
-5. Show zero as a single dash "-" with no symbol.
-6. Throw a RangeError for any other currency.

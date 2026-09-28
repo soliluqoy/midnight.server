@@ -2,12 +2,11 @@ import { extname } from "node:path";
 
 /**
  * Line-based symbol outlines and relative imports for the common languages, with no parser
- * dependency. They feed the repo map, file ranking, `lookup` without a language server, and
- * related-test selection.
+ * dependency. They feed the drift guard's removed-declaration check and related-test selection.
  *
  * Why not a real parser: these only need declaration names and lines, which top-level and
  * one-level-indented declarations carry in every mainstream style. A missed symbol costs a
- * little ranking quality; it never changes a file.
+ * missed signal; it never changes a file.
  */
 
 export type SymbolKind = "function" | "class" | "method" | "type" | "variable" | "module";
@@ -199,52 +198,6 @@ export function outlineSource(path: string, text: string, maxSymbols = 200): Out
 	return symbols;
 }
 
-function indentOfLine(line: string): number {
-	return /^[ \t]*/.exec(line)?.[0].replace(/\t/g, "    ").length ?? 0;
-}
-
-/**
- * The declaration starting at `startLine` (1-based): through the matching closing brace for
- * brace languages, or while lines stay indented deeper for Python-style blocks.
- */
-export function declarationBody(lines: readonly string[], startLine: number, maxLines = 40): string {
-	const start = startLine - 1;
-	const first = lines[start] ?? "";
-	const baseIndent = indentOfLine(first);
-	const out: string[] = [];
-	let depth = 0;
-	let sawBrace = false;
-	for (let index = start; index < lines.length && out.length < maxLines; index++) {
-		const line = lines[index];
-		out.push(`${index + 1}\t${line}`);
-		for (const char of line.replace(/(["'`])(?:\\.|(?!\1).)*\1/g, "")) {
-			if (char === "{") {
-				depth++;
-				sawBrace = true;
-			} else if (char === "}") depth--;
-		}
-		if (sawBrace && depth <= 0) break;
-		if (!sawBrace && index > start) {
-			const next = lines[index + 1];
-			if (
-				next !== undefined &&
-				next.trim() !== "" &&
-				indentOfLine(next) <= baseIndent &&
-				!/^[)\]}]/.test(next.trim())
-			) {
-				break;
-			}
-		}
-		if (!sawBrace && index === start && /;\s*$/.test(line)) break;
-	}
-	while (out.length > 1 && /^\d+\t\s*$/.test(out[out.length - 1])) out.pop();
-	const truncated =
-		out.length >= maxLines
-			? `\n[... body continues; read ${lines.length > startLine ? `from line ${startLine + maxLines}` : "the file"} for the rest ...]`
-			: "";
-	return out.join("\n") + truncated;
-}
-
 /** Relative module specifiers a file imports (`./x`, `../y`, Python relative and sibling modules). */
 export function relativeImports(path: string, text: string): string[] {
 	const language = languageOf(path);
@@ -262,118 +215,3 @@ export function relativeImports(path: string, text: string): string[] {
 	}
 	return [...found];
 }
-
-/** Split identifiers and words into lowercase search terms: `parsePortNumber` -> parse, port, number. */
-export function identifierTerms(text: string): string[] {
-	const terms: string[] = [];
-	forEachIdentifierTerm(text, (term) => terms.push(term));
-	return terms;
-}
-
-/**
- * `identifierTerms` without the array, for indexing. Words repeat heavily in code, so each
- * word's split is cached: indexing a workspace otherwise spends most of its time re-splitting
- * the same identifiers.
- */
-export function forEachIdentifierTerm(text: string, visit: (term: string) => void): void {
-	for (const word of text.match(/[A-Za-z][A-Za-z0-9]*|[0-9]+/g) ?? []) {
-		let terms = WORD_TERMS.get(word);
-		if (!terms) {
-			terms = splitWord(word);
-			if (WORD_TERMS.size >= MAX_CACHED_WORDS) WORD_TERMS.clear();
-			WORD_TERMS.set(word, terms);
-		}
-		for (const term of terms) visit(term);
-	}
-}
-
-const MAX_CACHED_WORDS = 200_000;
-const WORD_TERMS = new Map<string, readonly string[]>();
-
-function splitWord(word: string): string[] {
-	const terms: string[] = [];
-	const parts = word
-		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-		.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-		.split(" ");
-	for (const part of parts) {
-		let term = part.toLowerCase();
-		// Plural and singular are the same subject: "results" finds "result".
-		if (term.length > 3 && term.endsWith("s") && !term.endsWith("ss")) term = term.slice(0, -1);
-		if (term.length >= 2 && !STOP_WORDS.has(term)) terms.push(term);
-	}
-	return terms;
-}
-
-const STOP_WORDS = new Set([
-	"the",
-	"and",
-	"for",
-	"that",
-	"this",
-	"with",
-	"from",
-	"are",
-	"was",
-	"but",
-	"not",
-	"you",
-	"all",
-	"can",
-	"has",
-	"have",
-	"its",
-	"our",
-	"out",
-	"use",
-	"when",
-	"what",
-	"which",
-	"will",
-	"would",
-	"should",
-	"could",
-	"into",
-	"then",
-	"than",
-	"them",
-	"they",
-	"there",
-	"their",
-	"it",
-	"is",
-	"in",
-	"of",
-	"to",
-	"on",
-	"or",
-	"an",
-	"as",
-	"at",
-	"be",
-	"by",
-	"do",
-	"if",
-	"so",
-	"we",
-	"my",
-	"me",
-	"no",
-	"make",
-	"fix",
-	"please",
-	"return",
-	"const",
-	"let",
-	"var",
-	"import",
-	"export",
-	"new",
-	"true",
-	"false",
-	"null",
-	"undefined",
-	"self",
-	"def",
-	"function",
-]);

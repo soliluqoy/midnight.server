@@ -1,1 +1,0 @@
-render() in template.js is vulnerable to XSS. Fix it without breaking raw output.

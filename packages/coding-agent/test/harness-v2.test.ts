@@ -6,8 +6,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fitCompactionToWindow } from "../src/core/settings-manager.ts";
 import { parseHarnessConfig } from "../src/harness/config.ts";
-import { buildContextPack, buildFollowUpPack, describeEnvironment } from "../src/harness/context-pack.ts";
-import { detectProjectChecks, expandTests, isTypeCheck } from "../src/harness/detect-checks.ts";
+import { describeEnvironment, detectProjectChecks, expandTests, isTypeCheck } from "../src/harness/detect-checks.ts";
 import {
 	closestBlock,
 	editTextFound,
@@ -19,17 +18,9 @@ import {
 import { escalationPrompt, formatAdvice, requestAdvice } from "../src/harness/escalate.ts";
 import { DEFAULT_FEATURES, parseFeatureOverrides, resolveFeatures } from "../src/harness/features.ts";
 import { materializeTree, workingTreeChanges, writeWorkingTree } from "../src/harness/git.ts";
-import { identifierTerms, outlineSource, relativeImports } from "../src/harness/outline.ts";
+import { outlineSource, relativeImports } from "../src/harness/outline.ts";
 import { checkSyntax, introducedSyntaxError, pythonInterpreter } from "../src/harness/parse-gate.ts";
-import { declarationBody, formatDiagnostics, newErrors, runLookup } from "../src/harness/semantic.ts";
-import {
-	buildWorkspaceIndex,
-	isTestPath,
-	isUnindexableRoot,
-	rankFiles,
-	relatedFiles,
-	testsFor,
-} from "../src/harness/workspace-index.ts";
+import { isTestPath, isUnindexableRoot, listWorkspaceFiles, testsFor } from "../src/harness/workspace.ts";
 
 function tempDir(prefix: string): string {
 	return mkdtempSync(join(tmpdir(), prefix));
@@ -85,23 +76,24 @@ describe("features", () => {
 
 	it("resolves defaults, then config, then environment", () => {
 		expect(resolveFeatures({}, {}).escalation).toBe(false);
-		expect(resolveFeatures({ contextPack: true }, {}).contextPack).toBe(true);
-		expect(resolveFeatures({ contextPack: true }, { contextPack: false }).contextPack).toBe(false);
-		expect(parseFeatureOverrides("-contextPack, +escalation,lookup")).toEqual({
-			contextPack: false,
+		expect(resolveFeatures({ escalation: true }, {}).escalation).toBe(true);
+		expect(resolveFeatures({ escalation: true }, { escalation: false }).escalation).toBe(false);
+		expect(parseFeatureOverrides("-driftGuard, +escalation,parseGate")).toEqual({
+			driftGuard: false,
 			escalation: true,
-			lookup: true,
+			parseGate: true,
 		});
+		expect(() => parseFeatureOverrides("+contextPack")).toThrow(/unknown feature/);
 		expect(() => parseFeatureOverrides("-nope")).toThrow(/unknown feature/);
 	});
 
 	it("validates features and escalation in harness.json", () => {
 		const config = parseHarnessConfig({
-			features: { contextPack: false },
+			features: { driftGuard: false },
 			escalation: { model: "anthropic/claude-opus-5-5", maxCallsPerPrompt: 1 },
 			checks: [{ name: "t", command: ["npm", "test"], level: 3 }],
 		});
-		expect(config.features).toEqual({ contextPack: false });
+		expect(config.features).toEqual({ driftGuard: false });
 		expect(config.escalation.maxCallsPerPrompt).toBe(1);
 		expect(config.checks[0].level).toBe(3);
 		expect(() => parseHarnessConfig({ contract: true })).toThrow(/Unknown key "contract"/);
@@ -173,22 +165,13 @@ describe("outlines", () => {
 				"import { a } from './port.js';\nconst b = require('../lib/b');\nimport x from 'react';",
 			),
 		).toEqual(["./port.js", "../lib/b"]);
-		expect(identifierTerms("parsePortNumber HTTPServer snake_case")).toEqual([
-			"parse",
-			"port",
-			"number",
-			"http",
-			"server",
-			"snake",
-			"case",
-		]);
 	});
 });
 
-describe("workspace index and context pack", () => {
+describe("workspace files and related tests", () => {
 	let root: string;
 	beforeEach(() => {
-		root = tempDir("harness-index-");
+		root = tempDir("harness-workspace-");
 		writeTree(root, {
 			"package.json": JSON.stringify({ scripts: { test: "node --test", lint: "eslint . --fix" } }),
 			"src/port.js":
@@ -201,30 +184,23 @@ describe("workspace index and context pack", () => {
 	});
 	afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-	it("ranks the file a request names, and pulls in its test", async () => {
-		const index = await buildWorkspaceIndex(root);
-		const ranked = rankFiles(index, "parsePort in port.js should only return a valid port");
-		expect(ranked[0].file.path).toBe("src/port.js");
-		expect(ranked.map((item) => item.file.path)).toContain("test/port.test.js");
-		expect(relatedFiles(index, index.byPath.get("src/port.js")!).map((file) => file.path)).toEqual([
-			"test/port.test.js",
-		]);
-		expect(testsFor(index, ["src/port.js"])).toEqual(["test/port.test.js"]);
+	it("finds a changed file's tests by stem and by import", async () => {
+		writeTree(root, { "test/strings-check.test.js": "import { pad } from '../src/util/strings.js';\n" });
+		const { files } = await listWorkspaceFiles(root);
+		expect(files).toContain("src/port.js");
+		expect(await testsFor(root, files, ["src/port.js"])).toEqual(["test/port.test.js"]);
+		expect(await testsFor(root, files, ["src/util/strings.js"])).toEqual(["test/strings-check.test.js"]);
+		expect(await testsFor(root, files, ["test/port.test.js", "README.md"])).toEqual(["test/port.test.js"]);
+		expect(await testsFor(root, files, ["src/csv.js"])).toEqual([]);
 		expect(isTestPath("test/port.test.js")).toBe(true);
 		expect(isTestPath("src/port.js")).toBe(false);
-	});
-
-	it("reuses unchanged files when refreshed", async () => {
-		const first = await buildWorkspaceIndex(root);
-		const second = await buildWorkspaceIndex(root, first);
-		expect(second.byPath.get("src/csv.js")).toBe(first.byPath.get("src/csv.js"));
 	});
 
 	it("does not index the home directory or a filesystem root", async () => {
 		expect(isUnindexableRoot(homedir())).toBe(true);
 		expect(isUnindexableRoot(parse(root).root)).toBe(true);
 		expect(isUnindexableRoot(root)).toBe(false);
-		expect((await buildWorkspaceIndex(homedir())).files).toEqual([]);
+		expect((await listWorkspaceFiles(homedir())).files).toEqual([]);
 	});
 
 	it("describes the environment for the system prompt", () => {
@@ -233,23 +209,6 @@ describe("workspace index and context pack", () => {
 		expect(text).toContain("PowerShell syntax");
 		expect(text).toContain("tests: `npm test`");
 		expect(text).toContain("When you finish, the harness runs these checks");
-	});
-
-	it("builds a bounded pack with git state, ranked files and inlined contents", async () => {
-		const index = await buildWorkspaceIndex(root);
-		const pack = buildContextPack({
-			index,
-			request: "Fix parsePort in port.js",
-			git: { branch: "main", changed: [] },
-			budgetTokens: 2_000,
-		});
-		expect(pack).toBeDefined();
-		expect(pack!.bytes).toBeLessThan(2_000 * 4 + 400);
-		expect(pack!.text).toContain("Git: branch main, clean working tree.");
-		expect(pack!.inlined[0]).toBe("src/port.js");
-		expect(pack!.text).toContain('<file path="src/port.js">');
-		expect(pack!.text).toContain("src/util/strings.js");
-		expect(buildFollowUpPack(index, "now the csv parser parseCsvLine")).toContain("src/csv.js");
 	});
 });
 
@@ -516,50 +475,5 @@ describe("escalation", () => {
 		);
 		expect(advice).toMatchObject({ text: "The root cause is X.", costUsd: 0.01 });
 		expect(formatAdvice("anthropic/claude-opus-5-5", advice!)).toContain("Advice from anthropic/claude-opus-5-5");
-	});
-});
-
-describe("lookup and diagnostics helpers", () => {
-	let root: string;
-	beforeEach(() => {
-		root = tempDir("harness-lookup-");
-		writeTree(root, {
-			"src/port.ts":
-				"export function parsePort(value: string): number {\n  const n = Number(value);\n  return n;\n}\n",
-			"src/main.ts": "import { parsePort } from './port';\nconsole.log(parsePort('80'));\n",
-			"lib/csv.py":
-				"def parse_line(line):\n    parts = line.split(',')\n    return parts\n\ndef other():\n    pass\n",
-		});
-	});
-	afterEach(() => rmSync(root, { recursive: true, force: true }));
-
-	it("returns definitions with bodies, references and outlines without a language server", async () => {
-		const index = await buildWorkspaceIndex(root);
-		const definition = await runLookup({ op: "definition", symbol: "parsePort" }, index, undefined);
-		expect(definition).toContain("src/port.ts:1");
-		expect(definition).toContain("3\t  return n;");
-		const references = await runLookup({ op: "references", symbol: "parsePort" }, index, undefined);
-		expect(references).toContain("src/main.ts:2");
-		const outline = await runLookup({ op: "outline", path: "lib/csv.py" }, index, undefined);
-		expect(outline).toContain("function parse_line :1");
-		expect(await runLookup({ op: "definition", symbol: "nope" }, index, undefined)).toContain("No declaration");
-	});
-
-	it("cuts a Python body at the dedent", () => {
-		const lines = readFileSync(join(root, "lib/csv.py"), "utf8").split("\n");
-		expect(declarationBody(lines, 1)).toBe(
-			"1\tdef parse_line(line):\n2\t    parts = line.split(',')\n3\t    return parts",
-		);
-	});
-
-	it("reports only errors the edit introduced", () => {
-		const error = (message: string, line = 0) => ({
-			message,
-			severity: 1,
-			range: { start: { line, character: 0 }, end: { line, character: 1 } },
-		});
-		const fresh = newErrors([error("old")], [error("old", 3), error("new", 4), { ...error("warn"), severity: 2 }]);
-		expect(fresh.map((item) => item.message)).toEqual(["new"]);
-		expect(formatDiagnostics("a.ts", fresh, "typescript language server")).toContain("a.ts:5:1: new");
 	});
 });
