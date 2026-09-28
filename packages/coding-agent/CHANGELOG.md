@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.87.1-midnight.3] - 2026-09-28
+
 ### Added
 
 - Added Lattice-1, a local pseudo-RSI harness run with `npm run lattice -- <command>` ([docs/lattice](../../docs/lattice/README.md)). A fixed kernel checks, runs, evaluates, promotes and rolls back typed, bounded programs. Improvement campaigns search in an isolated worker, consume each fresh release set once, pass a conjunctive release gate and shadow runs, then promote through compare-and-swap into a monitored canary. Library learning, synthesis from examples, bytecode compilation with differential tests, and a level-2 search-policy loop are included. File effects (organizing a folder by type) are proposed as plans and applied only on approval, with a journal, undo and crash recovery. Duplicate-file detection reads contents through a streaming SHA-256 host that rejects files changed since the inventory; a campaign learns to compare sizes before hashing. Campaigns pause for interactive work and resume from checkpoints, and `serve --idle-ms` improves skills in idle time. It is not part of the `midnight.server` binary.
