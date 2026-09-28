@@ -16,6 +16,7 @@ import type {
 } from "../core/extensions/types.ts";
 import { type Assignment, HarnessPolicyCore } from "../lattice/harness-policy.ts";
 import { getMidnightStatus } from "../midnight/status.ts";
+import { compareWithBaseline } from "./baseline.ts";
 import {
 	type Checkpoint,
 	CheckpointStore,
@@ -25,6 +26,7 @@ import {
 	writeWorkingTree,
 } from "./checkpoints.ts";
 import {
+	blocks,
 	type CheckOutcome,
 	expandCommand,
 	filesModifiedSince,
@@ -50,6 +52,7 @@ import {
 	type DetectedCheck,
 	detectProjectChecks,
 	expandTests,
+	isStaticCheck,
 	isTypeCheck,
 	type ProjectFacts,
 } from "./detect-checks.ts";
@@ -150,6 +153,9 @@ interface RunState {
 	editedThisTurn: boolean;
 	/** Files whose last edit a language server checked: in-run type checks leave them to it. */
 	lspChecked: Set<string>;
+	/** The static checks' results from the start of the request, by check name (baseline.ts). */
+	baseline?: Promise<Map<string, CheckOutcome>>;
+	baselineDone: boolean;
 	/** Every file changed in this run, for the escalation diff and telemetry. */
 	allChanged: Set<string>;
 	shellRan: boolean;
@@ -204,6 +210,7 @@ function freshRun(prompt = ""): RunState {
 		changedSinceInRun: new Set(),
 		editedThisTurn: false,
 		lspChecked: new Set(),
+		baselineDone: false,
 		allChanged: new Set(),
 		shellRan: false,
 		repairRound: 0,
@@ -234,6 +241,16 @@ export const TEST_COMMAND =
 
 /** In-run checks skip any check that took longer than this last time: they must stay cheap. */
 const IN_RUN_CHECK_BUDGET_MS = 90_000;
+
+/**
+ * How long the first edit or shell command of a request waits for the baseline checks to finish.
+ * A baseline still running after that is discarded once anything changes (it may have read the change).
+ */
+const BASELINE_WAIT_MS = 15_000;
+
+function sameArgv(a: readonly string[], b: readonly string[]): boolean {
+	return a.length === b.length && a.every((arg, index) => arg === b[index]);
+}
 
 /**
  * The harness: work moved out of the model and into code, so a model spends its tokens on
@@ -283,6 +300,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	 */
 	let changeEpoch = 0;
 	const checkCache = new Map<string, { epoch: number; outcome: CheckOutcome }>();
+	/** The last baseline and the working tree (git tree id) it was taken on: an unchanged tree reuses it. */
+	let baselineCache: { tree: string; outcomes: Map<string, CheckOutcome> } | undefined;
 	const telemetry = new HarnessTelemetry();
 	const stats = {
 		maskBatches: 0,
@@ -290,6 +309,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		checkRuns: 0,
 		checkFailures: 0,
 		checksReused: 0,
+		checksKnown: 0,
 		repairs: 0,
 		escalations: 0,
 		escalationCostUsd: 0,
@@ -596,8 +616,19 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	/** File content before an edit or write, for the parse gate. */
 	const beforeEdit = new Map<string, { path: string; before: string | undefined }>();
 
-	pi.on("tool_call", (event, ctx) => {
+	pi.on("tool_call", async (event, ctx) => {
 		if (!config.enabled) return;
+		if (run.baseline && !run.baselineDone && ["edit", "write", "bash", "powershell"].includes(event.toolName)) {
+			// The baseline must see the tree before the request changed it.
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			await Promise.race([
+				run.baseline,
+				new Promise((done) => {
+					timer = setTimeout(done, BASELINE_WAIT_MS);
+				}),
+			]);
+			clearTimeout(timer);
+		}
 		const input = event.input as Record<string, unknown> & { path?: unknown; command?: unknown; timeout?: unknown };
 		if (
 			(event.toolName === "bash" || event.toolName === "powershell") &&
@@ -838,7 +869,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		// The drift inventory compares against the tree as the request found it, so edits made by
 		// shell commands count too. Outside git, it falls back to files changed through edit/write
 		// (writeWorkingTree is undefined there).
-		const baselineTree = on(ctx, "driftGuard") && !planning ? writeWorkingTree(ctx.cwd) : undefined;
+		const baselineTree =
+			(on(ctx, "driftGuard") || on(ctx, "checkBaseline")) && !planning ? writeWorkingTree(ctx.cwd) : undefined;
 		const indexed = packing ? workspace() : undefined;
 		const git = packing && !packSent ? gitSummary(ctx.cwd) : undefined;
 		// Awaited below or inside the try; this only keeps an early throw from leaving them unhandled.
@@ -869,6 +901,15 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		});
 		if (on(ctx, "blockerExit") && !planning) event.systemPromptOptions.promptGuidelines.push(BLOCKER_GUIDELINE);
 		if (baselineTree) run.baselineTree = await baselineTree;
+		if (on(ctx, "checkBaseline") && !planning) {
+			const current = run;
+			current.baseline = startBaseline(ctx, current.baselineTree);
+			current.baseline
+				?.catch(() => undefined)
+				.finally(() => {
+					current.baselineDone = true;
+				});
+		}
 		if (!indexed) return;
 		try {
 			const workspaceIndex = await indexed;
@@ -1023,8 +1064,20 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	): Promise<{ outcomes: CheckOutcome[]; failed: CheckOutcome[] } | undefined> {
 		const checks = activeChecks();
 		if (checks.length === 0 || changed.length === 0) return undefined;
+		const baselines = await run.baseline?.catch(() => undefined);
 		if (controller.signal.aborted) controller = new AbortController();
 		const outcomes: CheckOutcome[] = [];
+		const compared = (outcome: CheckOutcome): CheckOutcome => {
+			const before = baselines?.get(outcome.name);
+			const comparison =
+				before && sameArgv(before.argv, outcome.argv) ? compareWithBaseline(outcome, before) : undefined;
+			if (!comparison) return outcome;
+			if (comparison.preexisting) {
+				stats.checksKnown++;
+				telemetry.record({ type: "check_known", check: outcome.name });
+			}
+			return { ...outcome, baseline: comparison };
+		};
 		for (const level of ([1, 2, 3] as const).filter((item) => item <= maxLevel)) {
 			const selected = await checksAtLevel(checks, level, changed, inRun);
 			if (selected.length === 0) continue;
@@ -1035,7 +1088,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 				if (cached && cached.epoch === changeEpoch) {
 					stats.checksReused++;
 					telemetry.record({ type: "check_reused", check: item.check.name, savedMs: cached.outcome.elapsedMs });
-					levelOutcomes.push(cached.outcome);
+					levelOutcomes.push(compared(cached.outcome));
 					continue;
 				}
 				ctx.ui.setWorkingMessage(`Harness check: ${item.check.name}...`);
@@ -1049,14 +1102,52 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 				checkDurations.set(item.check.name, outcome.elapsedMs);
 				// A timeout says nothing about the code; an in-run timeout is also shorter than at settle.
 				if (!outcome.timedOut && !controller.signal.aborted) checkCache.set(key, { epoch: changeEpoch, outcome });
-				levelOutcomes.push(outcome);
+				levelOutcomes.push(compared(outcome));
 			}
 			ctx.ui.setWorkingMessage();
 			if (controller.signal.aborted) return undefined;
 			outcomes.push(...levelOutcomes);
-			if (levelOutcomes.some((outcome) => !outcome.passed)) break;
+			// A failure the project already had does not stop the ladder: the tests still run.
+			if (levelOutcomes.some(blocks)) break;
 		}
-		return { outcomes, failed: outcomes.filter((outcome) => !outcome.passed) };
+		return { outcomes, failed: outcomes.filter(blocks) };
+	}
+
+	/**
+	 * Run the project-wide static checks (types and lint, no `{files}`) on the tree as the
+	 * request found it. Reused while the git tree is unchanged; discarded if anything changed before
+	 * it finished, since it may have read the change. Undefined when there is nothing to run.
+	 */
+	function startBaseline(
+		ctx: ExtensionContext,
+		tree: string | undefined,
+	): Promise<Map<string, CheckOutcome>> | undefined {
+		const checks = activeChecks().filter(
+			(check) => isStaticCheck(check) && !check.command.some((arg) => arg === "{files}" || arg === "{tests}"),
+		);
+		if (checks.length === 0) return undefined;
+		if (tree && baselineCache?.tree === tree) return Promise.resolve(baselineCache.outcomes);
+		const epoch = changeEpoch;
+		const signal = controller.signal;
+		return (async () => {
+			const outcomes = new Map<string, CheckOutcome>();
+			for (const check of checks) {
+				const outcome = await runCheck({ check, files: [] }, ctx.cwd, signal);
+				if (signal.aborted || changeEpoch !== epoch) {
+					telemetry.record({ type: "check_baseline_discarded" });
+					return new Map<string, CheckOutcome>();
+				}
+				checkDurations.set(check.name, outcome.elapsedMs);
+				outcomes.set(check.name, outcome);
+			}
+			if (tree) baselineCache = { tree, outcomes };
+			telemetry.record({
+				type: "check_baseline",
+				checks: outcomes.size,
+				failing: [...outcomes.values()].filter((outcome) => !outcome.passed).length,
+			});
+			return outcomes;
+		})();
 	}
 
 	/** The checks of one ladder level that `changed` calls for, with `{tests}` expanded. */
@@ -1574,7 +1665,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					.join(", ")}`,
 				`Checks: ${checks.length > 0 ? checks.map((check) => `${check.name} (level ${check.level ?? 1}${"source" in check ? `, from ${check.source}` : ""})`).join(", ") : "none configured or detected"}`,
 				`Protected: ${["harness.json", ...config.protect].join(", ")}`,
-				`Check runs: ${stats.checkRuns} (${stats.checkFailures} failed, ${stats.repairs} repair rounds, ${stats.rollbacks} rollbacks, ${stats.checksReused} check results reused)`,
+				`Check runs: ${stats.checkRuns} (${stats.checkFailures} failed, ${stats.repairs} repair rounds, ${stats.rollbacks} rollbacks, ${stats.checksReused} check results reused, ${stats.checksKnown} failures held back as pre-existing)`,
 				`Drift: ${stats.driftChecks} check(s), ${stats.driftNudges} fix-or-disclose request(s), ${stats.blockersAccepted} reported blocker(s) accepted`,
 				`Context packs: ${stats.packs} (${(stats.packBytes / 1024).toFixed(1)} KB)`,
 				`Context masking: ${stats.maskBatches} batch(es), ${(stats.elidedBytes / 1024).toFixed(1)} KB elided (~${Math.round(stats.elidedBytes / 4)} tokens per later request)`,

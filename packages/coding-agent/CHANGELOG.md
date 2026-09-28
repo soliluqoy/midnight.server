@@ -12,6 +12,7 @@
 ### Fixed
 
 - Fixed the harness running project checks, including a whole-project type check, after every turn that edited files. In-run checks now wait until the model stops editing, so a change spread over several turns is not flagged halfway, and skip the type check for files a language server already checked with each edit. The full ladder still runs before the run settles.
+- Fixed the harness sending the model back to repair type and lint errors the project already had. With `checkBaseline` (on by default), static checks run in the background when a request starts; at settle, a static check that fails only with errors it already reported is shown as known and starts no repair round, and a failure with new errors feeds back only the new error lines instead of the raw log. Test checks are not baselined.
 - Fixed shell test commands (`npm test`, `pytest`, `go test`, `node --test` and others) never counting as verification in the harness: the pattern had lost its escapes, so the drift guard reported "all tests pass" claims as unsupported after the model had run the tests itself.
 - Fixed the image resize worker in compiled binaries: it was looked up under a path the binary does not embed, so resizing always fell back to the main thread.
 

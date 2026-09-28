@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Context, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import harnessExtension from "../../src/harness/extension.ts";
+import harnessExtension, { CHECK_MESSAGE_TYPE } from "../../src/harness/extension.ts";
 import { createHarness, type Harness } from "./harness.ts";
 
 function contextText(context: Context): string {
@@ -14,6 +14,14 @@ function contextText(context: Context): string {
 				: message.content.map((part) => ("text" in part ? part.text : "")).join("\n"),
 		)
 		.join("\n---\n");
+}
+
+function customMessages(harness: Harness, customType: string): string[] {
+	return harness.session.messages.flatMap((message) =>
+		message.role === "custom" && message.customType === customType
+			? [typeof message.content === "string" ? message.content : JSON.stringify(message.content)]
+			: [],
+	);
 }
 
 function initGit(dir: string): void {
@@ -37,6 +45,37 @@ function writeProject(dir: string, options: { escalationModel?: string } = {}): 
 			checks: [{ name: "value", command: ["node", "check.js"], when: ["*.js"] }],
 			protect: ["check.js"],
 			...(options.escalationModel ? { escalation: { model: options.escalationModel } } : {}),
+		}),
+	);
+}
+
+/**
+ * A project with a lint check that already fails: legacy.js has a BAD marker. The check reports
+ * each marker as `file:line: error BAD marker`.
+ */
+function writeLintProject(dir: string): void {
+	writeFileSync(join(dir, "legacy.js"), "// BAD\nmodule.exports = 0;\n");
+	writeFileSync(join(dir, "value.js"), "module.exports = 1;\n");
+	writeFileSync(
+		join(dir, "lint.js"),
+		[
+			"const fs = require('fs');",
+			"let failed = false;",
+			"for (const file of fs.readdirSync('.').filter((name) => name.endsWith('.js') && name !== 'lint.js').sort()) {",
+			"  fs.readFileSync(file, 'utf8').split('\\n').forEach((line, index) => {",
+			"    if (line.includes('BAD')) { console.log(file + ':' + (index + 1) + ': error BAD marker'); failed = true; }",
+			"  });",
+			"}",
+			"process.exit(failed ? 1 : 0);",
+		].join("\n"),
+	);
+	mkdirSync(join(dir, ".midnight.server"), { recursive: true });
+	writeFileSync(
+		join(dir, ".midnight.server", "harness.json"),
+		JSON.stringify({
+			checks: [{ name: "lint", command: ["node", "lint.js"], when: ["*.js"] }],
+			protect: ["lint.js"],
+			features: { escalation: false },
 		}),
 	);
 }
@@ -344,5 +383,60 @@ describe("harness v2 in a session", () => {
 		expect(advisorPrompt).toContain("expected 1, got 2");
 		expect(adviceSeen).toContain("Advice from faux/strong");
 		expect(adviceSeen).toContain("Root cause: value.js must export 1");
+	});
+
+	it("does not start a repair round for lint errors the project already had", async () => {
+		const harness = await setup();
+		writeLintProject(harness.tempDir);
+		initGit(harness.tempDir);
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("edit", {
+						path: "value.js",
+						edits: [{ oldText: "module.exports = 1;", newText: "module.exports = 2;" }],
+					}),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("export 2 from value.js");
+		// Without the baseline the settle check fails on legacy.js and sends the model back.
+		expect(customMessages(harness, CHECK_MESSAGE_TYPE)).toEqual([]);
+		expect(harness.getPendingResponseCount()).toBe(0);
+	});
+
+	it("feeds back only the lint errors the change added", async () => {
+		const harness = await setup();
+		writeLintProject(harness.tempDir);
+		initGit(harness.tempDir);
+		let feedback = "";
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("edit", {
+						path: "value.js",
+						edits: [{ oldText: "module.exports = 1;", newText: "// BAD\nmodule.exports = 1;" }],
+					}),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("done"),
+			(context) => {
+				feedback = contextText(context);
+				return fauxAssistantMessage(
+					[fauxToolCall("edit", { path: "value.js", edits: [{ oldText: "// BAD\n", newText: "" }] })],
+					{ stopReason: "toolUse" },
+				);
+			},
+			fauxAssistantMessage("fixed"),
+		]);
+		await harness.session.prompt("touch value.js");
+		expect(feedback).toContain("repair round 1");
+		expect(feedback).toContain("value.js:1: error BAD marker");
+		expect(feedback).not.toContain("legacy.js:1: error BAD marker");
+		expect(feedback).toContain("1 error line(s) this check already reported before this request are left out");
+		expect(harness.getPendingResponseCount()).toBe(0);
 	});
 });

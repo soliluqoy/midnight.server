@@ -14,7 +14,14 @@ import {
 
 const dirs: string[] = [];
 const cores: HarnessPolicyCore[] = [];
+/**
+ * The model class the running trial's candidate is about: a per-class toggle only counts episodes
+ * of its class, so the sessions below run that class. Which candidate a trial picks is the bandit's
+ * choice, not something these tests pin.
+ */
+let episodeClass: HarnessEpisode["model_class"] = "fast";
 afterEach(() => {
+	episodeClass = "fast";
 	while (cores.length > 0) cores.pop()!.close();
 	while (dirs.length > 0) rmSync(dirs.pop()!, { recursive: true, force: true });
 });
@@ -31,7 +38,7 @@ function episode(resolved: boolean, options: Partial<HarnessEpisode> = {}): Harn
 	return {
 		at: Date.now(),
 		policy_hash: "",
-		model_class: "fast",
+		model_class: episodeClass,
 		checked: true,
 		final_failed: !resolved,
 		blocker: false,
@@ -56,6 +63,8 @@ function settle(
 	for (let index = 0; index < count; index++) {
 		const assignment = core.assign(() => (arm === "candidate" ? 0 : 0.99));
 		const decision = core.record(assignment, episode(resolved(index)));
+		if (decision?.kind === "trial_started")
+			episodeClass = decision.detail.includes(":frontier:") ? "frontier" : "fast";
 		if (decision) decisions.push(decision);
 	}
 	return decisions;
@@ -91,7 +100,7 @@ describe("harness policy in Lattice", () => {
 		expect(trialAssignment.trial).toBeDefined();
 		expect(core.assign(() => 0.99).arm).toBe("active");
 
-		// A toggle for fast models only counts fast episodes; ours are all fast.
+		// A toggle for one model class only counts that class's episodes; settle() runs that class.
 		settle(core, "active", TRIAL.minEpisodes, (index) => index % 2 === 0);
 		const decisions = settle(core, "candidate", TRIAL.minEpisodes, () => true);
 		expect(decisions.map((decision) => decision.kind)).toEqual(["promoted"]);

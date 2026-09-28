@@ -3,6 +3,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import { minimatch } from "minimatch";
 import { spawnProcess, waitForChildProcess } from "../utils/child-process.ts";
 import { killProcessTree } from "../utils/shell.ts";
+import type { BaselineComparison } from "./baseline.ts";
 import type { HarnessCheck } from "./config.ts";
 
 /** Workspace-relative, forward-slash path, or undefined when `path` is outside `cwd`. */
@@ -48,6 +49,13 @@ export interface CheckOutcome {
 	/** stdout and stderr interleaved, byte-capped. */
 	output: string;
 	truncated: boolean;
+	/** Set on a failure compared with the same check's result from the start of the request. */
+	baseline?: BaselineComparison;
+}
+
+/** A failure the model has to deal with: not one the project already had before the request. */
+export function blocks(outcome: CheckOutcome): boolean {
+	return !outcome.passed && !outcome.baseline?.preexisting;
 }
 
 const CHECK_MAX_OUTPUT_BYTES = 64_000;
@@ -123,7 +131,7 @@ export async function runCheck(selected: SelectedCheck, cwd: string, signal: Abo
 const FEEDBACK_HEAD_BYTES = 1_500;
 const FEEDBACK_TAIL_BYTES = 4_500;
 const DIAGNOSTIC_MAX_BYTES = 2_400;
-const DIAGNOSTIC_LINE =
+export const DIAGNOSTIC_LINE =
 	/(?:error|fail(?:ed|ure)?|expect(?:ed)?|received|assert|traceback|exception|panic|cannot find|not found|undefined|null)/i;
 
 /**
@@ -157,7 +165,37 @@ export function diagnosticExcerpt(text: string, maxBytes = DIAGNOSTIC_MAX_BYTES)
 
 function describeOutcome(outcome: CheckOutcome): string {
 	const status = outcome.timedOut ? "timed out" : `exit ${outcome.exitCode ?? "?"}`;
-	return `${outcome.passed ? "[pass]" : "[FAIL]"} ${outcome.name}: ${outcome.argv.join(" ")} (${status}, ${(outcome.elapsedMs / 1000).toFixed(1)} s)`;
+	const mark = outcome.passed ? "[pass]" : outcome.baseline?.preexisting ? "[known]" : "[FAIL]";
+	const line = `${mark} ${outcome.name}: ${outcome.argv.join(" ")} (${status}, ${(outcome.elapsedMs / 1000).toFixed(1)} s)`;
+	return outcome.baseline?.preexisting
+		? `${line}: fails only with errors it already reported before this request; leave them unless the user asked`
+		: line;
+}
+
+const NEW_ERRORS_MAX_BYTES = 4_000;
+
+/** The errors a failure added over its baseline, byte-capped, with how many known ones were left out. */
+function newErrorsBlock(comparison: BaselineComparison): string[] {
+	const lines: string[] = [];
+	let bytes = 0;
+	let omitted = 0;
+	for (const line of comparison.newErrors) {
+		const size = Buffer.byteLength(line, "utf8") + 1;
+		if (bytes + size > NEW_ERRORS_MAX_BYTES) {
+			omitted++;
+			continue;
+		}
+		lines.push(line);
+		bytes += size;
+	}
+	if (omitted > 0) lines.push(`[... ${omitted} more new error lines]`);
+	const block = ["<new-errors>", ...lines, "</new-errors>"];
+	if (comparison.known > 0) {
+		block.push(
+			`${comparison.known} error line(s) this check already reported before this request are left out; they are not yours to fix.`,
+		);
+	}
+	return block;
 }
 
 /**
@@ -185,7 +223,8 @@ export function formatCheckFeedback(
 	const lines = [`Harness checks failed after your changes (repair round ${round} of ${maxRounds}).`];
 	for (const outcome of outcomes) {
 		lines.push(describeOutcome(outcome));
-		if (!outcome.passed) {
+		if (outcome.baseline && !outcome.baseline.preexisting) lines.push(...newErrorsBlock(outcome.baseline));
+		else if (blocks(outcome)) {
 			const output = boundOutput(outcome.output) || "(no output)";
 			lines.push("<output>", output, "</output>");
 			if (Buffer.byteLength(outcome.output, "utf8") > FEEDBACK_HEAD_BYTES + FEEDBACK_TAIL_BYTES) {

@@ -63,6 +63,18 @@ A check's result is reused while nothing it could depend on has changed: no succ
 - **During the run**: once the model stops editing (a turn with no edits after turns that edited files), levels 1 and 2 run, and the result goes into the next request: failures in full, or "checks pass; you do not need to rerun them". A turn that edits again does not trigger them, so a change spread over several turns (a signature, then its callers) is not flagged halfway. A check that took more than 90 s is skipped here, and so is a type check (`types`, `typecheck`, `tsc`, `mypy`, `pyright`, `cargo check`) when a language server already checked every changed file it covers.
 - **Before the run settles**: the full ladder runs on everything changed. On failure the model gets the output and another turn, up to `maxRepairRounds` (default 2). Ending again without changes does not skip the check: the same files are checked again.
 
+### Baseline for static checks
+
+A project that already has type or lint errors would otherwise fail every settle, and each repair round is a full model turn spent on code the request never touched. With `checkBaseline` (on by default), the static checks (types and lint by name: `types`, `typecheck`, `tsc`, `mypy`, `pyright`, `cargo check`, `lint`, `vet`, `eslint`, `ruff`, `biome`, `clippy`, `flake8`, `pylint`; project-wide, no `{files}`) run in the background when a request starts, on the tree as the request found it. The first edit or shell command waits up to 15 s for them; a baseline that finishes after something changed is discarded. While the git tree is unchanged, the last baseline is reused.
+
+A failing static check is then compared with its baseline (`src/harness/baseline.ts`). Error lines are compared with line numbers, counts and durations removed; an indented line counts under the unindented line above it (the file in ESLint output). A second copy of an existing error is new.
+
+- Only errors the baseline had: the check is shown as `[known]`, does not stop the ladder (the tests still run) and does not start a repair round.
+- New errors too: the feedback lists only the new error lines and says how many known ones were left out, instead of the raw log.
+- A different exit code, a timeout or unrecognized output that differs from the baseline: the failure is treated as new.
+
+Test checks never get a baseline: a failing test at the start is often what the request is about. `features: { "checkBaseline": false }` turns it off; `/harness` shows how many failures were held back.
+
 ### Rollback
 
 Each time the checks pass, the harness snapshots the working tree to a private ref under `refs/midnight/checkpoints/` (a commit built from a temporary index; the user's index, branches, HEAD and stash are never touched). When the same checks fail twice in a row, the harness restores the files the agent edited to the last passing snapshot and shows the model the change it reverted, so the next attempt starts from working code with the failed idea in view. Only files the agent changed with `edit` or `write` in the current request are restored; everything else, such as the user's own edits, is left alone. A snapshot from an earlier request is never used: each request starts without one. Refs are deleted when the session ends. Workspaces that are not git repositories have no snapshots.
@@ -163,7 +175,7 @@ Old, large tool results are replaced with a one-line stub (tool, arguments, size
 - `level` (1-3) places a check on the ladder; configured checks without one are level 1.
 - Unknown keys and unknown feature names are rejected, so a typo does not silently disable anything.
 
-Features: `contextPack`, `parseGate`, `editRepair`, `pathHints`, `loopGuard`, `inRunChecks`, `checkCache`, `checkpoints`, `lookup`, `diagnostics`, `adaptiveRepair`, `escalation`, `masking`, `driftGuard`, `blockerExit`, `divergence`, `reasoningBoost`, `mutationProbe`.
+Features: `contextPack`, `parseGate`, `editRepair`, `pathHints`, `loopGuard`, `inRunChecks`, `checkCache`, `checkBaseline`, `checkpoints`, `lookup`, `diagnostics`, `adaptiveRepair`, `escalation`, `masking`, `driftGuard`, `blockerExit`, `divergence`, `reasoningBoost`, `mutationProbe`.
 
 Environment:
 

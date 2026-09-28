@@ -42,6 +42,17 @@ export function isTypeCheck(check: HarnessCheck): boolean {
 	return TYPE_CHECK_NAMES.has(check.name.toLowerCase());
 }
 
+const LINT_CHECK_NAMES = new Set(["lint", "vet", "eslint", "ruff", "biome", "clippy", "flake8", "pylint"]);
+
+/**
+ * Static checks (types, lint) report on the code as it is, not on what the request asked for, so
+ * their failures before a request can be held back (baseline.ts). A test check is never one: a
+ * failing test at the start is often the request itself.
+ */
+export function isStaticCheck(check: HarnessCheck): boolean {
+	return isTypeCheck(check) || LINT_CHECK_NAMES.has(check.name.toLowerCase());
+}
+
 const FIXING_SCRIPT = /--fix\b|--write\b|\bprettier\b.*--write|\bformat\b/;
 const PLACEHOLDER_TEST = /no test specified/;
 

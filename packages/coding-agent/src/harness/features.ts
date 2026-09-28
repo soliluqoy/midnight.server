@@ -54,6 +54,11 @@ export const FEATURE_NAMES = [
 	 * noticed. Costs test runs, so off until measured. See mutation.ts.
 	 */
 	"mutationProbe",
+	/**
+	 * Run the static checks (types, lint) at the start of a request and hold back failures the
+	 * project already had: only new errors are fed back or start a repair round. See baseline.ts.
+	 */
+	"checkBaseline",
 ] as const;
 
 export type FeatureName = (typeof FEATURE_NAMES)[number];
@@ -84,6 +89,7 @@ const CLASS_DEFAULTS: Record<ModelClass, Record<FeatureName, boolean>> = {
 		loopGuard: true,
 		inRunChecks: true,
 		checkCache: true,
+		checkBaseline: true,
 		checkpoints: true,
 		lookup: true,
 		diagnostics: true,
@@ -104,6 +110,7 @@ const CLASS_DEFAULTS: Record<ModelClass, Record<FeatureName, boolean>> = {
 		loopGuard: true,
 		inRunChecks: true,
 		checkCache: true,
+		checkBaseline: true,
 		checkpoints: true,
 		lookup: true,
 		diagnostics: true,
