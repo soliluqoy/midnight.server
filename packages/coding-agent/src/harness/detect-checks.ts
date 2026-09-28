@@ -32,6 +32,16 @@ export interface ProjectFacts {
 	checks: DetectedCheck[];
 }
 
+/**
+ * Checks a language server also covers (type checkers, compilers): in-run checks skip them for
+ * files the server already checked. Configured checks count by name.
+ */
+const TYPE_CHECK_NAMES = new Set(["types", "typecheck", "type-check", "tsc", "mypy", "pyright", "cargo check"]);
+
+export function isTypeCheck(check: HarnessCheck): boolean {
+	return TYPE_CHECK_NAMES.has(check.name.toLowerCase());
+}
+
 const FIXING_SCRIPT = /--fix\b|--write\b|\bprettier\b.*--write|\bformat\b/;
 const PLACEHOLDER_TEST = /no test specified/;
 

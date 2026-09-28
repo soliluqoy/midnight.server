@@ -60,7 +60,7 @@ Checks run as a ladder: level by level, stopping at the first level that fails, 
 
 A check's result is reused while nothing it could depend on has changed: no successful `edit` or `write`, no shell command (it may install a dependency or start a service), no rollback, and no new request since it ran with the same command. The common case is the settle ladder right after an in-run check: levels 1 and 2 already ran on the same files, so only level 3 runs. Timeouts are never reused. `features: { "checkCache": false }` turns it off; `/harness` shows how many results were reused.
 
-- **During the run**: after a turn that edited files, levels 1 and 2 run (a check that took more than 90 s is skipped here), and the result goes into the next request: failures in full, or "checks pass; you do not need to rerun them".
+- **During the run**: once the model stops editing (a turn with no edits after turns that edited files), levels 1 and 2 run, and the result goes into the next request: failures in full, or "checks pass; you do not need to rerun them". A turn that edits again does not trigger them, so a change spread over several turns (a signature, then its callers) is not flagged halfway. A check that took more than 90 s is skipped here, and so is a type check (`types`, `typecheck`, `tsc`, `mypy`, `pyright`, `cargo check`) when a language server already checked every changed file it covers.
 - **Before the run settles**: the full ladder runs on everything changed. On failure the model gets the output and another turn, up to `maxRepairRounds` (default 2). Ending again without changes does not skip the check: the same files are checked again.
 
 ### Rollback

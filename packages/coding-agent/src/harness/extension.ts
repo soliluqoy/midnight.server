@@ -46,7 +46,13 @@ import {
 	loadHarnessConfig,
 } from "./config.ts";
 import { buildContextPack, buildFollowUpPack } from "./context-pack.ts";
-import { type DetectedCheck, detectProjectChecks, expandTests, type ProjectFacts } from "./detect-checks.ts";
+import {
+	type DetectedCheck,
+	detectProjectChecks,
+	expandTests,
+	isTypeCheck,
+	type ProjectFacts,
+} from "./detect-checks.ts";
 import {
 	ApproachArchive,
 	BOOST_CEILING,
@@ -140,6 +146,10 @@ interface RunState {
 	changed: Set<string>;
 	/** Files changed since the last in-run check. */
 	changedSinceInRun: Set<string>;
+	/** An edit or write changed a file in the current turn: the model is still mid-change. */
+	editedThisTurn: boolean;
+	/** Files whose last edit a language server checked: in-run type checks leave them to it. */
+	lspChecked: Set<string>;
 	/** Every file changed in this run, for the escalation diff and telemetry. */
 	allChanged: Set<string>;
 	shellRan: boolean;
@@ -192,6 +202,8 @@ function freshRun(prompt = ""): RunState {
 	return {
 		changed: new Set(),
 		changedSinceInRun: new Set(),
+		editedThisTurn: false,
+		lspChecked: new Set(),
 		allChanged: new Set(),
 		shellRan: false,
 		repairRound: 0,
@@ -230,8 +242,8 @@ const IN_RUN_CHECK_BUDGET_MS = 90_000;
  * - Before the first request: a context pack (environment, ranked files, their contents).
  * - At each action: path, PowerShell and indentation repairs; syntax errors rejected in the
  *   same turn; new language-server errors reported with the edit; repeated calls noticed.
- * - After edits: project checks (configured or detected), cheapest first, during the run and
- *   before it settles, with bounded repair rounds, rollback to the last passing state, and
+ * - After edits: project checks (configured or detected), cheapest first, once the model stops
+ *   editing during the run and before it settles, with bounded repair rounds, rollback to the last passing state, and
  *   advice from a stronger model when a fast model is stuck.
  * - Always: protected files, observation masking scaled to the context window.
  *
@@ -702,6 +714,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			if (!rejected && rel) {
 				run.changed.add(rel);
 				run.changedSinceInRun.add(rel);
+				run.editedThisTurn = true;
+				run.lspChecked.delete(rel);
 				run.allChanged.add(rel);
 				run.lastChangeAt = Date.now();
 				indexDirty = true;
@@ -791,6 +805,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			const since = Date.now();
 			client.sync(path);
 			const after = await client.diagnosticsFor(path, since, 8_000);
+			if (after) run.lspChecked.add(rel);
 			if (!after || after.every((item) => (item.severity ?? 1) !== 1)) return undefined;
 			let previous: typeof after | undefined;
 			if (before !== undefined) {
@@ -926,8 +941,14 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		}
 		const continuing =
 			event.message.role === "assistant" && event.message.content.some((part) => part.type === "toolCall");
+		// Check only once the model stops editing: a change spread over several turns (a signature,
+		// then its callers) is broken between them by design, and flagging that pulls the model off
+		// its plan. A turn that edits again waits; the settle ladder is the gate either way.
+		const editing = run.editedThisTurn;
+		run.editedThisTurn = false;
 		if (
 			continuing &&
+			!editing &&
 			on(ctx, "inRunChecks") &&
 			run.changedSinceInRun.size > 0 &&
 			getMidnightStatus().agentMode !== "plan"
@@ -1051,6 +1072,15 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		let tests: string[] | undefined;
 		for (const item of selectChecks(levelChecks, changed)) {
 			if (inRun && (checkDurations.get(item.check.name) ?? 0) > IN_RUN_CHECK_BUDGET_MS) continue;
+			// A language server already reported new errors with each edit to these files; a
+			// whole-project type check mid-run repeats that. Settle still runs it.
+			if (
+				inRun &&
+				isTypeCheck(item.check) &&
+				item.files.length > 0 &&
+				item.files.every((file) => run.lspChecked.has(file))
+			)
+				continue;
 			if (item.check.command.includes("{tests}")) {
 				tests ??= testsFor(await workspace(), changed);
 				const argv = expandTests(item.check, tests);
@@ -1425,7 +1455,10 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 						stats.rollbacks++;
 						run.rollbacks++;
 						indexDirty = true;
-						for (const path of paths) run.changed.add(path);
+						for (const path of paths) {
+							run.changed.add(path);
+							run.lspChecked.delete(path);
+						}
 						telemetry.record({ type: "rollback", paths: paths.length });
 						rollbackNote = [
 							"",

@@ -119,10 +119,10 @@ describe("harness v2 in a session", () => {
 		expect(readFileSync(file, "utf8")).toBe("function a() {\n\treturn 2;\n}\n");
 	});
 
-	it("runs checks after an edit during the run and tells the model they pass", async () => {
+	it("runs checks once the model stops editing and tells the model they pass", async () => {
 		const harness = await setup();
 		writeProject(harness.tempDir);
-		let secondRequest = "";
+		const requests: string[] = [];
 		harness.setResponses([
 			fauxAssistantMessage(
 				[
@@ -134,12 +134,43 @@ describe("harness v2 in a session", () => {
 				{ stopReason: "toolUse" },
 			),
 			(context) => {
-				secondRequest = contextText(context);
+				requests.push(contextText(context));
+				return fauxAssistantMessage([fauxToolCall("read", { path: "value.js" })], { stopReason: "toolUse" });
+			},
+			(context) => {
+				requests.push(contextText(context));
 				return fauxAssistantMessage("done");
 			},
 		]);
 		await harness.session.prompt("add a comment to value.js");
-		expect(secondRequest).toContain("Harness checks after your edits pass");
+		// Not after the editing turn: the model may be mid-change.
+		expect(requests[0]).not.toContain("Harness checks after your edits");
+		expect(requests[1]).toContain("Harness checks after your edits pass");
+		expect(harness.getPendingResponseCount()).toBe(0);
+	});
+
+	it("does not check between turns that keep editing", async () => {
+		const harness = await setup();
+		writeProject(harness.tempDir);
+		const requests: string[] = [];
+		const edit = (from: string, to: string) =>
+			fauxAssistantMessage([fauxToolCall("edit", { path: "value.js", edits: [{ oldText: from, newText: to }] })], {
+				stopReason: "toolUse",
+			});
+		harness.setResponses([
+			// Broken in between: the check would fail after this turn.
+			edit("module.exports = 1;", "module.exports = 2;"),
+			(context) => {
+				requests.push(contextText(context));
+				return edit("module.exports = 2;", "module.exports = 1; // back");
+			},
+			(context) => {
+				requests.push(contextText(context));
+				return fauxAssistantMessage("done");
+			},
+		]);
+		await harness.session.prompt("rework value.js");
+		expect(requests.join("\n")).not.toContain("Harness checks");
 		expect(harness.getPendingResponseCount()).toBe(0);
 	});
 
@@ -173,6 +204,7 @@ describe("harness v2 in a session", () => {
 				],
 				{ stopReason: "toolUse" },
 			),
+			fauxAssistantMessage([fauxToolCall("read", { path: "value.js" })], { stopReason: "toolUse" }),
 			fauxAssistantMessage("done"),
 		]);
 		await harness.session.prompt("add a comment to value.js");
@@ -191,9 +223,10 @@ describe("harness v2 in a session", () => {
 			});
 		let rollbackMessage = "";
 		harness.setResponses([
-			// Good edit: in-run check passes, the harness snapshots this state.
+			// Good edit, then a turn without edits: in-run check passes, the harness snapshots this state.
 			edit("module.exports = 1;", "module.exports = 1; // v2"),
-			// Bad edit in the next turn: in-run check fails.
+			fauxAssistantMessage([fauxToolCall("read", { path: "value.js" })], { stopReason: "toolUse" }),
+			// Bad edit in the next turn.
 			edit("module.exports = 1; // v2", "module.exports = 2; // v3"),
 			fauxAssistantMessage("done"),
 			// Settle check fails (round 1); another bad fix.
@@ -260,6 +293,8 @@ describe("harness v2 in a session", () => {
 			});
 		harness.setResponses([
 			edit("module.exports = 1;", "module.exports = 1; // v2"),
+			// A turn without edits: the in-run check passes and the harness snapshots this state.
+			fauxAssistantMessage([fauxToolCall("read", { path: "value.js" })], { stopReason: "toolUse" }),
 			// The user saves a file in their editor while the agent works.
 			() => {
 				writeFileSync(join(harness.tempDir, "notes.txt"), "user notes\n");
