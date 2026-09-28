@@ -98,7 +98,12 @@ export async function resizeImage(
 	// release binary uses the embedded worker instead of falling back in-process.
 	if (typeof process.versions.bun === "string") {
 		try {
-			return await resizeImageInWorker("./src/utils/image-resize-worker.ts", inputBytes, mimeType, options);
+			return await resizeImageInWorker(
+				"./packages/coding-agent/src/utils/image-resize-worker.ts",
+				inputBytes,
+				mimeType,
+				options,
+			);
 		} catch {}
 	}
 

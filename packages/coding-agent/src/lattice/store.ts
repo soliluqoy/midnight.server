@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { canonical, digest, sha256 } from "./canonical.ts";
 import { type Contract, evaluatorHash } from "./contracts.ts";
 import { faultPoint } from "./fault.ts";
 import { type LibrarySkill, librarySkillHash, type Program, programHash } from "./ir.ts";
 import { PRIMITIVE_LIBRARY_HASH } from "./primitives.ts";
+import { openDatabase, type SqlDatabase, type SqlValue } from "./sqlite.ts";
 
 /**
  * Persistent state (spec sections 7, 15, 44). SQLite in WAL mode with foreign keys and full
@@ -226,11 +226,11 @@ export interface IntegrityReport {
 
 export class LatticeStore {
 	readonly dataDir: string;
-	readonly db: DatabaseSync;
+	readonly db: SqlDatabase;
 	/** Set when an integrity check failed; promotion stops until recovery (invariant 10). */
 	paused: string | undefined;
 
-	private constructor(dataDir: string, db: DatabaseSync) {
+	private constructor(dataDir: string, db: SqlDatabase) {
 		this.dataDir = dataDir;
 		this.db = db;
 	}
@@ -244,7 +244,7 @@ export class LatticeStore {
 		const path = join(dataDir, "lattice.db");
 		let precheck: IntegrityReport | undefined;
 		if (existsSync(path)) {
-			const readonly = new DatabaseSync(path, { readOnly: true });
+			const readonly = openDatabase(path, { readOnly: true });
 			try {
 				const hasAudit = readonly
 					.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'audit'")
@@ -254,7 +254,7 @@ export class LatticeStore {
 				readonly.close();
 			}
 		}
-		const db = new DatabaseSync(path);
+		const db = openDatabase(path);
 		db.exec("PRAGMA journal_mode = WAL");
 		db.exec("PRAGMA synchronous = FULL");
 		db.exec("PRAGMA foreign_keys = ON");
@@ -278,7 +278,7 @@ export class LatticeStore {
 	/** An isolated in-memory store for tests and self-tests. */
 	static memory(dataDir: string): LatticeStore {
 		mkdirSync(join(dataDir, "artifacts"), { recursive: true });
-		const db = new DatabaseSync(":memory:");
+		const db = openDatabase(":memory:");
 		db.exec("PRAGMA foreign_keys = ON");
 		db.exec(SCHEMA);
 		const store = new LatticeStore(dataDir, db);
@@ -292,18 +292,15 @@ export class LatticeStore {
 		this.db.close();
 	}
 
-	private get<R>(sql: string, ...params: SQLInputValue[]): R | undefined {
+	private get<R>(sql: string, ...params: SqlValue[]): R | undefined {
 		return this.db.prepare(sql).get(...params) as R | undefined;
 	}
 
-	private all<R>(sql: string, ...params: SQLInputValue[]): R[] {
+	private all<R>(sql: string, ...params: SqlValue[]): R[] {
 		return this.db.prepare(sql).all(...params) as R[];
 	}
 
-	private run(
-		sql: string,
-		...params: SQLInputValue[]
-	): { lastInsertRowid: number | bigint; changes: number | bigint } {
+	private run(sql: string, ...params: SqlValue[]): { lastInsertRowid: number | bigint; changes: number | bigint } {
 		return this.db.prepare(sql).run(...params);
 	}
 
@@ -1201,7 +1198,7 @@ export class LatticeStore {
 
 	/** Integrity of a database file that is not open (restore validation). */
 	static verifyFile(path: string, dataDir: string): IntegrityReport {
-		const db = new DatabaseSync(path, { readOnly: true });
+		const db = openDatabase(path, { readOnly: true });
 		try {
 			return verifyDatabase(db, dataDir);
 		} finally {
@@ -1349,7 +1346,7 @@ export class LatticeStore {
 		const dbPath = join(dir, "lattice.db");
 		const problems: string[] = [];
 		if (sha256(readFileSync(dbPath)) !== manifest.database_sha256) problems.push("snapshot database hash mismatch");
-		const snapshot = new DatabaseSync(dbPath, { readOnly: true });
+		const snapshot = openDatabase(dbPath, { readOnly: true });
 		let report: IntegrityReport;
 		try {
 			report = verifyDatabase(snapshot, this.dataDir);
@@ -1446,7 +1443,7 @@ function recomputeHash(row: { kind: string; canonical_ir: string; primitives_has
  * A hash chain detects accidental and naive edits; it does not authenticate history against
  * someone who can rewrite every record (section 44.5).
  */
-function verifyDatabase(db: DatabaseSync, dataDir: string): IntegrityReport {
+function verifyDatabase(db: SqlDatabase, dataDir: string): IntegrityReport {
 	const problems: string[] = [];
 	let auditBrokenAt: number | undefined;
 	let previous = GENESIS;
