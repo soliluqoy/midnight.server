@@ -456,8 +456,10 @@ describe.skipIf(!hasCommand("git"))("git helpers", () => {
 		const copy = await materializeTree(join(root, "sub"), tree!);
 		expect(copy).toBeDefined();
 		expect(copy!.cwd).toBe(join(copy!.root, "sub"));
-		expect(readFileSync(join(copy!.root, "a.js"), "utf8")).toBe("one\n");
-		expect(readFileSync(join(copy!.cwd, "b.js"), "utf8")).toBe("b\n");
+		// Tracked files are checked out as git would in the real checkout (CRLF with autocrlf on Windows).
+		const text = (path: string) => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+		expect(text(join(copy!.root, "a.js"))).toBe("one\n");
+		expect(text(join(copy!.cwd, "b.js"))).toBe("b\n");
 		expect(readFileSync(join(copy!.root, "deps", "lib.js"), "utf8")).toBe("dep\n");
 		expect(readFileSync(join(copy!.root, ".env"), "utf8")).toBe("KEY=1\n");
 		await copy!.dispose();

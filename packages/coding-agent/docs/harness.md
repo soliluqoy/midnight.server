@@ -45,7 +45,7 @@ When the model finishes a run that changed files:
 
 ### Failures the project already had (`checkBaseline`)
 
-A project with existing type or lint errors would otherwise fail every run, and each repair round is a model turn spent on code the request never touched. When the request starts, the harness records the working tree as a git tree object; this takes milliseconds, runs in the background, and the first edit or shell command waits for it. Only if a project-wide static check fails (types or lint by name, no `{files}`) does the harness write that tree to a temporary directory and run the same check there. Installed dependencies and build output are linked in from the real checkout. It then compares the two results (`src/harness/baseline.ts`):
+A project with existing type or lint errors would otherwise fail every run, and each repair round is a model turn spent on code the request never touched. Just before the first edit, write or shell command of a request, the harness records the working tree as a git tree object, which takes milliseconds. A request that only reads or answers runs no git at all. Only if a project-wide static check fails (types or lint by name, no `{files}`) does the harness write that tree to a temporary directory and run the same check there. Installed dependencies and build output are linked in from the real checkout. It then compares the two results (`src/harness/baseline.ts`):
 
 - The check fails only with errors it already had before the request: it is shown as `[known]`, does not stop the ladder, and does not start a repair round.
 - New errors too: the feedback lists only the new error lines.
@@ -57,7 +57,7 @@ Results are cached per tree, so an unchanged tree never runs the baseline twice.
 
 Implementation drift is a change that moves away from the request toward something simpler, without saying so. Example: asked to make `parsePort` reject invalid ports, a model comments out a failing assertion and reports "Done. All tests pass."
 
-- **Drift guard (`driftGuard`).** Once the checks pass (or there are none), the harness compares every file that differs from the start of the request (shell edits included) with the request. It looks for:
+- **Drift guard (`driftGuard`).** Once the checks pass (or there are none), the harness compares every file that differs from the start of the request (shell edits included) with the request. It skips runs that neither edited files nor ran a shell command, and it reads only the workspace's file list (`git ls-files`) and its test files, never a full index. It looks for:
   - weakened tests;
   - test inputs hard-coded into source;
   - stubs and swallowed errors;

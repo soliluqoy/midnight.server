@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { Box, Text } from "@earendil-works/pi-tui";
@@ -64,7 +64,13 @@ import { LspManager } from "./lsp.ts";
 import { canCheckSyntax, introducedSyntaxError, pythonInterpreter } from "./parse-gate.ts";
 import { formatDiagnostics, newErrors, runLookup } from "./semantic.ts";
 import { HarnessTelemetry } from "./telemetry.ts";
-import { buildWorkspaceIndex, isTestPath, testsFor, type WorkspaceIndex } from "./workspace-index.ts";
+import {
+	buildWorkspaceIndex,
+	isTestPath,
+	listWorkspaceFiles,
+	testsFor,
+	type WorkspaceIndex,
+} from "./workspace-index.ts";
 
 export const CHECK_MESSAGE_TYPE = "harness_check";
 export const CONTEXT_MESSAGE_TYPE = "harness_context";
@@ -107,6 +113,9 @@ function editsOf(input: Record<string, unknown>): TextEdit[] {
 }
 
 const SHELL_TOOLS = new Set(["bash", "powershell"]);
+
+/** Test files larger than this are not read for the drift guard's literal check. */
+const MAX_TEST_SOURCE_BYTES = 512_000;
 
 interface RunState {
 	startedAt?: number;
@@ -282,6 +291,15 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		return indexBuild;
 	}
 
+	/**
+	 * Workspace-relative paths, from the index when one is current (opt-in features build it),
+	 * else from one `git ls-files` (or a directory walk outside git): no file is read.
+	 */
+	async function workspaceFiles(): Promise<string[]> {
+		if (index && !indexDirty) return index.files.map((file) => file.path);
+		return (await listWorkspaceFiles(cwd)).files;
+	}
+
 	function lspManager(): LspManager | undefined {
 		if (!trusted) return undefined;
 		lsp ??= new LspManager(cwd);
@@ -364,8 +382,9 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		indexDirty = true;
 		packSent = false;
 		syncTools();
-		// Index in the background while the user types, for the features that read it.
-		if (config.enabled && (on("contextPack") || on("lookup") || on("driftGuard"))) {
+		// Index in the background while the user types, for the opt-in features that rank files.
+		// The default features need only the file list (`git ls-files`), read when they need it.
+		if (config.enabled && (on("contextPack") || on("lookup"))) {
 			void workspace().catch(() => undefined);
 		}
 	});
@@ -412,10 +431,6 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 				command?: unknown;
 				timeout?: unknown;
 			};
-			const mutates = event.toolName === "edit" || event.toolName === "write" || SHELL_TOOLS.has(event.toolName);
-			// The start tree must not include this request's changes; writing it takes milliseconds
-			// and began with the request, so this is normally already resolved.
-			if (mutates && run.startTree) await run.startTree;
 			if (SHELL_TOOLS.has(event.toolName) && input.timeout === undefined && config.shellTimeoutSeconds > 0) {
 				input.timeout = config.shellTimeoutSeconds;
 			}
@@ -445,6 +460,13 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					addNote(event.toolCallId, note);
 					telemetry.record({ type: "loop_note", tool: event.toolName });
 				}
+			}
+			const mutates = event.toolName === "edit" || event.toolName === "write" || SHELL_TOOLS.has(event.toolName);
+			// The tree as the request found it, for the drift inventory and baselines: written before
+			// the first call that can change files, so a request that only reads or answers runs no git.
+			if (mutates && (on("driftGuard") || on("checkBaseline")) && getMidnightStatus().agentMode !== "plan") {
+				run.startTree ??= writeWorkingTree(ctx.cwd).catch(() => undefined);
+				await run.startTree;
 			}
 			if (event.toolName !== "edit" && event.toolName !== "write") return;
 			const path = input.path;
@@ -565,10 +587,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					/ENOENT|not found|No such file|does not exist/i.test(message) &&
 					on("pathHints")
 				) {
-					const suggestions = suggestPaths(
-						path,
-						(await workspace()).files.map((file) => file.path),
-					);
+					const suggestions = suggestPaths(path, await workspaceFiles());
 					if (suggestions.length > 0) {
 						extra.push(`[harness: ${path} does not exist. Did you mean: ${suggestions.join(", ")}?]`);
 						telemetry.record({ type: "path_hint" });
@@ -654,9 +673,6 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			if (!config.enabled) return;
 			syncTools();
 			const planning = getMidnightStatus().agentMode === "plan";
-			if (!planning && (on("driftGuard") || on("checkBaseline"))) {
-				run.startTree = writeWorkingTree(ctx.cwd).catch(() => undefined);
-			}
 			const packing = on("contextPack") && !planning && event.prompt.trim() !== "";
 			const indexed = packing ? workspace() : undefined;
 			const git = packing && !packSent ? gitSummary(ctx.cwd) : undefined;
@@ -1010,7 +1026,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	/** Test files as the request found them: the literals a special case would copy from. */
 	function testSourcesAtStart(
 		ctx: ExtensionContext,
-		workspaceIndex: WorkspaceIndex,
+		files: readonly string[],
 		changes: readonly FileChange[],
 	): Map<string, string> {
 		const sources = new Map<string, string>();
@@ -1018,13 +1034,17 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		for (const change of changes) {
 			if (isTestPath(change.path) && change.before !== undefined) sources.set(change.path, change.before);
 		}
-		for (const file of workspaceIndex.files) {
-			if (!file.isTest || sources.has(file.path) || bytes > 1_000_000) continue;
-			if (changes.some((change) => change.path === file.path)) continue;
+		for (const path of files) {
+			if (!isTestPath(path) || sources.has(path) || bytes > 1_000_000) continue;
+			if (changes.some((change) => change.path === path)) continue;
 			try {
-				const text = readFileSync(resolve(ctx.cwd, file.path), "utf8");
+				const absolute = resolve(ctx.cwd, path);
+				if (statSync(absolute).size > MAX_TEST_SOURCE_BYTES) continue;
+				const text = readFileSync(absolute, "utf8");
+				// Fixtures such as images live under test directories too: not source.
+				if (text.includes("\0")) continue;
 				bytes += text.length;
-				sources.set(file.path, text);
+				sources.set(path, text);
 			} catch {
 				// Unreadable: skip.
 			}
@@ -1122,9 +1142,11 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		// Implementation drift, once the checks pass or there are none: failing checks already send
 		// the model back, and weakening a test to get past them shows up here on the next settle.
 		if (!on("driftGuard") || run.lastCheckFailed || run.driftNudged) return undefined;
+		// Nothing edited and no shell command: nothing the run did can have drifted.
+		if (run.allChanged.size === 0 && run.shellCommands.length === 0) return undefined;
 		const changes = await driftInventory(ctx);
 		if (changes.length === 0 && run.shellCommands.length === 0) return undefined;
-		const workspaceIndex = await workspace();
+		const files = await workspaceFiles();
 		const signals = detectDrift({
 			request: run.prompt,
 			changes,
@@ -1134,10 +1156,10 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					run.verifiedAt !== undefined && run.verifiedAt >= (run.lastChangeAt ?? run.startedAt ?? 0),
 				lastCheckFailed: run.lastCheckFailed,
 			},
-			testSources: testSourcesAtStart(ctx, workspaceIndex, changes),
-			workspaceFiles: workspaceIndex.files
-				.map((file) => file.path)
-				.filter((path) => !changes.some((change) => change.path === path && change.before === undefined)),
+			testSources: testSourcesAtStart(ctx, files, changes),
+			workspaceFiles: files.filter(
+				(path) => !changes.some((change) => change.path === path && change.before === undefined),
+			),
 			shellCommands: run.shellCommands,
 		});
 		const flagged = actionable(signals);

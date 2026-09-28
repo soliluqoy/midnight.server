@@ -139,7 +139,8 @@ The comparison the project has not run: lean vs current vs vanilla Pi, on the sa
 
 - `extension.ts` was rewritten in place (1,200 lines, down from 1,700) rather than split into `guards.ts` and `settle.ts`: the hooks share one per-request state, and a split would only pass that state around.
 - No `MIDNIGHT_SERVER_HARNESS_PROFILE=lean` stage: the lean set is the default directly. The comparison with the old harness runs from the commit before this change.
-- The start tree (`git write-tree` through a throwaway index) runs in the background when a request starts; edit, write and shell calls wait for it, which normally costs nothing because it finishes before the model's first tool call.
+- The start tree (`git write-tree` through a throwaway index) is written at the first edit, write or shell call of a request, so read-only and answer-only requests run no git. Changes made outside the agent's tools between the request start and that call count as part of the start state.
+- A default session builds no workspace index: the drift guard and path hints use `git ls-files`. The index (every file read and tokenized) is built only for `contextPack`, `lookup`, and for a settle check with `{tests}` that needs related tests.
 - The lazy baseline links ignored directories (dependencies, build output) into the temporary copy. A check that writes into one of them, such as a build cache, writes into the real checkout.
 - The environment facts moved from the context pack into a system-prompt section. The context pack itself (opt-in) now carries only git state, ranked files and file contents.
 - `harness/` is 5,400 lines, not the 3,000 estimated in Section 4: the opt-in features (context pack, workspace index, outlines, language-server client, `lookup`) stay in the code, off by default, so the eval can still measure them. Deleting them is the next step if they do not earn a place.
