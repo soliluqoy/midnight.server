@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { DetectedCheck, ProjectFacts } from "./detect-checks.ts";
-import { BYTES_PER_TOKEN } from "./masking.ts";
 import { declarationBody, identifierTerms, type OutlineSymbol } from "./outline.ts";
 import { type RankedFile, rankFiles, type WorkspaceIndex } from "./workspace-index.ts";
 
@@ -18,14 +17,20 @@ import { type RankedFile, rankFiles, type WorkspaceIndex } from "./workspace-ind
  * Everything in it is deterministic and bounded by a token budget.
  */
 
-export interface PackInput {
-	index: WorkspaceIndex;
-	request: string;
+/** Rough bytes per token for code and English, used only to relate bytes to a token budget. */
+const BYTES_PER_TOKEN = 4;
+
+export interface EnvironmentInput {
 	facts: ProjectFacts;
-	/** Checks the harness will run after edits, if any. */
+	/** Checks the harness runs when the model finishes, if any. */
 	checks: ReadonlyArray<Pick<DetectedCheck, "name" | "command">>;
 	platform: NodeJS.Platform;
 	shell: "powershell" | "bash" | undefined;
+}
+
+export interface PackInput {
+	index: WorkspaceIndex;
+	request: string;
 	git?: { branch?: string; changed: string[] };
 	budgetTokens: number;
 }
@@ -53,10 +58,14 @@ function symbolSummary(symbols: readonly OutlineSymbol[], max = 8): string {
 	return names.length === 0 ? "" : ` — ${names.join(", ")}${more > 0 ? ` (+${more})` : ""}`;
 }
 
-function describeEnvironment(input: PackInput): string[] {
+/**
+ * The environment facts for the system prompt: stable for a session, so they sit in the cached
+ * prompt prefix and cost nothing after the first request.
+ */
+export function describeEnvironment(input: EnvironmentInput): string {
 	const os = input.platform === "win32" ? "Windows" : input.platform === "darwin" ? "macOS" : "Linux";
 	const lines = [
-		`Environment: ${os}${input.shell ? `, shell tool: ${input.shell}${input.shell === "powershell" ? " (PowerShell syntax, not bash)" : ""}` : ""}.`,
+		`OS: ${os}${input.shell ? `, shell tool: ${input.shell}${input.shell === "powershell" ? " (PowerShell syntax, not bash)" : ""}` : ""}.`,
 	];
 	const project: string[] = [];
 	if (input.facts.languages.length > 0) project.push(`languages: ${input.facts.languages.join(", ")}`);
@@ -65,16 +74,15 @@ function describeEnvironment(input: PackInput): string[] {
 	if (project.length > 0) lines.push(`Project: ${project.join("; ")}.`);
 	if (input.checks.length > 0) {
 		lines.push(
-			`After you edit files, the harness runs these checks and shows you failures: ${input.checks.map((check) => check.name).join(", ")}. You do not need to run them yourself just to confirm success.`,
+			`When you finish, the harness runs these checks on the files you changed and shows you any failure: ${input.checks.map((check) => check.name).join(", ")}.`,
 		);
 	}
-	if (input.git) {
-		const changed = input.git.changed.slice(0, 10);
-		lines.push(
-			`Git: ${input.git.branch ? `branch ${input.git.branch}, ` : ""}${input.git.changed.length === 0 ? "clean working tree" : `${input.git.changed.length} changed file(s): ${changed.join(", ")}${input.git.changed.length > changed.length ? ", ..." : ""}`}.`,
-		);
-	}
-	return lines;
+	return lines.join("\n");
+}
+
+function describeGit(git: NonNullable<PackInput["git"]>): string {
+	const changed = git.changed.slice(0, 10);
+	return `Git: ${git.branch ? `branch ${git.branch}, ` : ""}${git.changed.length === 0 ? "clean working tree" : `${git.changed.length} changed file(s): ${changed.join(", ")}${git.changed.length > changed.length ? ", ..." : ""}`}.`;
 }
 
 /** Build the pack. Returns undefined for an empty workspace. */
@@ -83,7 +91,7 @@ export function buildContextPack(input: PackInput): ContextPack | undefined {
 	const ranked = rankFiles(input.index, input.request, 10);
 	if (input.index.files.length === 0) return undefined;
 	const sections: string[] = [];
-	const environment = describeEnvironment(input).join("\n");
+	const environment = input.git ? describeGit(input.git) : "";
 	let used = Buffer.byteLength(environment);
 
 	const rankedLines: string[] = [];
@@ -154,7 +162,7 @@ export function buildContextPack(input: PackInput): ContextPack | undefined {
 	}
 	const omitted = others.length - mapLines.length;
 
-	sections.push(environment);
+	if (environment) sections.push(environment);
 	if (rankedLines.length > 0) {
 		sections.push(`Files most related to this request (path — symbol:line):\n${rankedLines.join("\n")}`);
 	}

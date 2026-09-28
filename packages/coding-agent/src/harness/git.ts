@@ -1,40 +1,16 @@
-import { execFile, spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { copyFile, mkdir, rm, unlink, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { copyFile, mkdir, mkdtemp, rm, stat, symlink, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { isGeneratedPath } from "./workspace-index.ts";
 
 /**
- * Snapshots of the working tree in private git refs, and restoring one.
+ * Git helpers for the harness: the working tree as a git tree object, what changed since one, and
+ * a throwaway copy of one for checks that must see the tree as a request found it.
  *
- * Problem: after a fix fails its checks twice, a weak model tends to pile a third fix on the
- * first two instead of reconsidering. The files drift further from any working state.
- *
- * Solution: each time the checks pass, the harness snapshots the working tree. When the same
- * checks then fail twice in a row, it restores the files the agent changed to the last passing
- * snapshot and shows the model the change it reverted, so the next attempt starts from working
- * code with the failed idea in view. Files the agent did not change are left alone.
- *
- * A snapshot is a commit under `refs/midnight/checkpoints/`, built with a temporary index
- * file. The user's index, branches, HEAD and stash are never touched. Refs are deleted when
- * the session ends.
- *
- * Every git call here is asynchronous: these run at the start of each request, after each
- * passing check and when a run settles, and a synchronous child process freezes the TUI
- * (no rendering, no input) for as long as git takes.
+ * Every git call here is asynchronous: a synchronous child process freezes the TUI (no rendering,
+ * no input) for as long as git takes. The user's index, branches, HEAD and stash are never touched.
  */
-
-export interface Checkpoint {
-	ref: string;
-	commit: string;
-	tree: string;
-	createdAt: number;
-	label: string;
-}
-
-const REF_PREFIX = "refs/midnight/checkpoints";
-const MAX_DIFF_BYTES = 12_000;
 
 interface GitResult {
 	ok: boolean;
@@ -122,145 +98,6 @@ async function readBlobs(root: string, specs: readonly string[], maxBytes: numbe
 async function repoRoot(cwd: string): Promise<string | undefined> {
 	const result = await git(cwd, ["rev-parse", "--show-cdup"]);
 	return result.ok ? resolve(cwd, result.stdout.trim()) : undefined;
-}
-
-export class CheckpointStore {
-	private readonly checkpoints: Checkpoint[] = [];
-	private readonly cwd: string;
-	private readonly sessionTag: string;
-	private counter = 0;
-
-	constructor(cwd: string, sessionTag: string) {
-		this.cwd = cwd;
-		this.sessionTag = sessionTag.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40) || "session";
-	}
-
-	get latest(): Checkpoint | undefined {
-		return this.checkpoints[this.checkpoints.length - 1];
-	}
-
-	/** Snapshot the working tree (tracked and untracked, respecting .gitignore). */
-	async snapshot(label: string): Promise<Checkpoint | undefined> {
-		const tree = await writeWorkingTree(this.cwd);
-		if (!tree) return undefined;
-		if (this.latest?.tree === tree) return this.latest;
-		const head = await git(this.cwd, ["rev-parse", "--verify", "-q", "HEAD"]);
-		const parents = head.ok ? ["-p", head.stdout.trim()] : [];
-		const commit = await git(
-			this.cwd,
-			["commit-tree", tree, ...parents, "-m", `midnight.server checkpoint: ${label}`],
-			{
-				GIT_AUTHOR_NAME: "midnight.server",
-				GIT_AUTHOR_EMAIL: "harness@midnight.server",
-				GIT_COMMITTER_NAME: "midnight.server",
-				GIT_COMMITTER_EMAIL: "harness@midnight.server",
-			},
-		);
-		if (!commit.ok) return undefined;
-		const ref = `${REF_PREFIX}/${this.sessionTag}-${++this.counter}`;
-		if (!(await git(this.cwd, ["update-ref", ref, commit.stdout.trim()])).ok) return undefined;
-		const checkpoint = { ref, commit: commit.stdout.trim(), tree, createdAt: Date.now(), label };
-		this.checkpoints.push(checkpoint);
-		return checkpoint;
-	}
-
-	/**
-	 * Restore the working tree to `checkpoint` for the paths in `only` (absolute) that differ
-	 * from it. Other paths are never touched: a snapshot covers the whole repository, and the
-	 * user may have changed files the agent did not. Returns the reverted change as a bounded
-	 * diff (checkpoint -> state before restoring) and the restored paths as given in `only`,
-	 * or undefined when nothing differed or git failed.
-	 */
-	async restore(
-		checkpoint: Checkpoint,
-		only: readonly string[],
-	): Promise<{ diff: string; paths: string[] } | undefined> {
-		const allowed = new Map(only.map((path) => [pathKey(path), path]));
-		if (allowed.size === 0) return undefined;
-		const [root, current] = await Promise.all([repoRoot(this.cwd), writeWorkingTree(this.cwd)]);
-		if (!root || !current || current === checkpoint.tree) return undefined;
-		const names = await git(root, ["diff", "--name-status", "-z", "--no-renames", checkpoint.tree, current]);
-		if (!names.ok) return undefined;
-		const fields = names.stdout.split("\0").filter(Boolean);
-		const selected: Array<{ status: string; path: string; target: string }> = [];
-		const paths: string[] = [];
-		for (let index = 0; index + 1 < fields.length; index += 2) {
-			const status = fields[index]!;
-			const path = fields[index + 1]!;
-			const target = join(root, path);
-			const requested = allowed.get(pathKey(target));
-			if (requested === undefined) continue;
-			selected.push({ status, path, target });
-			paths.push(requested);
-		}
-		if (selected.length === 0) return undefined;
-		const blobs = await readBlobs(
-			root,
-			selected.filter((item) => item.status !== "A").map((item) => `${checkpoint.tree}:${item.path}`),
-			Number.POSITIVE_INFINITY,
-		);
-		for (const { status, path, target } of selected) {
-			if (status === "A") {
-				await rm(target, { force: true });
-				continue;
-			}
-			const blob = blobs.get(`${checkpoint.tree}:${path}`);
-			if (!blob) continue;
-			await mkdir(dirname(target), { recursive: true });
-			await writeFile(target, blob);
-		}
-		const diff = await git(root, [
-			"--literal-pathspecs",
-			"diff",
-			"--no-color",
-			"--no-renames",
-			checkpoint.tree,
-			current,
-			"--",
-			...selected.map((item) => item.path),
-		]);
-		const text = diff.stdout;
-		return {
-			diff: text.length > MAX_DIFF_BYTES ? `${text.slice(0, MAX_DIFF_BYTES)}\n[... diff truncated ...]` : text,
-			paths,
-		};
-	}
-
-	/**
-	 * Delete this session's refs. The objects are left for git's normal garbage collection. This
-	 * runs at shutdown, where an asynchronous call could be cut off, so it is one synchronous git
-	 * process for all refs.
-	 */
-	dispose(): void {
-		if (this.checkpoints.length === 0) return;
-		spawnSync("git", ["update-ref", "--stdin"], {
-			cwd: this.cwd,
-			input: this.checkpoints.map((checkpoint) => `delete ${checkpoint.ref}\n`).join(""),
-			stdio: ["pipe", "ignore", "ignore"],
-			windowsHide: true,
-			timeout: 10_000,
-		});
-		this.checkpoints.length = 0;
-	}
-}
-
-/**
- * Comparable form of an absolute path: symlinks and Windows short names resolved (git reports
- * the real repository root), and case folded on Windows. A deleted file resolves through its
- * directory.
- */
-function pathKey(path: string): string {
-	let key = resolve(path);
-	try {
-		key = realpathSync.native(key);
-	} catch {
-		try {
-			key = join(realpathSync.native(dirname(key)), basename(key));
-		} catch {
-			// Keep the resolved path.
-		}
-	}
-	return process.platform === "win32" ? key.toLowerCase() : key;
 }
 
 /** Files larger than this are left out of a change inventory: not source a detector can read. */
@@ -355,4 +192,72 @@ export async function writeWorkingTree(cwd: string): Promise<string | undefined>
 			// Never created.
 		}
 	}
+}
+
+/** Ignored files copied into a materialized tree at most this large (a `.env`, a local config). */
+const MAX_IGNORED_COPY_BYTES = 1_000_000;
+
+export interface MaterializedTree {
+	/** Where `cwd` is inside the copy: run checks here. */
+	cwd: string;
+	/** The copy's repository root, to map paths in check output back to the real one. */
+	root: string;
+	/** Remove the copy. Links are removed as links; their targets are never touched. */
+	dispose(): Promise<void>;
+}
+
+/**
+ * Write the tree `tree` (from `writeWorkingTree`) to a temporary directory, so a check can run
+ * against the files as they were when a request started without touching the working tree.
+ * Ignored paths (installed dependencies, build output, local config) are not in the tree; they
+ * are linked (directories) or copied (small files) from the real checkout, so a type check still
+ * resolves its dependencies. Undefined when git fails.
+ */
+export async function materializeTree(cwd: string, tree: string): Promise<MaterializedTree | undefined> {
+	const root = await repoRoot(cwd);
+	if (!root) return undefined;
+	const dir = await mkdtemp(join(tmpdir(), "midnight-baseline-"));
+	const links: string[] = [];
+	const dispose = async () => {
+		for (const link of links) await unlink(link).catch(() => undefined);
+		await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+	};
+	const indexFile = join(
+		tmpdir(),
+		`midnight-index-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+	);
+	const env = { GIT_INDEX_FILE: indexFile };
+	try {
+		const ok =
+			(await git(root, ["read-tree", tree], env)).ok &&
+			(await git(root, ["checkout-index", "-a", "-f", `--prefix=${dir}/`], env)).ok;
+		if (!ok) {
+			await dispose();
+			return undefined;
+		}
+	} finally {
+		await unlink(indexFile).catch(() => undefined);
+	}
+	const ignored = await git(root, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]);
+	if (ignored.ok) {
+		for (const entry of ignored.stdout.split("\0").filter(Boolean)) {
+			const isDir = entry.endsWith("/");
+			const path = entry.replace(/\/$/, "");
+			const source = resolve(root, path);
+			const target = resolve(dir, path);
+			try {
+				await mkdir(dirname(target), { recursive: true });
+				if (isDir) {
+					await symlink(source, target, process.platform === "win32" ? "junction" : "dir");
+					links.push(target);
+				} else {
+					const { size } = await stat(source);
+					if (size <= MAX_IGNORED_COPY_BYTES) await copyFile(source, target);
+				}
+			} catch {
+				// Unlinkable or unreadable: the check may fail on it, and then it is not a usable baseline.
+			}
+		}
+	}
+	return { cwd: resolve(dir, relative(root, cwd)), root: dir, dispose };
 }

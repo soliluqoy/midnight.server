@@ -240,14 +240,10 @@ function runAgent(cwd, prompt, variant, options, eventsPath, telemetryPath) {
 	];
 	const env = { ...process.env };
 	delete env.MIDNIGHT_SERVER_HARNESS_FEATURES;
-	delete env.MIDNIGHT_SERVER_HARNESS_POLICY;
-	// An experiment runs exactly its assignment: no live policy trial may pick the arm.
-	env.MIDNIGHT_SERVER_HARNESS_LEARN = "0";
 	if (!variant.harness) env.MIDNIGHT_SERVER_HARNESS = "0";
 	else {
 		delete env.MIDNIGHT_SERVER_HARNESS;
 		if (variant.features) env.MIDNIGHT_SERVER_HARNESS_FEATURES = variant.features;
-		if (variant.policy) env.MIDNIGHT_SERVER_HARNESS_POLICY = variant.policy;
 		env.MIDNIGHT_SERVER_HARNESS_TELEMETRY = telemetryPath;
 	}
 	const stats = {
@@ -360,19 +356,22 @@ function runAgent(cwd, prompt, variant, options, eventsPath, telemetryPath) {
 	});
 }
 
-/** Event counts from a run's harness telemetry, and the feature vector the harness resolved. */
+/**
+ * Event counts from a run's harness telemetry, the feature vector the harness resolved, and the
+ * time the harness itself spent in its hooks (the model waits for all of it).
+ */
 function readTelemetry(file) {
-	const result = { counts: {}, resolvedFeatures: undefined, modelClass: undefined, policy: undefined };
+	const result = { counts: {}, resolvedFeatures: undefined, harnessMs: 0, hookMs: {} };
 	if (!existsSync(file)) return result;
 	for (const line of readFileSync(file, "utf8").split("\n")) {
 		if (!line.trim()) continue;
 		try {
 			const event = JSON.parse(line);
 			result.counts[event.type] = (result.counts[event.type] ?? 0) + 1;
-			if (event.type === "features" && !result.resolvedFeatures) {
-				result.resolvedFeatures = event.features;
-				result.modelClass = event.modelClass;
-				result.policy = event.policy;
+			if (event.type === "features" && !result.resolvedFeatures) result.resolvedFeatures = event.features;
+			if (event.type === "hook_time" && typeof event.ms === "number") {
+				result.harnessMs += event.ms;
+				result.hookMs[event.hook] = (result.hookMs[event.hook] ?? 0) + event.ms;
 			}
 		} catch {
 			// Ignore a partial last line.
@@ -564,10 +563,8 @@ async function main() {
 			features: variant.harness ? variant.features || "(default)" : "off",
 			assignment: variant.assignment,
 			resolvedFeatures: telemetry.resolvedFeatures,
-			modelClass: telemetry.modelClass,
-			// The harness policy the run actually used, to check against the assignment.
-			policyHash: telemetry.policy?.hash,
-			policyFile: variant.policy,
+			harnessMs: telemetry.harnessMs,
+			hookMs: telemetry.hookMs,
 			environmentContaminated: portsOpenAtStart.length > 0,
 			environmentLeak: portsLeftOpen.length > 0,
 			repeat,

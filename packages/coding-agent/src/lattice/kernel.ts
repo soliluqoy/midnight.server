@@ -44,7 +44,6 @@ import {
 } from "./effects.ts";
 import { evaluateSuite } from "./evaluator.ts";
 import { Governor, ucbSelect } from "./governor.ts";
-import { installHarnessPolicy } from "./harness-policy.ts";
 import { interpret, type RunResult } from "./interpreter.ts";
 import { type LibrarySkill, type Program, programHash, T, type Value } from "./ir.ts";
 import { BUDGETS, type ExecutionLimits, INSTALLATION_LIMITS, RETENTION, STATE_QUOTA_BYTES } from "./limits.ts";
@@ -230,8 +229,6 @@ export class Lattice implements KernelContext {
 		}
 		this.store.ensureContractRow(META_CONTRACT.id, META_CONTRACT.revision, policyEvaluatorHash());
 		this.store.installSeed(POLICY_SKILL, META_CONTRACT, DEFAULT_POLICY, "policy");
-		// The harness policy (harness/policy.ts): the seed is the built-in defaults, exported for the harness.
-		installHarnessPolicy(this.store);
 		if (!this.store.getMeta("capability_key")) this.store.setMeta("capability_key", randomBytes(32).toString("hex"));
 		quickSelfCheck();
 		const skills = this.store.skills().map((row) => row.skill_id);

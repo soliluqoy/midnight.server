@@ -1,17 +1,16 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
-
 /**
- * Harness features and the model classes that pick their defaults.
+ * Harness features and their defaults.
  *
- * Every feature can be switched in `harness.json` (`features: { name: false }`) and, for
- * measurement, with `MIDNIGHT_SERVER_HARNESS_FEATURES=-contextPack,-escalation`. The eval
+ * The default set is what stays cheap: guards that fix a tool call or add a line to a result the
+ * model is already waiting for, and one verification pass when the run settles. Everything that
+ * costs model turns, process time on every request or a second model is opt-in until a receipt
+ * against vanilla Pi shows it pays for itself (docs/WORKFLOW_PLAN.md).
+ *
+ * Every feature can be switched in `harness.json` (`features: { name: true }`) and, for
+ * measurement, with `MIDNIGHT_SERVER_HARNESS_FEATURES=+contextPack,-driftGuard`. The eval
  * (`scripts/harness-eval.mjs`) builds ablation variants from that variable.
  */
 export const FEATURE_NAMES = [
-	/** Batched observation masking of old tool results. */
-	"masking",
-	/** Repo map, ranked files and environment facts in the first request of each prompt. */
-	"contextPack",
 	/** Reject edits that break a file's syntax, restoring the previous content. */
 	"parseGate",
 	/** Indentation-tolerant edit matching and closest-match hints when oldText is not found. */
@@ -20,20 +19,11 @@ export const FEATURE_NAMES = [
 	"pathHints",
 	/** Tell the model when it repeats the same call or the same failing command. */
 	"loopGuard",
-	/** Checks after edits during the run, not only when the model says it is done. */
-	"inRunChecks",
-	/** Reuse a check's result while nothing it could depend on has changed (no edit, shell command or rollback since). */
-	"checkCache",
-	/** Snapshot passing states and restore the last one after repeated check failures. */
-	"checkpoints",
-	/** The `lookup` tool: definitions, references and outlines through LSP or syntax outlines. */
-	"lookup",
-	/** New language-server errors reported with each edit result. */
-	"diagnostics",
-	/** Replace a repeated failed repair with a materially different, evidence-led attempt. */
-	"adaptiveRepair",
-	/** Ask a stronger model for advice when a fast model is stuck. */
-	"escalation",
+	/**
+	 * When a static check (types, lint) fails at settle, run it once more on the tree as the request
+	 * found it and hold back failures the project already had. See baseline.ts.
+	 */
+	"checkBaseline",
 	/**
 	 * Compare the finished change with the request (weakened tests, hard-coded test inputs,
 	 * stubs, swallowed errors, removed declarations, unverified success claims) and ask once to
@@ -42,90 +32,34 @@ export const FEATURE_NAMES = [
 	"driftGuard",
 	/** One rule offering a sanctioned way to stop: report what blocks the request instead of substituting. */
 	"blockerExit",
-	/**
-	 * When stuck, name a retry that repeats a rejected attempt (measured similarity), list the
-	 * rejected approaches and ask for causes that differ in kind. See divergence.ts.
-	 */
-	"divergence",
-	/** Raise the thinking level one step while stuck; restore it when the run settles. */
-	"reasoningBoost",
-	/**
-	 * After the checks pass, mutate the changed lines and rerun the tests: report changes no test
-	 * noticed. Costs test runs, so off until measured. See mutation.ts.
-	 */
-	"mutationProbe",
-	/**
-	 * Run the static checks (types, lint) at the start of a request and hold back failures the
-	 * project already had: only new errors are fed back or start a repair round. See baseline.ts.
-	 */
-	"checkBaseline",
+	/** Opt-in. Repo map, ranked files and their contents in the first request of a session. */
+	"contextPack",
+	/** Opt-in. The `lookup` tool: definitions, references and outlines through LSP or syntax outlines. */
+	"lookup",
+	/** Opt-in. New language-server errors reported with each edit result (waits for the server). */
+	"diagnostics",
+	/** Opt-in. Ask a stronger model for advice with the repair feedback when the checks fail. */
+	"escalation",
 ] as const;
 
 export type FeatureName = (typeof FEATURE_NAMES)[number];
 
-/**
- * How the harness treats a model.
- * - `fast`: cheap cloud models (list input price under $2 per million tokens, or unknown).
- *   They gain the most from work moved into code, and they can escalate.
- * - `frontier`: expensive strong models. Same deterministic help, no escalation.
- */
-export type ModelClass = "fast" | "frontier";
-
-/** Input price in USD per million tokens at and above which a model counts as frontier. */
-export const FRONTIER_INPUT_PRICE = 2;
-
-export function classifyModel(model: Pick<Model<Api>, "cost"> | undefined): ModelClass {
-	if (!model) return "fast";
-	return (model.cost?.input ?? 0) >= FRONTIER_INPUT_PRICE ? "frontier" : "fast";
-}
-
-const CLASS_DEFAULTS: Record<ModelClass, Record<FeatureName, boolean>> = {
-	fast: {
-		masking: true,
-		contextPack: true,
-		parseGate: true,
-		editRepair: true,
-		pathHints: true,
-		loopGuard: true,
-		inRunChecks: true,
-		checkCache: true,
-		checkBaseline: true,
-		checkpoints: true,
-		lookup: true,
-		diagnostics: true,
-		adaptiveRepair: true,
-		escalation: true,
-		driftGuard: true,
-		blockerExit: true,
-		divergence: true,
-		reasoningBoost: true,
-		mutationProbe: false,
-	},
-	frontier: {
-		masking: true,
-		contextPack: true,
-		parseGate: true,
-		editRepair: true,
-		pathHints: true,
-		loopGuard: true,
-		inRunChecks: true,
-		checkCache: true,
-		checkBaseline: true,
-		checkpoints: true,
-		lookup: true,
-		diagnostics: true,
-		adaptiveRepair: true,
-		escalation: false,
-		driftGuard: true,
-		blockerExit: true,
-		divergence: true,
-		reasoningBoost: true,
-		mutationProbe: false,
-	},
+export const DEFAULT_FEATURES: Record<FeatureName, boolean> = {
+	parseGate: true,
+	editRepair: true,
+	pathHints: true,
+	loopGuard: true,
+	checkBaseline: true,
+	driftGuard: true,
+	blockerExit: true,
+	contextPack: false,
+	lookup: false,
+	diagnostics: false,
+	escalation: false,
 };
 
-/** Context pack token budget per class: enough for a map and a few files, well under the window. */
-export const CONTEXT_PACK_TOKENS: Record<ModelClass, number> = { fast: 2_000, frontier: 2_500 };
+/** Context pack token budget: enough for a map and a few files, well under the window. */
+export const CONTEXT_PACK_TOKENS = 2_000;
 
 /** Parse `+name,-name,name` into switches. Unknown names throw so a typo cannot silently do nothing. */
 export function parseFeatureOverrides(text: string | undefined): Partial<Record<FeatureName, boolean>> {
@@ -144,15 +78,10 @@ export function parseFeatureOverrides(text: string | undefined): Partial<Record<
 	return overrides;
 }
 
-/**
- * Resolve every feature for a model class: class default, then the harness policy (Lattice), then
- * `harness.json`, then the environment. The legacy key `masking.enabled` counts as config.
- */
+/** Resolve every feature: defaults, then `harness.json`, then the environment. */
 export function resolveFeatures(
-	modelClass: ModelClass,
 	config: Partial<Record<FeatureName, boolean>>,
 	env: Partial<Record<FeatureName, boolean>>,
-	policy: Partial<Record<FeatureName, boolean>> = {},
 ): Record<FeatureName, boolean> {
-	return { ...CLASS_DEFAULTS[modelClass], ...policy, ...config, ...env };
+	return { ...DEFAULT_FEATURES, ...config, ...env };
 }

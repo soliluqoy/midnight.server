@@ -44,7 +44,9 @@ function writeProject(dir: string, options: { escalationModel?: string } = {}): 
 		JSON.stringify({
 			checks: [{ name: "value", command: ["node", "check.js"], when: ["*.js"] }],
 			protect: ["check.js"],
-			...(options.escalationModel ? { escalation: { model: options.escalationModel } } : {}),
+			...(options.escalationModel
+				? { escalation: { model: options.escalationModel }, features: { escalation: true } }
+				: {}),
 		}),
 	);
 }
@@ -75,7 +77,6 @@ function writeLintProject(dir: string): void {
 		JSON.stringify({
 			checks: [{ name: "lint", command: ["node", "lint.js"], when: ["*.js"] }],
 			protect: ["lint.js"],
-			features: { escalation: false },
 		}),
 	);
 }
@@ -96,10 +97,15 @@ describe("harness v2 in a session", () => {
 		return harness;
 	}
 
-	it("sends a context pack with the ranked file's contents in the first request", async () => {
+	it("sends a context pack with the ranked file's contents in the first request when switched on", async () => {
 		const harness = await setup();
 		writeFileSync(join(harness.tempDir, "port.js"), "function parsePort(value) {\n  return Number(value);\n}\n");
 		writeFileSync(join(harness.tempDir, "other.js"), "function unrelated() {}\n");
+		mkdirSync(join(harness.tempDir, ".midnight.server"), { recursive: true });
+		writeFileSync(
+			join(harness.tempDir, ".midnight.server", "harness.json"),
+			JSON.stringify({ features: { contextPack: true } }),
+		);
 		let firstRequest = "";
 		harness.setResponses([
 			(context) => {
@@ -111,6 +117,26 @@ describe("harness v2 in a session", () => {
 		expect(firstRequest).toContain("<workspace_context>");
 		expect(firstRequest).toContain('<file path="port.js">');
 		expect(firstRequest).toContain("return Number(value);");
+	});
+
+	it("puts the environment in the system prompt without the detected full suite it leaves to the model", async () => {
+		const harness = await setup();
+		writeFileSync(
+			join(harness.tempDir, "package.json"),
+			JSON.stringify({ name: "p", scripts: { test: "node test.js" } }),
+		);
+		let firstRequest = "";
+		harness.setResponses([
+			(context) => {
+				firstRequest = JSON.stringify(context);
+				return fauxAssistantMessage("ok");
+			},
+		]);
+		await harness.session.prompt("hello");
+		expect(firstRequest).toContain("<environment>");
+		expect(firstRequest).toContain("tests: `npm test`");
+		expect(firstRequest).not.toContain("When you finish, the harness runs");
+		expect(firstRequest).not.toContain("<workspace_context>");
 	});
 
 	it("rejects an edit that breaks the file's syntax and keeps the file unchanged", async () => {
@@ -158,9 +184,17 @@ describe("harness v2 in a session", () => {
 		expect(readFileSync(file, "utf8")).toBe("function a() {\n\treturn 2;\n}\n");
 	});
 
-	it("runs checks once the model stops editing and tells the model they pass", async () => {
+	it("checks once at settle, not while the model works", async () => {
 		const harness = await setup();
 		writeProject(harness.tempDir);
+		writeFileSync(
+			join(harness.tempDir, "count.js"),
+			"require('fs').appendFileSync('runs.log', 'x'); require('./check.js');\n",
+		);
+		writeFileSync(
+			join(harness.tempDir, ".midnight.server", "harness.json"),
+			JSON.stringify({ checks: [{ name: "value", command: ["node", "count.js"], when: ["value.js"] }] }),
+		);
 		const requests: string[] = [];
 		harness.setResponses([
 			fauxAssistantMessage(
@@ -182,9 +216,8 @@ describe("harness v2 in a session", () => {
 			},
 		]);
 		await harness.session.prompt("add a comment to value.js");
-		// Not after the editing turn: the model may be mid-change.
-		expect(requests[0]).not.toContain("Harness checks after your edits");
-		expect(requests[1]).toContain("Harness checks after your edits pass");
+		expect(requests.join("\n")).not.toContain("Harness checks");
+		expect(readFileSync(join(harness.tempDir, "runs.log"), "utf8")).toBe("x");
 		expect(harness.getPendingResponseCount()).toBe(0);
 	});
 
@@ -214,36 +247,28 @@ describe("harness v2 in a session", () => {
 	});
 
 	it.each([
-		["reuses", true, 1],
-		["reruns without checkCache", false, 2],
-	])("%s the in-run result at settle when nothing changed in between", async (_label, cache, runs) => {
+		["skips the check the model already ran after its last change", false, 1],
+		["reruns the check when the model edited after running it", true, 2],
+	])("%s", async (_label, editAfter, runs) => {
 		const harness = await setup();
 		writeProject(harness.tempDir);
-		// The check counts its own runs in a file its `when` pattern does not match.
+		writeFileSync(
+			join(harness.tempDir, "count.js"),
+			"require('fs').appendFileSync('runs.log', 'x'); require('./check.js');\n",
+		);
 		writeFileSync(
 			join(harness.tempDir, ".midnight.server", "harness.json"),
-			JSON.stringify({
-				checks: [
-					{
-						name: "value",
-						command: ["node", "-e", "require('fs').appendFileSync('runs.log', 'x'); require('./check.js')"],
-						when: ["*.js"],
-					},
-				],
-				features: { checkCache: cache },
-			}),
+			JSON.stringify({ checks: [{ name: "value", command: ["node", "count.js"], when: ["value.js"] }] }),
 		);
+		const shell = process.platform === "win32" ? "powershell" : "bash";
+		const edit = (from: string, to: string) =>
+			fauxAssistantMessage([fauxToolCall("edit", { path: "value.js", edits: [{ oldText: from, newText: to }] })], {
+				stopReason: "toolUse",
+			});
 		harness.setResponses([
-			fauxAssistantMessage(
-				[
-					fauxToolCall("edit", {
-						path: "value.js",
-						edits: [{ oldText: "module.exports = 1;", newText: "module.exports = 1; // ok" }],
-					}),
-				],
-				{ stopReason: "toolUse" },
-			),
-			fauxAssistantMessage([fauxToolCall("read", { path: "value.js" })], { stopReason: "toolUse" }),
+			edit("module.exports = 1;", "module.exports = 1; // ok"),
+			fauxAssistantMessage([fauxToolCall(shell, { command: "node count.js" })], { stopReason: "toolUse" }),
+			...(editAfter ? [edit("module.exports = 1; // ok", "module.exports = 1; // ok again")] : []),
 			fauxAssistantMessage("done"),
 		]);
 		await harness.session.prompt("add a comment to value.js");
@@ -251,106 +276,7 @@ describe("harness v2 in a session", () => {
 		expect(harness.getPendingResponseCount()).toBe(0);
 	});
 
-	it("restores the last passing state after the same check fails twice", async () => {
-		const harness = await setup();
-		writeProject(harness.tempDir);
-		initGit(harness.tempDir);
-		const file = join(harness.tempDir, "value.js");
-		const edit = (from: string, to: string) =>
-			fauxAssistantMessage([fauxToolCall("edit", { path: "value.js", edits: [{ oldText: from, newText: to }] })], {
-				stopReason: "toolUse",
-			});
-		let rollbackMessage = "";
-		harness.setResponses([
-			// Good edit, then a turn without edits: in-run check passes, the harness snapshots this state.
-			edit("module.exports = 1;", "module.exports = 1; // v2"),
-			fauxAssistantMessage([fauxToolCall("read", { path: "value.js" })], { stopReason: "toolUse" }),
-			// Bad edit in the next turn.
-			edit("module.exports = 1; // v2", "module.exports = 2; // v3"),
-			fauxAssistantMessage("done"),
-			// Settle check fails (round 1); another bad fix.
-			edit("module.exports = 2; // v3", "module.exports = 3; // v4"),
-			fauxAssistantMessage("done again"),
-			// Settle check fails again (round 2, repeated): rollback.
-			(context) => {
-				rollbackMessage = contextText(context);
-				return fauxAssistantMessage("understood");
-			},
-		]);
-		await harness.session.prompt("change value.js");
-		expect(rollbackMessage).toContain("restored value.js to the last state in this request where the checks passed");
-		expect(rollbackMessage).toContain("-module.exports = 1; // v2");
-		expect(readFileSync(file, "utf8")).toBe("module.exports = 1; // v2\n");
-		expect(harness.getPendingResponseCount()).toBe(0);
-	});
-
-	it("never rolls back to a state from an earlier request or touches files the agent did not edit", async () => {
-		const harness = await setup();
-		writeProject(harness.tempDir);
-		writeFileSync(join(harness.tempDir, "README.md"), "original readme\n");
-		initGit(harness.tempDir);
-		const file = join(harness.tempDir, "value.js");
-		const edit = (from: string, to: string) =>
-			fauxAssistantMessage([fauxToolCall("edit", { path: "value.js", edits: [{ oldText: from, newText: to }] })], {
-				stopReason: "toolUse",
-			});
-		// Request 1: checks pass and the harness snapshots that state.
-		harness.setResponses([edit("module.exports = 1;", "module.exports = 1; // v2"), fauxAssistantMessage("done")]);
-		await harness.session.prompt("comment value.js");
-
-		// The user works between requests.
-		writeFileSync(join(harness.tempDir, "notes.txt"), "user notes\n");
-		writeFileSync(join(harness.tempDir, "README.md"), "user edited readme\n");
-
-		// Request 2: the same check fails twice, with no passing state in this request.
-		let feedback = "";
-		harness.setResponses([
-			edit("module.exports = 1; // v2", "module.exports = 2;"),
-			fauxAssistantMessage("done"),
-			edit("module.exports = 2;", "module.exports = 3;"),
-			fauxAssistantMessage("done again"),
-			(context) => {
-				feedback = contextText(context);
-				return fauxAssistantMessage("understood");
-			},
-		]);
-		await harness.session.prompt("set value to 2");
-		expect(feedback).toContain("Harness checks");
-		expect(feedback).not.toContain("restored");
-		expect(readFileSync(file, "utf8")).toBe("module.exports = 3;\n");
-		expect(readFileSync(join(harness.tempDir, "notes.txt"), "utf8")).toBe("user notes\n");
-		expect(readFileSync(join(harness.tempDir, "README.md"), "utf8")).toBe("user edited readme\n");
-	});
-
-	it("rolls back only the files the agent edited", async () => {
-		const harness = await setup();
-		writeProject(harness.tempDir);
-		initGit(harness.tempDir);
-		const edit = (from: string, to: string) =>
-			fauxAssistantMessage([fauxToolCall("edit", { path: "value.js", edits: [{ oldText: from, newText: to }] })], {
-				stopReason: "toolUse",
-			});
-		harness.setResponses([
-			edit("module.exports = 1;", "module.exports = 1; // v2"),
-			// A turn without edits: the in-run check passes and the harness snapshots this state.
-			fauxAssistantMessage([fauxToolCall("read", { path: "value.js" })], { stopReason: "toolUse" }),
-			// The user saves a file in their editor while the agent works.
-			() => {
-				writeFileSync(join(harness.tempDir, "notes.txt"), "user notes\n");
-				return edit("module.exports = 1; // v2", "module.exports = 2;");
-			},
-			fauxAssistantMessage("done"),
-			edit("module.exports = 2;", "module.exports = 3;"),
-			fauxAssistantMessage("done again"),
-			fauxAssistantMessage("understood"),
-		]);
-		await harness.session.prompt("change value.js");
-		expect(readFileSync(join(harness.tempDir, "value.js"), "utf8")).toBe("module.exports = 1; // v2\n");
-		expect(readFileSync(join(harness.tempDir, "notes.txt"), "utf8")).toBe("user notes\n");
-		expect(harness.getPendingResponseCount()).toBe(0);
-	});
-
-	it("asks the escalation model for advice when the same check keeps failing", async () => {
+	it("sends advice from the escalation model with the repair feedback when switched on", async () => {
 		const harness = await setup([{ id: "fast" }, { id: "strong" }]);
 		writeProject(harness.tempDir, { escalationModel: "faux/strong" });
 		let advisorPrompt = "";
@@ -366,9 +292,7 @@ describe("harness v2 in a session", () => {
 				{ stopReason: "toolUse" },
 			),
 			fauxAssistantMessage("done"),
-			// Round 1 feedback; the model tries the same thing.
-			fauxAssistantMessage("still done"),
-			// Round 2 fails the same check: the harness consults the strong model first.
+			// The settle check fails: the harness consults the strong model before the repair round.
 			(context) => {
 				advisorPrompt = contextText(context);
 				return fauxAssistantMessage("Root cause: value.js must export 1. Revert the change.");
@@ -381,8 +305,32 @@ describe("harness v2 in a session", () => {
 		await harness.session.prompt("set value to 2");
 		expect(advisorPrompt).toContain("<request>\nset value to 2");
 		expect(advisorPrompt).toContain("expected 1, got 2");
+		expect(adviceSeen).toContain("Harness checks failed after your changes (repair round 1 of 1)");
 		expect(adviceSeen).toContain("Advice from faux/strong");
 		expect(adviceSeen).toContain("Root cause: value.js must export 1");
+	});
+
+	it("does not consult another model unless escalation is switched on", async () => {
+		const harness = await setup([{ id: "fast" }, { id: "strong" }]);
+		writeProject(harness.tempDir);
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("edit", {
+						path: "value.js",
+						edits: [{ oldText: "module.exports = 1;", newText: "module.exports = 2;" }],
+					}),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("done"),
+			fauxAssistantMessage("still done"),
+		]);
+		await harness.session.prompt("set value to 2");
+		const messages = customMessages(harness, CHECK_MESSAGE_TYPE);
+		expect(messages).toHaveLength(2);
+		expect(messages[1]).toContain("stopping here");
+		expect(harness.getPendingResponseCount()).toBe(0);
 	});
 
 	it("does not start a repair round for lint errors the project already had", async () => {

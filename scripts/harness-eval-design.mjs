@@ -20,7 +20,6 @@
  *     "fixed": { "escalation": false },
  *     "variants": [
  *       { "id": "00", "features": { "driftGuard": false, "blockerExit": false } },
- *       { "id": "c1", "policy": "/path/to/policy.json" },          harness policy file (Lattice)
  *       { "id": "bare", "harness": false }
  *     ],
  *     "repeats": 2,
@@ -97,9 +96,6 @@ export function resolveManifest(manifest, knownFeatures) {
 		for (const name of factors) {
 			if (typeof own[name] !== "boolean") problems.push(`${variant.id}: factor ${name} is not assigned`);
 		}
-		if (variant.policy !== undefined && (typeof variant.policy !== "string" || !variant.policy)) {
-			problems.push(`${variant.id}: policy must be a file path`);
-		}
 		const assignment = { ...fixed, ...own };
 		variants.push({
 			name: variant.id,
@@ -108,13 +104,12 @@ export function resolveManifest(manifest, knownFeatures) {
 			features: Object.entries(assignment)
 				.map(([name, value]) => `${value ? "+" : "-"}${name}`)
 				.join(","),
-			...(typeof variant.policy === "string" && variant.policy ? { policy: variant.policy } : {}),
 		});
 	}
 	// Two harness variants with the same assignment would measure noise under two names.
 	const seen = new Map();
 	for (const variant of variants.filter((item) => item.harness)) {
-		const key = `${variant.features}\u0000${variant.policy ?? ""}`;
+		const key = variant.features;
 		if (seen.has(key)) problems.push(`variants ${seen.get(key)} and ${variant.name} have the same assignment`);
 		seen.set(key, variant.name);
 	}

@@ -2,6 +2,8 @@
 
 Status (2026-09-27): rewritten from first principles around one question: how close can a fast model (GPT-6 Luna) get to a strong one (GPT-6 Astra, thinking high) on hard repository work, and at what latency and cost? This replaces the earlier phase plan. Everything that does not serve that question was removed in the same change (Section 4).
 
+Update (2026-09-28): [WORKFLOW_PLAN.md](WORKFLOW_PLAN.md) now sets the product defaults: a lean harness measured against plain Pi. Features this plan lists as kept but that are now removed or opt-in are listed there. The measurement steps below still apply.
+
 Update (2026-09-27, later): [LUNA_DESIGN.md](LUNA_DESIGN.md) derives the design decisions from existing data without running a model. Its main result changes the order of Steps 4 and 5 below: build the verifier (requirement receipts, mutation kill rate, targeted tests) before search, because search behind today's visible checks is predicted to add at most 3 points.
 
 ## 1. Goal and claim

@@ -166,6 +166,13 @@ export function variantSummary(records, variant) {
 		tokensPerSolved: passed.length === 0 ? Number.POSITIVE_INFINITY : tokens / passed.length,
 		costPerSolved: passed.length === 0 ? Number.POSITIVE_INFINITY : cost / passed.length,
 		cacheReadPerRun: mean(runs.map((record) => record.cacheRead)),
+		// Share of prompt tokens served from the provider cache: history rewrites show up as a drop.
+		cacheShare: (() => {
+			const read = runs.reduce((sum, record) => sum + (record.cacheRead ?? 0), 0);
+			const prompt = runs.reduce((sum, record) => sum + record.input + (record.cacheRead ?? 0), 0);
+			return prompt === 0 ? 0 : read / prompt;
+		})(),
+		harnessSecondsPerRun: mean(runs.map((record) => (record.harnessMs ?? 0) / 1000)),
 		secondsPerRun: mean(runs.map((record) => record.elapsedMs / 1000)),
 		turnsPerRun: mean(runs.map((record) => record.turns)),
 		turnsBeforeFirstEdit: mean(runs.map((record) => record.turnsBeforeFirstEdit ?? record.turns)),
@@ -184,7 +191,7 @@ export function formatReport(records, variants) {
 	const summaries = variants.map((variant) => variantSummary(records, variant)).filter((s) => s.runs > 0);
 	lines.push(
 		"",
-		"variant                  pass           tok/run  tok/solved  $/solved  s/run  turns  1st-edit  false-done  errors/run",
+		"variant                  pass           tok/run  tok/solved  $/solved  s/run  harness-s  cache  turns  1st-edit  false-done  errors/run",
 	);
 	for (const s of summaries) {
 		lines.push(
@@ -195,6 +202,8 @@ export function formatReport(records, variants) {
 				fixed(s.tokensPerSolved).padStart(11),
 				fixed(s.costPerSolved, 4).padStart(9),
 				fixed(s.secondsPerRun).padStart(6),
+				fixed(s.harnessSecondsPerRun, 1).padStart(10),
+				percent(s.cacheShare).padStart(6),
 				fixed(s.turnsPerRun, 1).padStart(6),
 				fixed(s.turnsBeforeFirstEdit, 1).padStart(9),
 				String(s.falseDone).padStart(11),

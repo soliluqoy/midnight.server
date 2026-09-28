@@ -10,7 +10,7 @@ export default mergeConfig(
 			testTimeout: 30000,
 			// Tests run offline by default; opt in with allowNetwork() from test/test-network-env.ts.
 			// The harness policy loop (Lattice) stays off unless a test opts in with its own data dir.
-			env: { MIDNIGHT_SERVER_OFFLINE: "1", MIDNIGHT_SERVER_NO_BUNDLED_EXTENSIONS: "1", MIDNIGHT_SERVER_HARNESS_LEARN: "0" },
+			env: { MIDNIGHT_SERVER_OFFLINE: "1", MIDNIGHT_SERVER_NO_BUNDLED_EXTENSIONS: "1" },
 			unstubEnvs: true,
 			reporters: process.env.GITHUB_ACTIONS ? ["dot", "github-actions"] : ["dot"],
 			silent: "passed-only",

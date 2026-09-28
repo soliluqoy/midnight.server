@@ -1,12 +1,12 @@
 # Implementation status
 
-Updated 2026-09-27. The plan is [HARNESS_REBUILD_PLAN.md](HARNESS_REBUILD_PLAN.md). This page records what midnight.server changes in Pi, what is verified, and known test failures.
+Updated 2026-09-28. Harness defaults follow [WORKFLOW_PLAN.md](WORKFLOW_PLAN.md); the longer measurement plan is [HARNESS_REBUILD_PLAN.md](HARNESS_REBUILD_PLAN.md). This page records what midnight.server changes in Pi, what is verified, and known test failures.
 
 ## What midnight.server adds to Pi
 
 | Area | Where | Status |
 | --- | --- | --- |
-| Harness (context pack, syntax gate, edit repair, `lookup`, language-server errors, check ladder, rollback, drift guard, blocker rule, escalation, masking) | `packages/coding-agent/src/harness/`, [docs](../packages/coding-agent/docs/harness.md) | Unit and suite tests pass. Measured only on short tasks (`evals/harness/RESULTS.md`, `evals/drift/RESULTS.md`); the Luna-Astra gap on hard tasks is not measured. |
+| Harness, lean (inline guards: syntax gate, edit, path and shell repairs, protected files; one check pass at settle with lazy baseline for pre-existing failures, one repair round, drift guard, blocker rule; opt-in: context pack, `lookup`, language-server errors, escalation) | `packages/coding-agent/src/harness/`, [docs](../packages/coding-agent/docs/harness.md) | Unit and suite tests pass. Not yet measured against plain Pi on larger repositories ([plan](WORKFLOW_PLAN.md) section 5). Earlier measurements were on short tasks with the previous, larger harness (`evals/harness/RESULTS.md`, `evals/drift/RESULTS.md`). |
 | Plan/build modes, sidebar, footer badge | `src/extensions/agent-mode.ts`, `src/midnight/status.ts`, `src/modes/interactive/components/` | Tests pass. |
 | Session titles from the session model | `src/midnight/session-title.ts` | Tests pass. |
 | Side threads (`/ask`, Alt+T) | `src/core/side-threads.ts`, `src/modes/interactive/side-thread-controller.ts` | Tests pass. |
@@ -14,9 +14,11 @@ Updated 2026-09-27. The plan is [HARNESS_REBUILD_PLAN.md](HARNESS_REBUILD_PLAN.m
 | Windows build and release | `scripts/bootstrap.ps1`, `build.ps1`, `package.ps1`, `verify-release.ps1`, `.github/workflows/midnight-windows.yml` | Scripts parse; not re-run since the local model was removed. |
 | Linux/macOS build and release | `scripts/build-unix.sh`, `package-unix.sh`, `verify-release.mjs`, `.github/workflows/midnight-release.yml` | Not re-run since the local model was removed. |
 | Eval runner and analysis | `scripts/harness-eval*.mjs`, `evals/` | Script unit tests pass. |
-| Harness divergence (rejected-attempt archive, repeat detection, reasoning boost when stuck) and verifier probe (mutants of changed lines against the tests) | `packages/coding-agent/src/harness/divergence.ts`, `mutation.ts` | Unit and suite tests pass. Not yet measured with a cloud model; the probe is off by default. |
-| Harness policy loop (Lattice-1 core: live trials of policy candidates, gate, canary, rollback) | `packages/coding-agent/src/lattice/harness-policy.ts`, `src/harness/policy.ts`, [docs](../packages/coding-agent/docs/harness.md#the-policy-loop) | Unit and suite tests pass under Node; the loop runs under Bun (`bun:sqlite`). No live trial has run yet. |
 | Lattice-1 pseudo-RSI harness (bounded IR, evaluator, versioned promotion and rollback, campaigns, library learning, synthesis, level-2 policy search) | `packages/coding-agent/src/lattice/`, [docs](lattice/README.md) | `test/lattice-*.test.ts` pass (83 tests, including crash injection by process death); `lattice selftest` reproduces the reference implementation's published numbers exactly. Effects are approved, journaled, reversible local moves; not part of the binary. |
+
+## Removed (2026-09-28)
+
+From the harness, per [WORKFLOW_PLAN.md](WORKFLOW_PLAN.md): observation masking (it invalidated the prompt cache), mid-run checks, checkpoint rollback, divergence feedback, the reasoning boost, the verifier probe, loop-triggered escalation, the fast/frontier model classes and the Lattice-1 policy loop. None had a measured gain over plain Pi.
 
 ## Removed (2026-09-27)
 

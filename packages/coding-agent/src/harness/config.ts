@@ -24,20 +24,6 @@ export interface HarnessCheck {
 	level?: 1 | 2 | 3;
 }
 
-export interface MaskingSettings {
-	enabled: boolean;
-	/** The newest this-many tool results are never elided. */
-	keepRecentResults: number;
-	/** Results smaller than this are never elided: the stub would save little. */
-	minResultBytes: number;
-	/**
-	 * Elide only once this many bytes are eligible, all at once. Each elision batch changes an
-	 * earlier part of the prompt and so invalidates the provider's prompt cache from that point;
-	 * batching keeps that to one cache miss per batch instead of one per turn.
-	 */
-	batchBytes: number;
-}
-
 export interface HarnessConfig {
 	enabled: boolean;
 	checks: HarnessCheck[];
@@ -45,31 +31,21 @@ export interface HarnessConfig {
 	protect: string[];
 	/** Repair rounds after failed checks before the harness stops and reports. */
 	maxRepairRounds: number;
-	masking: MaskingSettings;
 	/**
 	 * Timeout applied to shell tool calls that set none (the tools have no default). One
 	 * unbounded command, such as `find /` over a whole disk, otherwise stalls the run. 0 disables.
 	 */
 	shellTimeoutSeconds: number;
-	/** Per-feature switches over the model-class defaults (see features.ts). */
+	/** Per-feature switches over the defaults (see features.ts). */
 	features: Partial<Record<FeatureName, boolean>>;
 	/** Checks found from the project's manifests when `checks` is empty (requires project trust). */
 	autoChecks: boolean;
 	escalation: EscalationSettings;
-	/** The verifier probe (feature `mutationProbe`, see mutation.ts). */
-	mutation: MutationSettings;
-}
-
-export interface MutationSettings {
-	/** Mutants run per request. */
-	maxMutants: number;
-	/** No new mutant starts after this many seconds. */
-	budgetSeconds: number;
 }
 
 /**
- * When a fast model is stuck (the same checks keep failing, or it repeats itself), ask a
- * stronger model for one piece of advice and hand control back. `model` is `provider/id`.
+ * Feature `escalation` (opt-in): when the settle checks fail, ask a stronger model for one piece
+ * of advice to send with the repair feedback. `model` is `provider/id`.
  */
 export interface EscalationSettings {
 	model: string;
@@ -88,13 +64,11 @@ export function defaultHarnessConfig(): HarnessConfig {
 		enabled: true,
 		checks: [],
 		protect: [],
-		maxRepairRounds: 2,
-		masking: { enabled: true, keepRecentResults: 6, minResultBytes: 2_000, batchBytes: 48_000 },
+		maxRepairRounds: 1,
 		shellTimeoutSeconds: 300,
 		features: {},
 		autoChecks: true,
-		escalation: { model: DEFAULT_ESCALATION_MODEL, maxCallsPerPrompt: 2, maxCallsPerSession: 6 },
-		mutation: { maxMutants: 6, budgetSeconds: 60 },
+		escalation: { model: DEFAULT_ESCALATION_MODEL, maxCallsPerPrompt: 1, maxCallsPerSession: 6 },
 	};
 }
 
@@ -152,18 +126,16 @@ function parseCheck(value: unknown, index: number): HarnessCheck {
 }
 
 /**
- * Validate a parsed `harness.json` over `base` (the defaults, or the defaults with the harness
- * policy applied). Unknown keys are rejected so typos surface.
+ * Validate a parsed `harness.json` over `base` (the defaults). Unknown keys are rejected so typos
+ * surface.
  */
 export function parseHarnessConfig(value: unknown, base: HarnessConfig = defaultHarnessConfig()): HarnessConfig {
 	const config: HarnessConfig = {
 		...base,
 		checks: [...base.checks],
 		protect: [...base.protect],
-		masking: { ...base.masking },
 		features: { ...base.features },
 		escalation: { ...base.escalation },
-		mutation: { ...base.mutation },
 	};
 	if (!isRecord(value)) throw new HarnessConfigError("harness.json must contain a JSON object");
 	const known = new Set([
@@ -171,12 +143,10 @@ export function parseHarnessConfig(value: unknown, base: HarnessConfig = default
 		"checks",
 		"protect",
 		"maxRepairRounds",
-		"masking",
 		"shellTimeoutSeconds",
 		"features",
 		"autoChecks",
 		"escalation",
-		"mutation",
 	]);
 	for (const key of Object.keys(value)) {
 		if (!known.has(key)) throw new HarnessConfigError(`Unknown key "${key}"`);
@@ -225,28 +195,6 @@ export function parseHarnessConfig(value: unknown, base: HarnessConfig = default
 				escalation.maxCallsPerSession,
 				"escalation.maxCallsPerSession",
 			);
-	}
-	if (value.mutation !== undefined) {
-		if (!isRecord(value.mutation)) throw new HarnessConfigError("mutation must be an object");
-		for (const key of Object.keys(value.mutation)) {
-			if (!["maxMutants", "budgetSeconds"].includes(key))
-				throw new HarnessConfigError(`Unknown key "mutation.${key}"`);
-		}
-		if (value.mutation.maxMutants !== undefined)
-			config.mutation.maxMutants = nonNegativeInteger(value.mutation.maxMutants, "mutation.maxMutants");
-		if (value.mutation.budgetSeconds !== undefined)
-			config.mutation.budgetSeconds = nonNegativeInteger(value.mutation.budgetSeconds, "mutation.budgetSeconds");
-	}
-	if (value.masking !== undefined) {
-		if (!isRecord(value.masking)) throw new HarnessConfigError("masking must be an object");
-		const masking = value.masking;
-		if (masking.enabled !== undefined) config.masking.enabled = boolean(masking.enabled, "masking.enabled");
-		if (masking.keepRecentResults !== undefined)
-			config.masking.keepRecentResults = nonNegativeInteger(masking.keepRecentResults, "masking.keepRecentResults");
-		if (masking.minResultBytes !== undefined)
-			config.masking.minResultBytes = nonNegativeInteger(masking.minResultBytes, "masking.minResultBytes");
-		if (masking.batchBytes !== undefined)
-			config.masking.batchBytes = nonNegativeInteger(masking.batchBytes, "masking.batchBytes");
 	}
 	return config;
 }

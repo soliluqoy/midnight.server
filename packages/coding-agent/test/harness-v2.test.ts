@@ -1,14 +1,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, parse } from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ProjectedSessionEntry } from "../src/core/session-manager.ts";
 import { fitCompactionToWindow } from "../src/core/settings-manager.ts";
-import { CheckpointStore, workingTreeChanges, writeWorkingTree } from "../src/harness/checkpoints.ts";
 import { parseHarnessConfig } from "../src/harness/config.ts";
-import { buildContextPack, buildFollowUpPack } from "../src/harness/context-pack.ts";
+import { buildContextPack, buildFollowUpPack, describeEnvironment } from "../src/harness/context-pack.ts";
 import { detectProjectChecks, expandTests, isTypeCheck } from "../src/harness/detect-checks.ts";
 import {
 	closestBlock,
@@ -19,8 +17,8 @@ import {
 	suggestPaths,
 } from "../src/harness/edit-repair.ts";
 import { escalationPrompt, formatAdvice, requestAdvice } from "../src/harness/escalate.ts";
-import { classifyModel, parseFeatureOverrides, resolveFeatures } from "../src/harness/features.ts";
-import { fitMaskingToWindow, planMasking } from "../src/harness/masking.ts";
+import { DEFAULT_FEATURES, parseFeatureOverrides, resolveFeatures } from "../src/harness/features.ts";
+import { materializeTree, workingTreeChanges, writeWorkingTree } from "../src/harness/git.ts";
 import { identifierTerms, outlineSource, relativeImports } from "../src/harness/outline.ts";
 import { checkSyntax, introducedSyntaxError, pythonInterpreter } from "../src/harness/parse-gate.ts";
 import { declarationBody, formatDiagnostics, newErrors, runLookup } from "../src/harness/semantic.ts";
@@ -69,62 +67,26 @@ describe("compaction settings fit the context window", () => {
 	});
 });
 
-describe("masking scaled to the window", () => {
-	const settings = { enabled: true, keepRecentResults: 6, minResultBytes: 2_000, batchBytes: 48_000 };
-	let counter = 0;
-	const pair = (bytes: number): ProjectedSessionEntry[] => {
-		const id = `c${counter++}`;
-		const call = {
-			role: "assistant",
-			content: [{ type: "toolCall", id, name: "read", arguments: { path: `${id}.ts` } }],
-			timestamp: 0,
-		};
-		const result = {
-			role: "toolResult",
-			toolCallId: id,
-			toolName: "read",
-			content: [{ type: "text", text: "line\n".repeat(bytes / 5) }],
-			isError: false,
-			timestamp: 0,
-		};
-		return [
-			{
-				sourceEntry: { type: "message", id: `a-${id}`, parentId: null, timestamp: "", message: call },
-				messages: [call],
-			},
-			{
-				sourceEntry: { type: "message", id: `r-${id}`, parentId: null, timestamp: "", message: result },
-				messages: [result],
-			},
-		] as unknown as ProjectedSessionEntry[];
-	};
-
-	it("scales thresholds down but never above the configured values", () => {
-		expect(fitMaskingToWindow(settings, 8192).batchBytes).toBe(Math.floor(8192 * 4 * 0.15));
-		expect(fitMaskingToWindow(settings, 1_000_000).batchBytes).toBe(48_000);
+describe("features", () => {
+	it("keeps everything that costs turns, processes or a second model off by default", () => {
+		const on = Object.entries(DEFAULT_FEATURES)
+			.filter(([, enabled]) => enabled)
+			.map(([name]) => name);
+		expect(on).toEqual([
+			"parseGate",
+			"editRepair",
+			"pathHints",
+			"loopGuard",
+			"checkBaseline",
+			"driftGuard",
+			"blockerExit",
+		]);
 	});
 
-	it("masks in an 8K window where fixed byte thresholds never would", () => {
-		const entries = [...pair(6_000), ...pair(6_000), ...pair(6_000)];
-		expect(planMasking(entries, settings).edits).toEqual([]);
-		const plan = planMasking(entries, settings, 8192);
-		expect(plan.edits.length).toBeGreaterThanOrEqual(2);
-		expect(JSON.stringify(plan.edits[0].replacement)).toContain("lines");
-	});
-});
-
-describe("features and model classes", () => {
-	it("classifies by list price", () => {
-		expect(classifyModel({ cost: { input: 5, output: 25, cacheRead: 0, cacheWrite: 0 } })).toBe("frontier");
-		expect(classifyModel({ cost: { input: 0.1, output: 0.4, cacheRead: 0, cacheWrite: 0 } })).toBe("fast");
-		expect(classifyModel(undefined)).toBe("fast");
-	});
-
-	it("resolves class defaults, then config, then environment", () => {
-		expect(resolveFeatures("fast", {}, {}).escalation).toBe(true);
-		expect(resolveFeatures("frontier", {}, {}).escalation).toBe(false);
-		expect(resolveFeatures("fast", { contextPack: false }, {}).contextPack).toBe(false);
-		expect(resolveFeatures("fast", { contextPack: false }, { contextPack: true }).contextPack).toBe(true);
+	it("resolves defaults, then config, then environment", () => {
+		expect(resolveFeatures({}, {}).escalation).toBe(false);
+		expect(resolveFeatures({ contextPack: true }, {}).contextPack).toBe(true);
+		expect(resolveFeatures({ contextPack: true }, { contextPack: false }).contextPack).toBe(false);
 		expect(parseFeatureOverrides("-contextPack, +escalation,lookup")).toEqual({
 			contextPack: false,
 			escalation: true,
@@ -265,23 +227,25 @@ describe("workspace index and context pack", () => {
 		expect((await buildWorkspaceIndex(homedir())).files).toEqual([]);
 	});
 
-	it("builds a bounded pack with environment, ranked files and inlined contents", async () => {
-		const index = await buildWorkspaceIndex(root);
+	it("describes the environment for the system prompt", () => {
 		const facts = detectProjectChecks(root);
+		const text = describeEnvironment({ facts, checks: facts.checks, platform: "win32", shell: "powershell" });
+		expect(text).toContain("PowerShell syntax");
+		expect(text).toContain("tests: `npm test`");
+		expect(text).toContain("When you finish, the harness runs these checks");
+	});
+
+	it("builds a bounded pack with git state, ranked files and inlined contents", async () => {
+		const index = await buildWorkspaceIndex(root);
 		const pack = buildContextPack({
 			index,
 			request: "Fix parsePort in port.js",
-			facts,
-			checks: facts.checks,
-			platform: "win32",
-			shell: "powershell",
 			git: { branch: "main", changed: [] },
 			budgetTokens: 2_000,
 		});
 		expect(pack).toBeDefined();
 		expect(pack!.bytes).toBeLessThan(2_000 * 4 + 400);
-		expect(pack!.text).toContain("PowerShell syntax");
-		expect(pack!.text).toContain("tests: `npm test`");
+		expect(pack!.text).toContain("Git: branch main, clean working tree.");
 		expect(pack!.inlined[0]).toBe("src/port.js");
 		expect(pack!.text).toContain('<file path="src/port.js">');
 		expect(pack!.text).toContain("src/util/strings.js");
@@ -466,63 +430,43 @@ describe("edit repair", () => {
 	});
 });
 
-describe.skipIf(!hasCommand("git"))("checkpoints", () => {
+describe.skipIf(!hasCommand("git"))("git helpers", () => {
 	let root: string;
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
 	beforeEach(() => {
-		root = tempDir("harness-ckpt-");
+		root = tempDir("harness-git-");
 		git("init", "-q");
 		writeFileSync(join(root, "a.js"), "one\n");
+		writeFileSync(join(root, ".gitignore"), "deps/\n.env\n");
 		git("add", "-A");
 		git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "start");
 	});
 	afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-	it("snapshots without touching the index and restores changed, added and deleted files", async () => {
-		writeFileSync(join(root, "a.js"), "two\n");
-		writeFileSync(join(root, "gone.js"), "keep me\n");
-		const store = new CheckpointStore(root, "test");
-		const checkpoint = await store.snapshot("green");
-		expect(checkpoint).toBeDefined();
+	it("materializes a start tree with ignored files from the checkout and removes it cleanly", async () => {
+		mkdirSync(join(root, "deps"));
+		writeFileSync(join(root, "deps", "lib.js"), "dep\n");
+		writeFileSync(join(root, ".env"), "KEY=1\n");
+		mkdirSync(join(root, "sub"));
+		writeFileSync(join(root, "sub", "b.js"), "b\n");
+		const tree = await writeWorkingTree(join(root, "sub"));
+		expect(tree).toBeDefined();
+		writeFileSync(join(root, "a.js"), "changed\n");
+
+		const copy = await materializeTree(join(root, "sub"), tree!);
+		expect(copy).toBeDefined();
+		expect(copy!.cwd).toBe(join(copy!.root, "sub"));
+		// Tracked files are checked out as git would in the real checkout (CRLF with autocrlf on Windows).
+		const text = (path: string) => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+		expect(text(join(copy!.root, "a.js"))).toBe("one\n");
+		expect(text(join(copy!.cwd, "b.js"))).toBe("b\n");
+		expect(readFileSync(join(copy!.root, "deps", "lib.js"), "utf8")).toBe("dep\n");
+		expect(readFileSync(join(copy!.root, ".env"), "utf8")).toBe("KEY=1\n");
+		await copy!.dispose();
+		expect(existsSync(copy!.root)).toBe(false);
+		// The linked directory is removed as a link: its target is intact.
+		expect(readFileSync(join(root, "deps", "lib.js"), "utf8")).toBe("dep\n");
 		expect(git("status", "--porcelain")).toContain(" M a.js");
-		expect(git("stash", "list")).toBe("");
-
-		writeFileSync(join(root, "a.js"), "three\n");
-		writeFileSync(join(root, "new.js"), "new\n");
-		rmSync(join(root, "gone.js"));
-		const only = ["a.js", "new.js", "gone.js"].map((path) => join(root, path));
-		const restored = await store.restore(checkpoint!, only);
-		expect(restored?.paths.sort()).toEqual([...only].sort());
-		expect(restored?.diff).toContain("+three");
-		expect(readFileSync(join(root, "a.js"), "utf8")).toBe("two\n");
-		expect(() => readFileSync(join(root, "new.js"))).toThrow();
-		expect(readFileSync(join(root, "gone.js"), "utf8")).toBe("keep me\n");
-		expect(git("for-each-ref", "refs/midnight")).toContain("refs/midnight/checkpoints/test-1");
-		store.dispose();
-		expect(git("for-each-ref", "refs/midnight")).toBe("");
-	});
-
-	it("restores only the given paths and leaves every other change alone", async () => {
-		const store = new CheckpointStore(root, "test");
-		const checkpoint = await store.snapshot("green");
-		writeFileSync(join(root, "a.js"), "agent change\n");
-		writeFileSync(join(root, "notes.txt"), "user notes\n");
-		mkdirSync(join(root, "docs"));
-		writeFileSync(join(root, "docs", "user.md"), "user doc\n");
-
-		const restored = await store.restore(checkpoint!, [join(root, "a.js")]);
-		expect(restored?.paths).toEqual([join(root, "a.js")]);
-		expect(restored?.diff).toContain("+agent change");
-		expect(restored?.diff).not.toContain("user notes");
-		expect(readFileSync(join(root, "a.js"), "utf8")).toBe("one\n");
-		expect(readFileSync(join(root, "notes.txt"), "utf8")).toBe("user notes\n");
-		expect(readFileSync(join(root, "docs", "user.md"), "utf8")).toBe("user doc\n");
-
-		// Nothing to restore among the given paths: nothing happens.
-		expect(await store.restore(checkpoint!, [join(root, "a.js"), join(root, "missing.js")])).toBeUndefined();
-		expect(readFileSync(join(root, "notes.txt"), "utf8")).toBe("user notes\n");
-		expect(await store.restore(checkpoint!, [])).toBeUndefined();
-		store.dispose();
 	});
 
 	it("inventories changed files with both contents, leaving out binary and oversized ones", async () => {
