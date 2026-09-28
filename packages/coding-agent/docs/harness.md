@@ -60,8 +60,20 @@ Checks run as a ladder: level by level, stopping at the first level that fails, 
 
 A check's result is reused while nothing it could depend on has changed: no successful `edit` or `write`, no shell command (it may install a dependency or start a service), no rollback, and no new request since it ran with the same command. The common case is the settle ladder right after an in-run check: levels 1 and 2 already ran on the same files, so only level 3 runs. Timeouts are never reused. `features: { "checkCache": false }` turns it off; `/harness` shows how many results were reused.
 
-- **During the run**: after a turn that edited files, levels 1 and 2 run (a check that took more than 90 s is skipped here), and the result goes into the next request: failures in full, or "checks pass; you do not need to rerun them".
+- **During the run**: once the model stops editing (a turn with no edits after turns that edited files), levels 1 and 2 run, and the result goes into the next request: failures in full, or "checks pass; you do not need to rerun them". A turn that edits again does not trigger them, so a change spread over several turns (a signature, then its callers) is not flagged halfway. A check that took more than 90 s is skipped here, and so is a type check (`types`, `typecheck`, `tsc`, `mypy`, `pyright`, `cargo check`) when a language server already checked every changed file it covers.
 - **Before the run settles**: the full ladder runs on everything changed. On failure the model gets the output and another turn, up to `maxRepairRounds` (default 2). Ending again without changes does not skip the check: the same files are checked again.
+
+### Baseline for static checks
+
+A project that already has type or lint errors would otherwise fail every settle, and each repair round is a full model turn spent on code the request never touched. With `checkBaseline` (on by default), the static checks (types and lint by name: `types`, `typecheck`, `tsc`, `mypy`, `pyright`, `cargo check`, `lint`, `vet`, `eslint`, `ruff`, `biome`, `clippy`, `flake8`, `pylint`; project-wide, no `{files}`) run in the background when a request starts, on the tree as the request found it. The first edit or shell command waits up to 15 s for them; a baseline that finishes after something changed is discarded. While the git tree is unchanged, the last baseline is reused.
+
+A failing static check is then compared with its baseline (`src/harness/baseline.ts`). Error lines are compared with line numbers, counts and durations removed; an indented line counts under the unindented line above it (the file in ESLint output). A second copy of an existing error is new.
+
+- Only errors the baseline had: the check is shown as `[known]`, does not stop the ladder (the tests still run) and does not start a repair round.
+- New errors too: the feedback lists only the new error lines and says how many known ones were left out, instead of the raw log.
+- A different exit code, a timeout or unrecognized output that differs from the baseline: the failure is treated as new.
+
+Test checks never get a baseline: a failing test at the start is often what the request is about. `features: { "checkBaseline": false }` turns it off; `/harness` shows how many failures were held back.
 
 ### Rollback
 
@@ -92,9 +104,43 @@ Both are on by default. `evals/drift/` has the drift benchmark, the detector che
 
 When the same checks fail again, `adaptiveRepair` marks the previous approach as rejected, includes diagnostic lines that may have been buried in a long compiler or test log, and requires a materially different repair or an explicit blocker. With checkpoints enabled, the harness restores the last passing state before the next attempt. It is enabled by default and can be disabled for ablation with `-adaptiveRepair`.
 
+## When the model is stuck: divergence
+
+Problem: after a failed repair a model tends to retry the same idea, and repeated attempts on one task are strongly correlated (`docs/LUNA_DESIGN.md`), so a retry that resembles a rejected attempt fails the same way. Example: the checks reject `if (n < 0)`; the next attempt is `if (n <= 0)` in the same place.
+
+Each time the settle checks fail, the harness records the request's whole change as a rejected attempt and fingerprints it (token trigrams of the added and removed lines, so re-indenting or moving the same change does not make it new). When the same checks fail again, or a new attempt is at least 80% the same change as a rejected one, the feedback (`divergence`):
+
+- names the repeat with its measured similarity ("This attempt is 92% the same change as attempt 1, which the checks already rejected");
+- lists the approaches the checks rejected in this request, with their files and first added lines;
+- asks for three causes that differ in kind (input or data format, control flow or an edge case, environment or a dependency, a different reading of the request or the test), what in the output supports or rules out each, and the most likely one no rejected attempt tried.
+
+At the same moments, and when the loop guard has noticed two repeats, `reasoningBoost` raises the thinking level of a reasoning model one step (from `off` or `minimal` straight to `low`), at most twice per request and never above `high`. The level returns to the user's setting when the run settles, unless the user changed it meanwhile. A request that is not stuck runs at the user's level: the extra thinking is spent only where the first idea failed.
+
+## Verifier probe
+
+Problem: the repair loop drives every run to green checks, so whatever remains wrong is exactly what the checks cannot see; in the drift pilots, 17 of 17 hidden failures passed the visible checks. Example: the model adds `if (n > 65535) return false;` and the tests pass, but no test calls it with 65535 or 65536, so `>=` would pass too.
+
+With `mutationProbe` on, after the settle checks pass (and the drift guard has nothing to ask), the harness makes up to six small mutants of the lines the request changed: comparisons (`<` and `<=`), equality, `&&` and `||`, `+` and `-`, booleans, integer constants. Only operators with spaces on both sides are changed, strings and comments are skipped, and a mutant that does not parse is dropped. It reruns the related tests (ladder level 2, else level 3) on each mutant and reports the ones no test noticed, with the line and the change, asking the model to pin the behavior the request depends on with a focused test or to say that it is unverified. It runs once per request, within a time budget (60 s by default), and never on test files.
+
+Mutants are written into the working tree one at a time and always restored. Before each write a journal entry outside the workspace records the original and the mutant; if the process dies mid-probe, the next session restores any file whose content is still exactly the mutant and leaves a file that changed since alone. The probe is off by default because it costs test runs; the policy loop below turns it on only if the evidence says it pays. The measured kill rate had AUC 0.71 for hidden failure on the pilots: it shows where tests are weak, it is not a failure detector.
+
 ## Escalation
 
 When a fast model is stuck (the same checks failed twice, or it repeated itself three times), the harness asks a stronger model for one piece of advice and hands control back. The advisor gets the request, the current diff (new files included), the failing output and the model's last message, not the transcript. Default advisor: `anthropic/claude-opus-5-5`; it is used only if that model has credentials, and never when it is the session model. Limits: 2 calls per prompt, 6 per session. `/harness` shows the calls and their cost, and each call is written to the telemetry log with its model, tokens and cost. With escalation on, a result is a cascade result: to measure a fast model alone, turn it off (`-escalation`).
+
+## The policy loop
+
+The harness's feature switches (per model class) and thresholds (repair rounds, probe size and budget, repeat similarity, boost ceiling) are a policy that the harness improves from its own sessions, using the Lattice-1 kernel in `src/lattice/` ([docs/lattice](../../../docs/lattice/README.md)). Nothing needs a command:
+
+1. The policy is a versioned record (`harness.policy`) in the Lattice store (`~/.midnight.server/lattice`, or `LATTICE_DATA`). The first version is the built-in defaults.
+2. After 20 requests with checks under the active version, the kernel starts a trial of one candidate: one feature toggled for one model class, or one parameter moved one step, chosen by an upper-confidence bandit over which kinds of change paid before. A candidate an earlier trial rejected is not tried again.
+3. During a trial each new session runs the active version or the candidate with equal probability. Every settled request is recorded: whether it ended resolved (checks pass, or the model reported a blocker) without actionable drift, and its tokens.
+4. When both arms have 30 requests with checks, the gate decides. It is a conjunction: the candidate's resolved rate must be higher at a one-sided bootstrap lower bound (alpha spent across trials), or no worse within 3 points and at least 10% cheaper in tokens; drift may not rise and tokens may not grow by more than half. Evidence is used once. A trial that has not passed after 300 requests per arm is rejected.
+5. A passing candidate is promoted with a compare-and-swap into a canary that serves every session. If its resolved rate falls more than 10 points below its parent's over 15 requests, it is rolled back; after 40 requests that are not worse it becomes the champion. Every step is an audit record in the store.
+
+What the loop may not change: `blockerExit`, `driftGuard` and `parseGate` stay on, `masking` follows `harness.json`, and `escalation` (it spends money on another model) is the user's decision. The user's own settings always win: layering is class defaults, then the policy, then `harness.json`, then `MIDNIGHT_SERVER_HARNESS_FEATURES`. A policy applies from the next session; `/harness` shows the active version, the running trial with its evidence so far, and which arm the session runs.
+
+Limits: live sessions have no hidden grader, so "resolved" is a proxy for success, which is why the gate also refuses more drift and the guarding features are out of reach. With 30 requests per arm the loop detects large effects only; smaller ones need the eval (`scripts/harness-eval.mjs`, where learning is off and each arm can pin a policy file).
 
 ## Protected files
 
@@ -120,6 +166,7 @@ Old, large tool results are replaced with a one-line stub (tool, arguments, size
 	"features": { "contextPack": true, "lookup": false },
 	"escalation": { "model": "anthropic/claude-opus-5-5", "maxCallsPerPrompt": 2, "maxCallsPerSession": 6 },
 	"masking": { "enabled": true, "keepRecentResults": 6, "minResultBytes": 2000, "batchBytes": 48000 },
+	"mutation": { "maxMutants": 6, "budgetSeconds": 60 },
 	"shellTimeoutSeconds": 300
 }
 ```
@@ -128,12 +175,14 @@ Old, large tool results are replaced with a one-line stub (tool, arguments, size
 - `level` (1-3) places a check on the ladder; configured checks without one are level 1.
 - Unknown keys and unknown feature names are rejected, so a typo does not silently disable anything.
 
-Features: `contextPack`, `parseGate`, `editRepair`, `pathHints`, `loopGuard`, `inRunChecks`, `checkCache`, `checkpoints`, `lookup`, `diagnostics`, `adaptiveRepair`, `escalation`, `masking`, `driftGuard`, `blockerExit`.
+Features: `contextPack`, `parseGate`, `editRepair`, `pathHints`, `loopGuard`, `inRunChecks`, `checkCache`, `checkBaseline`, `checkpoints`, `lookup`, `diagnostics`, `adaptiveRepair`, `escalation`, `masking`, `driftGuard`, `blockerExit`, `divergence`, `reasoningBoost`, `mutationProbe`.
 
 Environment:
 
 - `MIDNIGHT_SERVER_HARNESS=0` turns the harness off.
 - `MIDNIGHT_SERVER_HARNESS_FEATURES=-contextPack,-escalation` switches features for one run (the eval uses this for ablations).
+- `MIDNIGHT_SERVER_HARNESS_LEARN=0` turns the policy loop off: sessions run the built-in defaults and nothing is recorded.
+- `MIDNIGHT_SERVER_HARNESS_POLICY=<file>` pins a policy (`{ "features": { "fast": { ... } }, "params": { ... } }`) and turns the loop off; the eval uses it for policy arms (`"policy"` on a manifest variant).
 - `MIDNIGHT_SERVER_HARNESS_TELEMETRY=<file>` appends one JSON line per harness decision (pack built, edit rejected, check run, rollback, escalation). Nothing is sent anywhere.
 
 ## Measuring it

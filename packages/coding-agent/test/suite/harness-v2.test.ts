@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Context, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import harnessExtension from "../../src/harness/extension.ts";
+import harnessExtension, { CHECK_MESSAGE_TYPE } from "../../src/harness/extension.ts";
 import { createHarness, type Harness } from "./harness.ts";
 
 function contextText(context: Context): string {
@@ -14,6 +14,14 @@ function contextText(context: Context): string {
 				: message.content.map((part) => ("text" in part ? part.text : "")).join("\n"),
 		)
 		.join("\n---\n");
+}
+
+function customMessages(harness: Harness, customType: string): string[] {
+	return harness.session.messages.flatMap((message) =>
+		message.role === "custom" && message.customType === customType
+			? [typeof message.content === "string" ? message.content : JSON.stringify(message.content)]
+			: [],
+	);
 }
 
 function initGit(dir: string): void {
@@ -37,6 +45,37 @@ function writeProject(dir: string, options: { escalationModel?: string } = {}): 
 			checks: [{ name: "value", command: ["node", "check.js"], when: ["*.js"] }],
 			protect: ["check.js"],
 			...(options.escalationModel ? { escalation: { model: options.escalationModel } } : {}),
+		}),
+	);
+}
+
+/**
+ * A project with a lint check that already fails: legacy.js has a BAD marker. The check reports
+ * each marker as `file:line: error BAD marker`.
+ */
+function writeLintProject(dir: string): void {
+	writeFileSync(join(dir, "legacy.js"), "// BAD\nmodule.exports = 0;\n");
+	writeFileSync(join(dir, "value.js"), "module.exports = 1;\n");
+	writeFileSync(
+		join(dir, "lint.js"),
+		[
+			"const fs = require('fs');",
+			"let failed = false;",
+			"for (const file of fs.readdirSync('.').filter((name) => name.endsWith('.js') && name !== 'lint.js').sort()) {",
+			"  fs.readFileSync(file, 'utf8').split('\\n').forEach((line, index) => {",
+			"    if (line.includes('BAD')) { console.log(file + ':' + (index + 1) + ': error BAD marker'); failed = true; }",
+			"  });",
+			"}",
+			"process.exit(failed ? 1 : 0);",
+		].join("\n"),
+	);
+	mkdirSync(join(dir, ".midnight.server"), { recursive: true });
+	writeFileSync(
+		join(dir, ".midnight.server", "harness.json"),
+		JSON.stringify({
+			checks: [{ name: "lint", command: ["node", "lint.js"], when: ["*.js"] }],
+			protect: ["lint.js"],
+			features: { escalation: false },
 		}),
 	);
 }
@@ -119,10 +158,10 @@ describe("harness v2 in a session", () => {
 		expect(readFileSync(file, "utf8")).toBe("function a() {\n\treturn 2;\n}\n");
 	});
 
-	it("runs checks after an edit during the run and tells the model they pass", async () => {
+	it("runs checks once the model stops editing and tells the model they pass", async () => {
 		const harness = await setup();
 		writeProject(harness.tempDir);
-		let secondRequest = "";
+		const requests: string[] = [];
 		harness.setResponses([
 			fauxAssistantMessage(
 				[
@@ -134,12 +173,43 @@ describe("harness v2 in a session", () => {
 				{ stopReason: "toolUse" },
 			),
 			(context) => {
-				secondRequest = contextText(context);
+				requests.push(contextText(context));
+				return fauxAssistantMessage([fauxToolCall("read", { path: "value.js" })], { stopReason: "toolUse" });
+			},
+			(context) => {
+				requests.push(contextText(context));
 				return fauxAssistantMessage("done");
 			},
 		]);
 		await harness.session.prompt("add a comment to value.js");
-		expect(secondRequest).toContain("Harness checks after your edits pass");
+		// Not after the editing turn: the model may be mid-change.
+		expect(requests[0]).not.toContain("Harness checks after your edits");
+		expect(requests[1]).toContain("Harness checks after your edits pass");
+		expect(harness.getPendingResponseCount()).toBe(0);
+	});
+
+	it("does not check between turns that keep editing", async () => {
+		const harness = await setup();
+		writeProject(harness.tempDir);
+		const requests: string[] = [];
+		const edit = (from: string, to: string) =>
+			fauxAssistantMessage([fauxToolCall("edit", { path: "value.js", edits: [{ oldText: from, newText: to }] })], {
+				stopReason: "toolUse",
+			});
+		harness.setResponses([
+			// Broken in between: the check would fail after this turn.
+			edit("module.exports = 1;", "module.exports = 2;"),
+			(context) => {
+				requests.push(contextText(context));
+				return edit("module.exports = 2;", "module.exports = 1; // back");
+			},
+			(context) => {
+				requests.push(contextText(context));
+				return fauxAssistantMessage("done");
+			},
+		]);
+		await harness.session.prompt("rework value.js");
+		expect(requests.join("\n")).not.toContain("Harness checks");
 		expect(harness.getPendingResponseCount()).toBe(0);
 	});
 
@@ -173,6 +243,7 @@ describe("harness v2 in a session", () => {
 				],
 				{ stopReason: "toolUse" },
 			),
+			fauxAssistantMessage([fauxToolCall("read", { path: "value.js" })], { stopReason: "toolUse" }),
 			fauxAssistantMessage("done"),
 		]);
 		await harness.session.prompt("add a comment to value.js");
@@ -191,9 +262,10 @@ describe("harness v2 in a session", () => {
 			});
 		let rollbackMessage = "";
 		harness.setResponses([
-			// Good edit: in-run check passes, the harness snapshots this state.
+			// Good edit, then a turn without edits: in-run check passes, the harness snapshots this state.
 			edit("module.exports = 1;", "module.exports = 1; // v2"),
-			// Bad edit in the next turn: in-run check fails.
+			fauxAssistantMessage([fauxToolCall("read", { path: "value.js" })], { stopReason: "toolUse" }),
+			// Bad edit in the next turn.
 			edit("module.exports = 1; // v2", "module.exports = 2; // v3"),
 			fauxAssistantMessage("done"),
 			// Settle check fails (round 1); another bad fix.
@@ -260,6 +332,8 @@ describe("harness v2 in a session", () => {
 			});
 		harness.setResponses([
 			edit("module.exports = 1;", "module.exports = 1; // v2"),
+			// A turn without edits: the in-run check passes and the harness snapshots this state.
+			fauxAssistantMessage([fauxToolCall("read", { path: "value.js" })], { stopReason: "toolUse" }),
 			// The user saves a file in their editor while the agent works.
 			() => {
 				writeFileSync(join(harness.tempDir, "notes.txt"), "user notes\n");
@@ -309,5 +383,60 @@ describe("harness v2 in a session", () => {
 		expect(advisorPrompt).toContain("expected 1, got 2");
 		expect(adviceSeen).toContain("Advice from faux/strong");
 		expect(adviceSeen).toContain("Root cause: value.js must export 1");
+	});
+
+	it("does not start a repair round for lint errors the project already had", async () => {
+		const harness = await setup();
+		writeLintProject(harness.tempDir);
+		initGit(harness.tempDir);
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("edit", {
+						path: "value.js",
+						edits: [{ oldText: "module.exports = 1;", newText: "module.exports = 2;" }],
+					}),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("export 2 from value.js");
+		// Without the baseline the settle check fails on legacy.js and sends the model back.
+		expect(customMessages(harness, CHECK_MESSAGE_TYPE)).toEqual([]);
+		expect(harness.getPendingResponseCount()).toBe(0);
+	});
+
+	it("feeds back only the lint errors the change added", async () => {
+		const harness = await setup();
+		writeLintProject(harness.tempDir);
+		initGit(harness.tempDir);
+		let feedback = "";
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("edit", {
+						path: "value.js",
+						edits: [{ oldText: "module.exports = 1;", newText: "// BAD\nmodule.exports = 1;" }],
+					}),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("done"),
+			(context) => {
+				feedback = contextText(context);
+				return fauxAssistantMessage(
+					[fauxToolCall("edit", { path: "value.js", edits: [{ oldText: "// BAD\n", newText: "" }] })],
+					{ stopReason: "toolUse" },
+				);
+			},
+			fauxAssistantMessage("fixed"),
+		]);
+		await harness.session.prompt("touch value.js");
+		expect(feedback).toContain("repair round 1");
+		expect(feedback).toContain("value.js:1: error BAD marker");
+		expect(feedback).not.toContain("legacy.js:1: error BAD marker");
+		expect(feedback).toContain("1 error line(s) this check already reported before this request are left out");
+		expect(harness.getPendingResponseCount()).toBe(0);
 	});
 });

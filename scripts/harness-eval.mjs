@@ -240,10 +240,14 @@ function runAgent(cwd, prompt, variant, options, eventsPath, telemetryPath) {
 	];
 	const env = { ...process.env };
 	delete env.MIDNIGHT_SERVER_HARNESS_FEATURES;
+	delete env.MIDNIGHT_SERVER_HARNESS_POLICY;
+	// An experiment runs exactly its assignment: no live policy trial may pick the arm.
+	env.MIDNIGHT_SERVER_HARNESS_LEARN = "0";
 	if (!variant.harness) env.MIDNIGHT_SERVER_HARNESS = "0";
 	else {
 		delete env.MIDNIGHT_SERVER_HARNESS;
 		if (variant.features) env.MIDNIGHT_SERVER_HARNESS_FEATURES = variant.features;
+		if (variant.policy) env.MIDNIGHT_SERVER_HARNESS_POLICY = variant.policy;
 		env.MIDNIGHT_SERVER_HARNESS_TELEMETRY = telemetryPath;
 	}
 	const stats = {
@@ -358,7 +362,7 @@ function runAgent(cwd, prompt, variant, options, eventsPath, telemetryPath) {
 
 /** Event counts from a run's harness telemetry, and the feature vector the harness resolved. */
 function readTelemetry(file) {
-	const result = { counts: {}, resolvedFeatures: undefined, modelClass: undefined };
+	const result = { counts: {}, resolvedFeatures: undefined, modelClass: undefined, policy: undefined };
 	if (!existsSync(file)) return result;
 	for (const line of readFileSync(file, "utf8").split("\n")) {
 		if (!line.trim()) continue;
@@ -368,6 +372,7 @@ function readTelemetry(file) {
 			if (event.type === "features" && !result.resolvedFeatures) {
 				result.resolvedFeatures = event.features;
 				result.modelClass = event.modelClass;
+				result.policy = event.policy;
 			}
 		} catch {
 			// Ignore a partial last line.
@@ -560,6 +565,9 @@ async function main() {
 			assignment: variant.assignment,
 			resolvedFeatures: telemetry.resolvedFeatures,
 			modelClass: telemetry.modelClass,
+			// The harness policy the run actually used, to check against the assignment.
+			policyHash: telemetry.policy?.hash,
+			policyFile: variant.policy,
 			environmentContaminated: portsOpenAtStart.length > 0,
 			environmentLeak: portsLeftOpen.length > 0,
 			repeat,

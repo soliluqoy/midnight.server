@@ -9,7 +9,7 @@ import { fitCompactionToWindow } from "../src/core/settings-manager.ts";
 import { CheckpointStore, workingTreeChanges, writeWorkingTree } from "../src/harness/checkpoints.ts";
 import { parseHarnessConfig } from "../src/harness/config.ts";
 import { buildContextPack, buildFollowUpPack } from "../src/harness/context-pack.ts";
-import { detectProjectChecks, expandTests } from "../src/harness/detect-checks.ts";
+import { detectProjectChecks, expandTests, isTypeCheck } from "../src/harness/detect-checks.ts";
 import {
 	closestBlock,
 	editTextFound,
@@ -314,6 +314,8 @@ describe("check detection", () => {
 		expect(facts.checks[0].command).toEqual(["pnpm", "run", "typecheck"]);
 		expect(facts.checks[1].command).toEqual(["npx", "--no-install", "vitest", "run", "{tests}"]);
 		expect(facts.checks.every((check) => check.env?.CI === "1")).toBe(true);
+		// A language server covers the types check during a run; the tests are not covered.
+		expect(facts.checks.map((check) => isTypeCheck(check))).toEqual([true, false, false]);
 		expect(expandTests(facts.checks[1], ["a.test.ts"])).toEqual([
 			"npx",
 			"--no-install",

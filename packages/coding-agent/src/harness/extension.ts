@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { createTwoFilesPatch } from "diff";
 import { type Static, Type } from "typebox";
-import { CONFIG_DIR_NAME } from "../config.ts";
+import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import type {
 	BoundaryResult,
 	ExtensionAPI,
@@ -13,7 +14,9 @@ import type {
 	MessageRenderer,
 	SessionBoundaryDraft,
 } from "../core/extensions/types.ts";
+import { type Assignment, HarnessPolicyCore } from "../lattice/harness-policy.ts";
 import { getMidnightStatus } from "../midnight/status.ts";
+import { compareWithBaseline } from "./baseline.ts";
 import {
 	type Checkpoint,
 	CheckpointStore,
@@ -23,6 +26,7 @@ import {
 	writeWorkingTree,
 } from "./checkpoints.ts";
 import {
+	blocks,
 	type CheckOutcome,
 	expandCommand,
 	filesModifiedSince,
@@ -44,7 +48,23 @@ import {
 	loadHarnessConfig,
 } from "./config.ts";
 import { buildContextPack, buildFollowUpPack } from "./context-pack.ts";
-import { type DetectedCheck, detectProjectChecks, expandTests, type ProjectFacts } from "./detect-checks.ts";
+import {
+	type DetectedCheck,
+	detectProjectChecks,
+	expandTests,
+	isStaticCheck,
+	isTypeCheck,
+	type ProjectFacts,
+} from "./detect-checks.ts";
+import {
+	ApproachArchive,
+	BOOST_CEILING,
+	boostedLevel,
+	divergenceFeedback,
+	isRepeat,
+	MAX_BOOSTS_PER_REQUEST,
+	REPEAT_SIMILARITY,
+} from "./divergence.ts";
 import {
 	actionable,
 	BLOCKER_GUIDELINE,
@@ -68,7 +88,17 @@ import {
 import { remapForeignPath, repairPowerShellCommand, toolNeedsExistingPath } from "./interface-repair.ts";
 import { LspManager } from "./lsp.ts";
 import { planMasking } from "./masking.ts";
-import { canCheckSyntax, introducedSyntaxError, pythonInterpreter } from "./parse-gate.ts";
+import {
+	candidateMutants,
+	canMutate,
+	formatProbeFeedback,
+	type ProbeResult,
+	recoverMutations,
+	runProbe,
+	selectMutants,
+} from "./mutation.ts";
+import { canCheckSyntax, checkSyntax, introducedSyntaxError, pythonInterpreter } from "./parse-gate.ts";
+import { type ActivePolicy, learningEnabled, pinnedPolicy, policyBaseConfig, seedPolicy } from "./policy.ts";
 import { formatDiagnostics, newErrors, runLookup } from "./semantic.ts";
 import { HarnessTelemetry } from "./telemetry.ts";
 import { buildWorkspaceIndex, isTestPath, testsFor, type WorkspaceIndex } from "./workspace-index.ts";
@@ -119,6 +149,13 @@ interface RunState {
 	changed: Set<string>;
 	/** Files changed since the last in-run check. */
 	changedSinceInRun: Set<string>;
+	/** An edit or write changed a file in the current turn: the model is still mid-change. */
+	editedThisTurn: boolean;
+	/** Files whose last edit a language server checked: in-run type checks leave them to it. */
+	lspChecked: Set<string>;
+	/** The static checks' results from the start of the request, by check name (baseline.ts). */
+	baseline?: Promise<Map<string, CheckOutcome>>;
+	baselineDone: boolean;
 	/** Every file changed in this run, for the escalation diff and telemetry. */
 	allChanged: Set<string>;
 	shellRan: boolean;
@@ -146,12 +183,34 @@ interface RunState {
 	driftNudged: boolean;
 	/** Shell commands run in this request, for side effects outside the code. */
 	shellCommands: string[];
+	/** Attempts the settle checks rejected in this request (divergence). */
+	archive: ApproachArchive;
+	/**
+	 * The user's thinking level before the first boost, the level the harness set last, and every
+	 * level it set in this run (their change events arrive asynchronously).
+	 */
+	boost?: { original: ThinkingLevel; applied: ThinkingLevel; set: Set<ThinkingLevel> };
+	boosts: number;
+	loopBoosted: boolean;
+	/** Input and output tokens of this request's model calls. */
+	tokens: number;
+	/** The verifier probe ran in this request (at most once). */
+	probed: boolean;
+	probe?: { ran: number; killed: number };
+	/** For the episode log: what the request went through. */
+	settleChecks: number;
+	rollbacks: number;
+	driftActionable: number;
+	blockerAccepted: boolean;
 }
 
 function freshRun(prompt = ""): RunState {
 	return {
 		changed: new Set(),
 		changedSinceInRun: new Set(),
+		editedThisTurn: false,
+		lspChecked: new Set(),
+		baselineDone: false,
 		allChanged: new Set(),
 		shellRan: false,
 		repairRound: 0,
@@ -164,15 +223,34 @@ function freshRun(prompt = ""): RunState {
 		originals: new Map(),
 		driftNudged: false,
 		shellCommands: [],
+		archive: new ApproachArchive(),
+		boosts: 0,
+		loopBoosted: false,
+		tokens: 0,
+		probed: false,
+		settleChecks: 0,
+		rollbacks: 0,
+		driftActionable: 0,
+		blockerAccepted: false,
 	};
 }
 
 /** Shell commands that run a project's tests or checks: their success verifies the change. */
-const TEST_COMMAND =
-	/(?:test|tests|pytest|vitest|jest|mocha|ava|tap|unittest|gos+(?:test|vet)|cargos+(?:test|check)|tsc|mypy|ruff|eslint|biome|check)|nodes+(?:--test|S*testS*.m?js)|pythond?s+S*testS*.py/i;
+export const TEST_COMMAND =
+	/\b(?:test|tests|pytest|vitest|jest|mocha|ava|tap|unittest|go\s+(?:test|vet)|cargo\s+(?:test|check)|tsc|mypy|ruff|eslint|biome|check)\b|node\s+(?:--test\b|\S*test\S*\.m?js)|python\d?\s+\S*test\S*\.py/i;
 
 /** In-run checks skip any check that took longer than this last time: they must stay cheap. */
 const IN_RUN_CHECK_BUDGET_MS = 90_000;
+
+/**
+ * How long the first edit or shell command of a request waits for the baseline checks to finish.
+ * A baseline still running after that is discarded once anything changes (it may have read the change).
+ */
+const BASELINE_WAIT_MS = 15_000;
+
+function sameArgv(a: readonly string[], b: readonly string[]): boolean {
+	return a.length === b.length && a.every((arg, index) => arg === b[index]);
+}
 
 /**
  * The harness: work moved out of the model and into code, so a model spends its tokens on
@@ -181,15 +259,23 @@ const IN_RUN_CHECK_BUDGET_MS = 90_000;
  * - Before the first request: a context pack (environment, ranked files, their contents).
  * - At each action: path, PowerShell and indentation repairs; syntax errors rejected in the
  *   same turn; new language-server errors reported with the edit; repeated calls noticed.
- * - After edits: project checks (configured or detected), cheapest first, during the run and
- *   before it settles, with bounded repair rounds, rollback to the last passing state, and
+ * - After edits: project checks (configured or detected), cheapest first, once the model stops
+ *   editing during the run and before it settles, with bounded repair rounds, rollback to the last passing state, and
  *   advice from a stronger model when a fast model is stuck.
  * - Always: protected files, observation masking scaled to the context window.
  *
  * Features switch per model class (fast, frontier) and per flag; see features.ts.
  */
 export default function harnessExtension(pi: ExtensionAPI): void {
-	let config: HarnessConfig = defaultHarnessConfig();
+	/** The policy this session runs (see policy.ts): chosen once per session. */
+	let policy: ActivePolicy = seedPolicy();
+	/**
+	 * This session's place in the Lattice loop. The store is opened only for a moment (to assign, to
+	 * record): several sessions share it, and an open handle would pin the file on Windows.
+	 */
+	let assignment: Assignment | undefined;
+	let policyChosen = false;
+	let config: HarnessConfig = policyBaseConfig(defaultHarnessConfig(), policy.policy);
 	let envFeatures: Partial<Record<FeatureName, boolean>> = {};
 	let run = freshRun();
 	let controller = new AbortController();
@@ -214,6 +300,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	 */
 	let changeEpoch = 0;
 	const checkCache = new Map<string, { epoch: number; outcome: CheckOutcome }>();
+	/** The last baseline and the working tree (git tree id) it was taken on: an unchanged tree reuses it. */
+	let baselineCache: { tree: string; outcomes: Map<string, CheckOutcome> } | undefined;
 	const telemetry = new HarnessTelemetry();
 	const stats = {
 		maskBatches: 0,
@@ -221,6 +309,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		checkRuns: 0,
 		checkFailures: 0,
 		checksReused: 0,
+		checksKnown: 0,
 		repairs: 0,
 		escalations: 0,
 		escalationCostUsd: 0,
@@ -230,7 +319,14 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		driftChecks: 0,
 		driftNudges: 0,
 		blockersAccepted: 0,
+		repeatsNamed: 0,
+		boosts: 0,
+		probes: 0,
+		probeMutants: 0,
+		probeKilled: 0,
 	};
+	/** Crash-recovery journals of the verifier probe: outside the workspace, per machine. */
+	const mutationJournalDir = join(getAgentDir(), "harness", "mutation-journal");
 
 	function modelClass(ctx: ExtensionContext): ModelClass {
 		return classifyModel(ctx.model);
@@ -238,7 +334,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 
 	function features(ctx: ExtensionContext): Record<FeatureName, boolean> {
 		const fromConfig: Partial<Record<FeatureName, boolean>> = { masking: config.masking.enabled, ...config.features };
-		return resolveFeatures(modelClass(ctx), fromConfig, envFeatures);
+		const mc = modelClass(ctx);
+		return resolveFeatures(mc, fromConfig, envFeatures, policy.policy.features[mc]);
 	}
 
 	function on(ctx: ExtensionContext, name: FeatureName): boolean {
@@ -336,10 +433,11 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			envFeatures = {};
 			ctx.ui.notify(error instanceof Error ? error.message : String(error), "warning");
 		}
+		const base = policyBaseConfig(defaultHarnessConfig(), policy.policy);
 		try {
-			config = loadHarnessConfig(ctx.cwd, trusted);
+			config = loadHarnessConfig(ctx.cwd, trusted, base);
 		} catch (error) {
-			config = defaultHarnessConfig();
+			config = base;
 			if (error instanceof HarnessConfigError) ctx.ui.notify(`Harness config ignored: ${error.message}`, "warning");
 			else throw error;
 		}
@@ -358,8 +456,57 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		factsReady.catch(() => undefined);
 	}
 
+	/** Open the Lattice store for one use and close it again. */
+	function withCore<T>(use: (core: HarnessPolicyCore) => T): T {
+		const core = HarnessPolicyCore.open();
+		try {
+			return use(core);
+		} finally {
+			core.close();
+		}
+	}
+
+	/**
+	 * Choose this session's policy: a pinned file (evals), else the Lattice store's assignment (the
+	 * active version, or during a trial the candidate for about half of the sessions), else the
+	 * seed. A store that cannot be opened never stops a session: it falls back to the seed.
+	 */
+	function choosePolicy(): ActivePolicy {
+		policyChosen = true;
+		assignment = undefined;
+		const pinned = pinnedPolicy();
+		if (pinned) return pinned;
+		const harnessOff = /^(?:0|false)$/i.test(process.env.MIDNIGHT_SERVER_HARNESS ?? "");
+		if (harnessOff || !learningEnabled()) return seedPolicy();
+		try {
+			const assigned = withCore((core) => core.assign());
+			assignment = assigned;
+			return {
+				source: "lattice",
+				hash: assigned.hash,
+				policy: assigned.policy,
+				version: assigned.version,
+				status: assigned.status,
+				arm: assigned.trial ? assigned.arm : undefined,
+				trial: assigned.trial,
+			};
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			telemetry.record({ type: "policy_error", message });
+			return seedPolicy(`Lattice store: ${message}`);
+		}
+	}
+
 	pi.on("session_start", (_event, ctx) => {
+		policy = choosePolicy();
+		if (policy.problem) ctx.ui.notify(`Harness policy: using the built-in defaults (${policy.problem})`, "warning");
 		loadState(ctx);
+		// A probe that crashed mid-mutant left a file changed: put it back before anything else runs.
+		const recovered = recoverMutations(mutationJournalDir, ctx.cwd);
+		for (const note of recovered.filter((item) => item.action !== "already original")) {
+			ctx.ui.notify(`Harness verifier probe recovery: ${note.path} ${note.action}.`, "warning");
+			telemetry.record({ type: "mutation_recovered", action: note.action });
+		}
 		index = undefined;
 		indexDirty = true;
 		packSent = false;
@@ -371,6 +518,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", () => {
 		controller.abort();
+		assignment = undefined;
+		policyChosen = false;
 		void lsp?.dispose();
 		checkpoints?.dispose();
 	});
@@ -379,9 +528,72 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		run.startedAt ??= Date.now();
 	});
 
-	pi.on("agent_settled", () => {
+	pi.on("agent_settled", (_event, ctx) => {
+		// The boost was for being stuck in this run; the next request starts at the user's level,
+		// unless the user chose another level meanwhile.
+		if (run.boost && pi.getThinkingLevel() === run.boost.applied) pi.setThinkingLevel(run.boost.original);
+		// The Lattice loop: this request is evidence for the policy the session ran; the kernel may
+		// then start or judge a trial, or confirm or roll back a canary (it applies from the next session).
+		if (config.enabled && assignment && run.prompt) {
+			const ran = assignment;
+			try {
+				const decision = withCore((core) =>
+					core.record(ran, {
+						at: Date.now(),
+						policy_hash: ran.hash,
+						policy_version: ran.version,
+						model_class: modelClass(ctx),
+						checked: run.settleChecks > 0,
+						final_failed: run.lastCheckFailed,
+						blocker: run.blockerAccepted,
+						repair_rounds: run.repairRound,
+						rollbacks: run.rollbacks,
+						drift_actionable: run.driftActionable,
+						escalations: run.escalations,
+						boosts: run.boosts,
+						tokens: run.tokens,
+						probe: run.probe,
+					}),
+				);
+				if (decision) {
+					telemetry.record({ type: "policy_decision", kind: decision.kind, detail: decision.detail });
+					if (decision.kind !== "trial_started" && decision.kind !== "aborted") {
+						ctx.ui.notify(`Harness policy ${decision.kind.replace("_", " ")}: ${decision.detail}`);
+					}
+				}
+			} catch (error) {
+				telemetry.record({ type: "policy_error", message: error instanceof Error ? error.message : String(error) });
+			}
+		}
 		run = freshRun();
 	});
+
+	pi.on("thinking_level_select", (event) => {
+		// The user picked a level during the run: theirs stands, nothing to restore.
+		if (run.boost && !run.boost.set.has(event.level)) run.boost = undefined;
+	});
+
+	/**
+	 * Raise the thinking level one step while the model is stuck (divergence.ts). Only for
+	 * reasoning models, at most MAX_BOOSTS_PER_REQUEST times, never above the policy's ceiling.
+	 */
+	function boostReasoning(ctx: ExtensionContext, reason: string): void {
+		if (!on(ctx, "reasoningBoost") || !ctx.model?.reasoning || run.boosts >= MAX_BOOSTS_PER_REQUEST) return;
+		const current = pi.getThinkingLevel();
+		const next = boostedLevel(current, policy.policy.params.boostCeiling ?? BOOST_CEILING);
+		if (!next) return;
+		pi.setThinkingLevel(next);
+		const applied = pi.getThinkingLevel();
+		if (applied === current) return;
+		run.boost = {
+			original: run.boost?.original ?? current,
+			applied,
+			set: new Set([...(run.boost?.set ?? []), applied]),
+		};
+		run.boosts++;
+		stats.boosts++;
+		telemetry.record({ type: "reasoning_boost", from: current, to: applied, reason });
+	}
 
 	/** Keep the `lookup` tool active only when its feature is on for this model. */
 	function syncTools(ctx: ExtensionContext): void {
@@ -404,8 +616,19 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	/** File content before an edit or write, for the parse gate. */
 	const beforeEdit = new Map<string, { path: string; before: string | undefined }>();
 
-	pi.on("tool_call", (event, ctx) => {
+	pi.on("tool_call", async (event, ctx) => {
 		if (!config.enabled) return;
+		if (run.baseline && !run.baselineDone && ["edit", "write", "bash", "powershell"].includes(event.toolName)) {
+			// The baseline must see the tree before the request changed it.
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			await Promise.race([
+				run.baseline,
+				new Promise((done) => {
+					timer = setTimeout(done, BASELINE_WAIT_MS);
+				}),
+			]);
+			clearTimeout(timer);
+		}
 		const input = event.input as Record<string, unknown> & { path?: unknown; command?: unknown; timeout?: unknown };
 		if (
 			(event.toolName === "bash" || event.toolName === "powershell") &&
@@ -522,6 +745,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			if (!rejected && rel) {
 				run.changed.add(rel);
 				run.changedSinceInRun.add(rel);
+				run.editedThisTurn = true;
+				run.lspChecked.delete(rel);
 				run.allChanged.add(rel);
 				run.lastChangeAt = Date.now();
 				indexDirty = true;
@@ -611,6 +836,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			const since = Date.now();
 			client.sync(path);
 			const after = await client.diagnosticsFor(path, since, 8_000);
+			if (after) run.lspChecked.add(rel);
 			if (!after || after.every((item) => (item.severity ?? 1) !== 1)) return undefined;
 			let previous: typeof after | undefined;
 			if (before !== undefined) {
@@ -629,6 +855,11 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	}
 
 	pi.on("before_agent_start", async (event, ctx) => {
+		// A session that started without session_start (embedded runtimes) chooses its policy here.
+		if (!policyChosen) {
+			policy = choosePolicy();
+			loadState(ctx);
+		}
 		// Trust can be granted during a session; checks and servers follow it.
 		if (ctx.isProjectTrusted() !== trusted || ctx.cwd !== cwd) loadState(ctx);
 		const planning = getMidnightStatus().agentMode === "plan";
@@ -638,7 +869,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		// The drift inventory compares against the tree as the request found it, so edits made by
 		// shell commands count too. Outside git, it falls back to files changed through edit/write
 		// (writeWorkingTree is undefined there).
-		const baselineTree = on(ctx, "driftGuard") && !planning ? writeWorkingTree(ctx.cwd) : undefined;
+		const baselineTree =
+			(on(ctx, "driftGuard") || on(ctx, "checkBaseline")) && !planning ? writeWorkingTree(ctx.cwd) : undefined;
 		const indexed = packing ? workspace() : undefined;
 		const git = packing && !packSent ? gitSummary(ctx.cwd) : undefined;
 		// Awaited below or inside the try; this only keeps an early throw from leaving them unhandled.
@@ -654,9 +886,30 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		if (!config.enabled) return;
 		syncTools(ctx);
 		// What this request actually runs with, so an experiment can check it against its assignment.
-		telemetry.record({ type: "features", modelClass: modelClass(ctx), features: features(ctx) });
+		telemetry.record({
+			type: "features",
+			modelClass: modelClass(ctx),
+			features: features(ctx),
+			policy: {
+				source: policy.source,
+				hash: policy.hash,
+				version: policy.version,
+				status: policy.status,
+				arm: policy.arm,
+				trial: policy.trial,
+			},
+		});
 		if (on(ctx, "blockerExit") && !planning) event.systemPromptOptions.promptGuidelines.push(BLOCKER_GUIDELINE);
 		if (baselineTree) run.baselineTree = await baselineTree;
+		if (on(ctx, "checkBaseline") && !planning) {
+			const current = run;
+			current.baseline = startBaseline(ctx, current.baselineTree);
+			current.baseline
+				?.catch(() => undefined)
+				.finally(() => {
+					current.baselineDone = true;
+				});
+		}
 		if (!indexed) return;
 		try {
 			const workspaceIndex = await indexed;
@@ -708,6 +961,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	pi.on("turn_end", async (event, ctx) => {
 		if (!config.enabled) return;
 		if (event.message.role === "assistant") {
+			run.tokens += (event.message.usage?.input ?? 0) + (event.message.usage?.output ?? 0);
 			const text = event.message.content
 				.flatMap((part) => (part.type === "text" ? [part.text] : []))
 				.join("\n")
@@ -728,8 +982,14 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		}
 		const continuing =
 			event.message.role === "assistant" && event.message.content.some((part) => part.type === "toolCall");
+		// Check only once the model stops editing: a change spread over several turns (a signature,
+		// then its callers) is broken between them by design, and flagging that pulls the model off
+		// its plan. A turn that edits again waits; the settle ladder is the gate either way.
+		const editing = run.editedThisTurn;
+		run.editedThisTurn = false;
 		if (
 			continuing &&
+			!editing &&
 			on(ctx, "inRunChecks") &&
 			run.changedSinceInRun.size > 0 &&
 			getMidnightStatus().agentMode !== "plan"
@@ -757,6 +1017,10 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					display: true,
 				});
 			}
+		}
+		if (continuing && !run.loopBoosted && run.loopGuard.loops >= 2) {
+			run.loopBoosted = true;
+			boostReasoning(ctx, "loop");
 		}
 		if (continuing && on(ctx, "escalation") && !run.loopEscalated && run.loopGuard.loops >= 3) {
 			run.loopEscalated = true;
@@ -800,22 +1064,23 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 	): Promise<{ outcomes: CheckOutcome[]; failed: CheckOutcome[] } | undefined> {
 		const checks = activeChecks();
 		if (checks.length === 0 || changed.length === 0) return undefined;
+		const baselines = await run.baseline?.catch(() => undefined);
 		if (controller.signal.aborted) controller = new AbortController();
 		const outcomes: CheckOutcome[] = [];
-		let tests: string[] | undefined;
-		for (let level = 1; level <= maxLevel; level++) {
-			const levelChecks = checks.filter((check) => (check.level ?? 1) === level);
-			if (levelChecks.length === 0) continue;
-			const selected: SelectedCheck[] = [];
-			for (const item of selectChecks(levelChecks, changed)) {
-				if (inRun && (checkDurations.get(item.check.name) ?? 0) > IN_RUN_CHECK_BUDGET_MS) continue;
-				if (item.check.command.includes("{tests}")) {
-					tests ??= testsFor(await workspace(), changed);
-					const argv = expandTests(item.check, tests);
-					if (!argv) continue;
-					selected.push({ ...item, argv });
-				} else selected.push(item);
+		const compared = (outcome: CheckOutcome): CheckOutcome => {
+			const before = baselines?.get(outcome.name);
+			const comparison =
+				before && sameArgv(before.argv, outcome.argv) ? compareWithBaseline(outcome, before) : undefined;
+			if (!comparison) return outcome;
+			if (comparison.preexisting) {
+				stats.checksKnown++;
+				telemetry.record({ type: "check_known", check: outcome.name });
 			}
+			return { ...outcome, baseline: comparison };
+		};
+		for (const level of ([1, 2, 3] as const).filter((item) => item <= maxLevel)) {
+			const selected = await checksAtLevel(checks, level, changed, inRun);
+			if (selected.length === 0) continue;
 			const levelOutcomes: CheckOutcome[] = [];
 			for (const item of selected) {
 				const key = [item.check.name, ...(item.argv ?? expandCommand(item.check.command, item.files))].join("\0");
@@ -823,7 +1088,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 				if (cached && cached.epoch === changeEpoch) {
 					stats.checksReused++;
 					telemetry.record({ type: "check_reused", check: item.check.name, savedMs: cached.outcome.elapsedMs });
-					levelOutcomes.push(cached.outcome);
+					levelOutcomes.push(compared(cached.outcome));
 					continue;
 				}
 				ctx.ui.setWorkingMessage(`Harness check: ${item.check.name}...`);
@@ -837,14 +1102,166 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 				checkDurations.set(item.check.name, outcome.elapsedMs);
 				// A timeout says nothing about the code; an in-run timeout is also shorter than at settle.
 				if (!outcome.timedOut && !controller.signal.aborted) checkCache.set(key, { epoch: changeEpoch, outcome });
-				levelOutcomes.push(outcome);
+				levelOutcomes.push(compared(outcome));
 			}
 			ctx.ui.setWorkingMessage();
 			if (controller.signal.aborted) return undefined;
 			outcomes.push(...levelOutcomes);
-			if (levelOutcomes.some((outcome) => !outcome.passed)) break;
+			// A failure the project already had does not stop the ladder: the tests still run.
+			if (levelOutcomes.some(blocks)) break;
 		}
-		return { outcomes, failed: outcomes.filter((outcome) => !outcome.passed) };
+		return { outcomes, failed: outcomes.filter(blocks) };
+	}
+
+	/**
+	 * Run the project-wide static checks (types and lint, no `{files}`) on the tree as the
+	 * request found it. Reused while the git tree is unchanged; discarded if anything changed before
+	 * it finished, since it may have read the change. Undefined when there is nothing to run.
+	 */
+	function startBaseline(
+		ctx: ExtensionContext,
+		tree: string | undefined,
+	): Promise<Map<string, CheckOutcome>> | undefined {
+		const checks = activeChecks().filter(
+			(check) => isStaticCheck(check) && !check.command.some((arg) => arg === "{files}" || arg === "{tests}"),
+		);
+		if (checks.length === 0) return undefined;
+		if (tree && baselineCache?.tree === tree) return Promise.resolve(baselineCache.outcomes);
+		const epoch = changeEpoch;
+		const signal = controller.signal;
+		return (async () => {
+			const outcomes = new Map<string, CheckOutcome>();
+			for (const check of checks) {
+				const outcome = await runCheck({ check, files: [] }, ctx.cwd, signal);
+				if (signal.aborted || changeEpoch !== epoch) {
+					telemetry.record({ type: "check_baseline_discarded" });
+					return new Map<string, CheckOutcome>();
+				}
+				checkDurations.set(check.name, outcome.elapsedMs);
+				outcomes.set(check.name, outcome);
+			}
+			if (tree) baselineCache = { tree, outcomes };
+			telemetry.record({
+				type: "check_baseline",
+				checks: outcomes.size,
+				failing: [...outcomes.values()].filter((outcome) => !outcome.passed).length,
+			});
+			return outcomes;
+		})();
+	}
+
+	/** The checks of one ladder level that `changed` calls for, with `{tests}` expanded. */
+	async function checksAtLevel(
+		checks: ReadonlyArray<HarnessCheck | DetectedCheck>,
+		level: 1 | 2 | 3,
+		changed: readonly string[],
+		inRun: boolean,
+	): Promise<SelectedCheck[]> {
+		const levelChecks = checks.filter((check) => (check.level ?? 1) === level);
+		if (levelChecks.length === 0) return [];
+		const selected: SelectedCheck[] = [];
+		let tests: string[] | undefined;
+		for (const item of selectChecks(levelChecks, changed)) {
+			if (inRun && (checkDurations.get(item.check.name) ?? 0) > IN_RUN_CHECK_BUDGET_MS) continue;
+			// A language server already reported new errors with each edit to these files; a
+			// whole-project type check mid-run repeats that. Settle still runs it.
+			if (
+				inRun &&
+				isTypeCheck(item.check) &&
+				item.files.length > 0 &&
+				item.files.every((file) => run.lspChecked.has(file))
+			)
+				continue;
+			if (item.check.command.includes("{tests}")) {
+				tests ??= testsFor(await workspace(), changed);
+				const argv = expandTests(item.check, tests);
+				if (!argv) continue;
+				selected.push({ ...item, argv });
+			} else selected.push(item);
+		}
+		return selected;
+	}
+
+	/**
+	 * The verifier probe (mutation.ts): mutate the lines this request changed, rerun the test
+	 * checks on each mutant, and return feedback naming the mutants no test noticed. Undefined when
+	 * there is nothing to probe or every mutant was caught.
+	 */
+	async function probeChange(ctx: ExtensionContext): Promise<SessionBoundaryDraft | undefined> {
+		const files = [...run.originals.keys()].filter((path) => canMutate(path) && !isTestPath(path));
+		const candidates = files.flatMap((path) => {
+			try {
+				return candidateMutants(path, run.originals.get(path), readFileSync(resolve(ctx.cwd, path), "utf8"));
+			} catch {
+				return [];
+			}
+		});
+		const mutants = selectMutants(candidates, config.mutation.maxMutants);
+		if (mutants.length === 0) return undefined;
+		// Tests are what can notice a behavior change: related tests, else the full suite.
+		const checks = activeChecks();
+		let selected = await checksAtLevel(checks, 2, files, false);
+		if (selected.length === 0) selected = await checksAtLevel(checks, 3, files, false);
+		if (selected.length === 0) {
+			telemetry.record({ type: "mutation_probe_skipped", reason: "no test checks" });
+			return undefined;
+		}
+		if (controller.signal.aborted) controller = new AbortController();
+		const signal = controller.signal;
+		ctx.ui.setWorkingMessage(`Harness: verifier probe (${mutants.length} mutants)...`);
+		let result: ProbeResult;
+		try {
+			result = await runProbe({
+				cwd: ctx.cwd,
+				journalDir: mutationJournalDir,
+				mutants,
+				budgetMs: config.mutation.budgetSeconds * 1000,
+				signal,
+				parses: async (mutant) => {
+					const parsed = await checkSyntax(mutant.content, resolve(ctx.cwd, mutant.path), ctx.cwd);
+					return parsed === undefined || parsed.ok;
+				},
+				runChecks: async () => {
+					for (const item of selected) {
+						// A mutant that makes a test loop forever counts as caught; do not wait the full timeout.
+						const usual = checkDurations.get(item.check.name);
+						const timeoutMs = usual
+							? Math.min(item.check.timeoutMs, Math.max(15_000, usual * 3))
+							: item.check.timeoutMs;
+						const outcome = await runCheck({ ...item, check: { ...item.check, timeoutMs } }, ctx.cwd, signal);
+						if (!outcome.passed) return false;
+					}
+					return true;
+				},
+			});
+		} finally {
+			ctx.ui.setWorkingMessage();
+			// The files are back to their content, but their times changed.
+			changeEpoch++;
+		}
+		stats.probes++;
+		stats.probeMutants += result.ran;
+		stats.probeKilled += result.killed;
+		run.probe = { ran: result.ran, killed: result.killed };
+		telemetry.record({
+			type: "mutation_probe",
+			ran: result.ran,
+			killed: result.killed,
+			survived: result.survivors.length,
+			unparsable: result.unparsable,
+			skipped: result.skipped,
+			ms: result.elapsedMs,
+		});
+		if (result.survivors.length === 0) return undefined;
+		return {
+			type: "custom_message",
+			customType: CHECK_MESSAGE_TYPE,
+			content: formatProbeFeedback(
+				result,
+				selected.map((item) => item.check.name),
+			),
+			display: true,
+		};
 	}
 
 	/** Ask the escalation model for advice. Returns the message entry, or undefined. */
@@ -1028,6 +1445,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		const result = await runLadder(ctx, changed, 3, false);
 		if (result && result.outcomes.length > 0) {
 			stats.checkRuns++;
+			run.settleChecks++;
 			// Changes up to here are checked; later edits in a repair round re-trigger the checks.
 			run.changed.clear();
 			run.changedSinceInRun.clear();
@@ -1053,6 +1471,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					!claimsSuccess(run.lastAssistantText)
 				) {
 					stats.blockersAccepted++;
+					run.blockerAccepted = true;
 					telemetry.record({ type: "blocker_accepted", round: run.repairRound });
 					return {
 						entries: [
@@ -1085,6 +1504,25 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					.join("\0");
 				const repeated = key === run.lastFailedKey;
 				run.lastFailedKey = key;
+				// Divergence: record this rejected attempt before any rollback replaces it, and when the
+				// model is stuck show it the rejected approaches and raise its thinking level.
+				let divergence: string | undefined;
+				if (on(ctx, "divergence")) {
+					const recorded = run.archive.record(
+						failed.map((outcome) => outcome.name),
+						await changeDiff(ctx, [...run.allChanged]),
+					);
+					const threshold = policy.policy.params.repeatSimilarity ?? REPEAT_SIMILARITY;
+					const repeatsAttempt = isRepeat(recorded, threshold);
+					if (repeatsAttempt) {
+						stats.repeatsNamed++;
+						telemetry.record({ type: "attempt_repeat", similarity: recorded.closest?.similarity });
+					}
+					if (repeated || repeatsAttempt) {
+						divergence = divergenceFeedback(run.archive, recorded, threshold);
+						boostReasoning(ctx, repeatsAttempt ? "repeated attempt" : "repeated failure");
+					}
+				} else if (repeated) boostReasoning(ctx, "repeated failure");
 				const feedback = formatCheckFeedback(
 					outcomes,
 					run.repairRound,
@@ -1092,6 +1530,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					repeated,
 					on(ctx, "blockerExit"),
 					on(ctx, "adaptiveRepair"),
+					divergence,
 				);
 				const entries: SessionBoundaryDraft[] = [];
 				let rollbackNote = "";
@@ -1105,8 +1544,12 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 						changeEpoch++;
 						const paths = restored.paths.map((path) => workspaceRelative(ctx.cwd, path) ?? path);
 						stats.rollbacks++;
+						run.rollbacks++;
 						indexDirty = true;
-						for (const path of paths) run.changed.add(path);
+						for (const path of paths) {
+							run.changed.add(path);
+							run.lspChecked.delete(path);
+						}
 						telemetry.record({ type: "rollback", paths: paths.length });
 						rollbackNote = [
 							"",
@@ -1156,6 +1599,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					shellCommands: run.shellCommands,
 				});
 				const flagged = actionable(signals);
+				run.driftActionable = flagged.length;
 				stats.driftChecks++;
 				telemetry.record({
 					type: run.driftNudged ? "drift_final" : "drift_check",
@@ -1180,7 +1624,27 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 				}
 			}
 		}
+
+		// The verifier probe, once per request, after the checks passed and the drift guard is satisfied.
+		if (result && result.outcomes.length > 0 && !run.lastCheckFailed && !run.probed && on(ctx, "mutationProbe")) {
+			run.probed = true;
+			const feedback = await probeChange(ctx);
+			if (feedback) return { entries: [feedback], continue: true };
+		}
 		return undefined;
+	}
+
+	function policySummary(): string {
+		const hash = policy.hash.slice(0, 12);
+		if (policy.source === "file") return `pinned file (${hash})`;
+		if (policy.source === "seed") return `built-in defaults (${hash})${policy.problem ? `; ${policy.problem}` : ""}`;
+		let line: string;
+		try {
+			line = withCore((core) => core.summary());
+		} catch {
+			line = `harness.policy v${policy.version}`;
+		}
+		return `${line}; this session runs ${policy.arm === "candidate" ? "the trial candidate" : "the active version"} (${hash})`;
 	}
 
 	pi.registerCommand("harness", {
@@ -1201,11 +1665,14 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					.join(", ")}`,
 				`Checks: ${checks.length > 0 ? checks.map((check) => `${check.name} (level ${check.level ?? 1}${"source" in check ? `, from ${check.source}` : ""})`).join(", ") : "none configured or detected"}`,
 				`Protected: ${["harness.json", ...config.protect].join(", ")}`,
-				`Check runs: ${stats.checkRuns} (${stats.checkFailures} failed, ${stats.repairs} repair rounds, ${stats.rollbacks} rollbacks, ${stats.checksReused} check results reused)`,
+				`Check runs: ${stats.checkRuns} (${stats.checkFailures} failed, ${stats.repairs} repair rounds, ${stats.rollbacks} rollbacks, ${stats.checksReused} check results reused, ${stats.checksKnown} failures held back as pre-existing)`,
 				`Drift: ${stats.driftChecks} check(s), ${stats.driftNudges} fix-or-disclose request(s), ${stats.blockersAccepted} reported blocker(s) accepted`,
 				`Context packs: ${stats.packs} (${(stats.packBytes / 1024).toFixed(1)} KB)`,
 				`Context masking: ${stats.maskBatches} batch(es), ${(stats.elidedBytes / 1024).toFixed(1)} KB elided (~${Math.round(stats.elidedBytes / 4)} tokens per later request)`,
-				`Escalation: ${config.escalation.model}, ${stats.escalations} call(s), $${stats.escalationCostUsd.toFixed(4)}`,
+				`Escalation: ${config.escalation.model}, ${stats.escalations} call(s), ${stats.escalationCostUsd.toFixed(4)}`,
+				`Divergence: ${stats.repeatsNamed} repeated attempt(s) named, ${stats.boosts} reasoning boost(s)`,
+				`Verifier probe: ${stats.probes} run(s), ${stats.probeKilled} of ${stats.probeMutants} mutant(s) caught`,
+				`Policy: ${policySummary()}`,
 				`Language servers: ${lsp?.running.join(", ") || "none running"}`,
 				`Events: ${telemetry.summary()}`,
 			];
