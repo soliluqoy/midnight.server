@@ -42,6 +42,18 @@ export const FEATURE_NAMES = [
 	"driftGuard",
 	/** One rule offering a sanctioned way to stop: report what blocks the request instead of substituting. */
 	"blockerExit",
+	/**
+	 * When stuck, name a retry that repeats a rejected attempt (measured similarity), list the
+	 * rejected approaches and ask for causes that differ in kind. See divergence.ts.
+	 */
+	"divergence",
+	/** Raise the thinking level one step while stuck; restore it when the run settles. */
+	"reasoningBoost",
+	/**
+	 * After the checks pass, mutate the changed lines and rerun the tests: report changes no test
+	 * noticed. Costs test runs, so off until measured. See mutation.ts.
+	 */
+	"mutationProbe",
 ] as const;
 
 export type FeatureName = (typeof FEATURE_NAMES)[number];
@@ -79,6 +91,9 @@ const CLASS_DEFAULTS: Record<ModelClass, Record<FeatureName, boolean>> = {
 		escalation: true,
 		driftGuard: true,
 		blockerExit: true,
+		divergence: true,
+		reasoningBoost: true,
+		mutationProbe: false,
 	},
 	frontier: {
 		masking: true,
@@ -96,6 +111,9 @@ const CLASS_DEFAULTS: Record<ModelClass, Record<FeatureName, boolean>> = {
 		escalation: false,
 		driftGuard: true,
 		blockerExit: true,
+		divergence: true,
+		reasoningBoost: true,
+		mutationProbe: false,
 	},
 };
 
@@ -120,13 +138,14 @@ export function parseFeatureOverrides(text: string | undefined): Partial<Record<
 }
 
 /**
- * Resolve every feature for a model class: class default, then `harness.json`, then the
- * environment. The legacy key `masking.enabled` counts as config.
+ * Resolve every feature for a model class: class default, then the harness policy (Lattice), then
+ * `harness.json`, then the environment. The legacy key `masking.enabled` counts as config.
  */
 export function resolveFeatures(
 	modelClass: ModelClass,
 	config: Partial<Record<FeatureName, boolean>>,
 	env: Partial<Record<FeatureName, boolean>>,
+	policy: Partial<Record<FeatureName, boolean>> = {},
 ): Record<FeatureName, boolean> {
-	return { ...CLASS_DEFAULTS[modelClass], ...config, ...env };
+	return { ...CLASS_DEFAULTS[modelClass], ...policy, ...config, ...env };
 }

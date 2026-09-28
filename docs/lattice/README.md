@@ -1,8 +1,25 @@
 # Lattice-1 in midnight.server
 
-This is an implementation of the Lattice-1 pseudo-RSI harness specification (`pseudo_rsi_harness_implementation.md`, 2026-09-28): a small fixed kernel, a typed and bounded program layer that is generated, tested, promoted, rolled back and compiled, and a second level that improves the search policy. It lives in `packages/coding-agent/src/lattice/`, has no dependencies beyond Node 24 (`node:sqlite`, `node:worker_threads`, `node:crypto`), and is not part of the `midnight.server` binary.
+This is an implementation of the Lattice-1 pseudo-RSI harness specification (`pseudo_rsi_harness_implementation.md`, 2026-09-28): a small fixed kernel, a typed and bounded program layer that is generated, tested, promoted, rolled back and compiled, and a second level that improves the search policy. It lives in `packages/coding-agent/src/lattice/` and has no dependencies beyond the runtime (`node:sqlite` under Node 24, `bun:sqlite` under Bun, `node:worker_threads`, `node:crypto`). Its store, statistics and bandit are the core of the `midnight.server` harness (next section); the skills, file effects and their CLI are standalone.
 
 Everything here is measured in a declared virtual-cost model on synthetic or local data. It is not evidence of general intelligence, and a passing test suite is not a proof of correctness (spec section 38.1).
+
+## In the harness: the policy loop
+
+The harness's feature switches and thresholds are a Lattice skill, `harness.policy`, stored as a `policy` record and improved by the same machinery as every skill, with the harness's own sessions as evidence and no command to run ([harness docs](../../packages/coding-agent/docs/harness.md#the-policy-loop), `harness-policy.ts`):
+
+| Lattice mechanism | In the harness |
+| --- | --- |
+| Human-authored seed (invariant 5) | Version 1 is the built-in defaults |
+| Typed mutation operators | One feature toggled for one model class, or one parameter stepped within fixed bounds |
+| Kernel-owned evaluator (invariants 2, 3) | The gate and the metric are kernel code; the drift and edit guards (`blockerExit`, `driftGuard`, `parseGate`) and `escalation` are outside the search space |
+| Development search, then release set consumed once | Randomized sessions per arm; each trial's evidence is reserved as a release set before it is judged, so only one session decides it |
+| Conjunctive release gate, alpha spending | Resolved rate higher at a one-sided bootstrap lower bound, or non-inferior and at least 10% cheaper; drift may not rise; alpha 0.2 / (k (k + 1)) for trial k |
+| Compare-and-swap promotion into a canary | The candidate becomes a canary for every session; confirmed after 40 good requests, rolled back when its resolved rate drops 10 points below its parent's |
+| UCB over operator families (section 9.4) | Which kinds of change to try next; rejected candidates are never retried |
+| Audit chain (invariant 8) | Seed, trials, promotions, rollbacks and confirmations are audit records |
+
+The evidence is a proxy: a live request has no hidden grader, so "resolved" means the checks passed or the model reported a blocker, without actionable drift. The harness opens the store only to assign a session and to record a settled request, so several sessions share it safely. The same store holds the standalone skills below; the idle scheduler leaves `harness.policy` alone.
 
 ## Running it
 

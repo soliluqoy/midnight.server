@@ -56,6 +56,15 @@ export interface HarnessConfig {
 	/** Checks found from the project's manifests when `checks` is empty (requires project trust). */
 	autoChecks: boolean;
 	escalation: EscalationSettings;
+	/** The verifier probe (feature `mutationProbe`, see mutation.ts). */
+	mutation: MutationSettings;
+}
+
+export interface MutationSettings {
+	/** Mutants run per request. */
+	maxMutants: number;
+	/** No new mutant starts after this many seconds. */
+	budgetSeconds: number;
 }
 
 /**
@@ -85,6 +94,7 @@ export function defaultHarnessConfig(): HarnessConfig {
 		features: {},
 		autoChecks: true,
 		escalation: { model: DEFAULT_ESCALATION_MODEL, maxCallsPerPrompt: 2, maxCallsPerSession: 6 },
+		mutation: { maxMutants: 6, budgetSeconds: 60 },
 	};
 }
 
@@ -141,9 +151,20 @@ function parseCheck(value: unknown, index: number): HarnessCheck {
 	};
 }
 
-/** Validate a parsed `harness.json` over the defaults. Unknown keys are rejected so typos surface. */
-export function parseHarnessConfig(value: unknown): HarnessConfig {
-	const config = defaultHarnessConfig();
+/**
+ * Validate a parsed `harness.json` over `base` (the defaults, or the defaults with the harness
+ * policy applied). Unknown keys are rejected so typos surface.
+ */
+export function parseHarnessConfig(value: unknown, base: HarnessConfig = defaultHarnessConfig()): HarnessConfig {
+	const config: HarnessConfig = {
+		...base,
+		checks: [...base.checks],
+		protect: [...base.protect],
+		masking: { ...base.masking },
+		features: { ...base.features },
+		escalation: { ...base.escalation },
+		mutation: { ...base.mutation },
+	};
 	if (!isRecord(value)) throw new HarnessConfigError("harness.json must contain a JSON object");
 	const known = new Set([
 		"enabled",
@@ -155,6 +176,7 @@ export function parseHarnessConfig(value: unknown): HarnessConfig {
 		"features",
 		"autoChecks",
 		"escalation",
+		"mutation",
 	]);
 	for (const key of Object.keys(value)) {
 		if (!known.has(key)) throw new HarnessConfigError(`Unknown key "${key}"`);
@@ -204,6 +226,17 @@ export function parseHarnessConfig(value: unknown): HarnessConfig {
 				"escalation.maxCallsPerSession",
 			);
 	}
+	if (value.mutation !== undefined) {
+		if (!isRecord(value.mutation)) throw new HarnessConfigError("mutation must be an object");
+		for (const key of Object.keys(value.mutation)) {
+			if (!["maxMutants", "budgetSeconds"].includes(key))
+				throw new HarnessConfigError(`Unknown key "mutation.${key}"`);
+		}
+		if (value.mutation.maxMutants !== undefined)
+			config.mutation.maxMutants = nonNegativeInteger(value.mutation.maxMutants, "mutation.maxMutants");
+		if (value.mutation.budgetSeconds !== undefined)
+			config.mutation.budgetSeconds = nonNegativeInteger(value.mutation.budgetSeconds, "mutation.budgetSeconds");
+	}
 	if (value.masking !== undefined) {
 		if (!isRecord(value.masking)) throw new HarnessConfigError("masking must be an object");
 		const masking = value.masking;
@@ -223,11 +256,15 @@ export function parseHarnessConfig(value: unknown): HarnessConfig {
  * off. The project file is read only when the project is trusted: its checks are commands
  * this process will run.
  */
-export function loadHarnessConfig(cwd: string, projectTrusted: boolean): HarnessConfig {
+export function loadHarnessConfig(
+	cwd: string,
+	projectTrusted: boolean,
+	base: HarnessConfig = defaultHarnessConfig(),
+): HarnessConfig {
 	const env = process.env.MIDNIGHT_SERVER_HARNESS;
-	if (env === "0" || env?.toLowerCase() === "false") return { ...defaultHarnessConfig(), enabled: false };
+	if (env === "0" || env?.toLowerCase() === "false") return { ...base, enabled: false };
 	const path = harnessConfigPath(cwd);
-	if (!projectTrusted || !existsSync(path)) return defaultHarnessConfig();
+	if (!projectTrusted || !existsSync(path)) return base;
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(readFileSync(path, "utf8"));
@@ -235,7 +272,7 @@ export function loadHarnessConfig(cwd: string, projectTrusted: boolean): Harness
 		throw new HarnessConfigError(`${path}: ${error instanceof Error ? error.message : String(error)}`);
 	}
 	try {
-		return parseHarnessConfig(parsed);
+		return parseHarnessConfig(parsed, base);
 	} catch (error) {
 		throw new HarnessConfigError(`${path}: ${error instanceof Error ? error.message : String(error)}`);
 	}

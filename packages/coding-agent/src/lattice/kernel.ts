@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type AbstractionReport, mineAbstractions } from "./abstraction.ts";
 import { type AdapterOutput, type GoalAdapter, templateAdapter } from "./adapter.ts";
@@ -44,6 +44,7 @@ import {
 } from "./effects.ts";
 import { evaluateSuite } from "./evaluator.ts";
 import { Governor, ucbSelect } from "./governor.ts";
+import { installHarnessPolicy } from "./harness-policy.ts";
 import { interpret, type RunResult } from "./interpreter.ts";
 import { type LibrarySkill, type Program, programHash, T, type Value } from "./ir.ts";
 import { BUDGETS, type ExecutionLimits, INSTALLATION_LIMITS, RETENTION, STATE_QUOTA_BYTES } from "./limits.ts";
@@ -54,6 +55,7 @@ import {
 	type PolicyCampaignReport,
 	policyEvaluatorHash,
 } from "./metapolicy.ts";
+import { defaultDataDir } from "./paths.ts";
 import { type Host, LatticeError, PRIMITIVE_LIBRARY_HASH } from "./primitives.ts";
 import { DEFAULT_POLICY, REFERENCE_POLICY, type SearchPolicy } from "./search.ts";
 import { KERNEL_VERSION, LatticeStore, newId } from "./store.ts";
@@ -121,12 +123,10 @@ function runFailureClass(code: string): FailureClass {
 
 /** Contracts whose input is a directory inventory observed by the broker. */
 const DIRECTORY_CONTRACTS = new Set(["inventory.report", "organize.plan", "duplicates.report"]);
+export { defaultDataDir };
+
 /** Contracts whose output is a list of effect intents. */
 const EFFECT_CONTRACTS = new Set(["organize.plan"]);
-
-export function defaultDataDir(): string {
-	return process.env.LATTICE_DATA || join(homedir(), ".midnight.server", "lattice");
-}
 
 export class Lattice implements KernelContext {
 	readonly store: LatticeStore;
@@ -230,6 +230,8 @@ export class Lattice implements KernelContext {
 		}
 		this.store.ensureContractRow(META_CONTRACT.id, META_CONTRACT.revision, policyEvaluatorHash());
 		this.store.installSeed(POLICY_SKILL, META_CONTRACT, DEFAULT_POLICY, "policy");
+		// The harness policy (harness/policy.ts): the seed is the built-in defaults, exported for the harness.
+		installHarnessPolicy(this.store);
 		if (!this.store.getMeta("capability_key")) this.store.setMeta("capability_key", randomBytes(32).toString("hex"));
 		quickSelfCheck();
 		const skills = this.store.skills().map((row) => row.skill_id);

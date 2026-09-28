@@ -14,6 +14,8 @@ Updated 2026-09-27. The plan is [HARNESS_REBUILD_PLAN.md](HARNESS_REBUILD_PLAN.m
 | Windows build and release | `scripts/bootstrap.ps1`, `build.ps1`, `package.ps1`, `verify-release.ps1`, `.github/workflows/midnight-windows.yml` | Scripts parse; not re-run since the local model was removed. |
 | Linux/macOS build and release | `scripts/build-unix.sh`, `package-unix.sh`, `verify-release.mjs`, `.github/workflows/midnight-release.yml` | Not re-run since the local model was removed. |
 | Eval runner and analysis | `scripts/harness-eval*.mjs`, `evals/` | Script unit tests pass. |
+| Harness divergence (rejected-attempt archive, repeat detection, reasoning boost when stuck) and verifier probe (mutants of changed lines against the tests) | `packages/coding-agent/src/harness/divergence.ts`, `mutation.ts` | Unit and suite tests pass. Not yet measured with a cloud model; the probe is off by default. |
+| Harness policy loop (Lattice-1 core: live trials of policy candidates, gate, canary, rollback) | `packages/coding-agent/src/lattice/harness-policy.ts`, `src/harness/policy.ts`, [docs](../packages/coding-agent/docs/harness.md#the-policy-loop) | Unit and suite tests pass under Node; the loop runs under Bun (`bun:sqlite`). No live trial has run yet. |
 | Lattice-1 pseudo-RSI harness (bounded IR, evaluator, versioned promotion and rollback, campaigns, library learning, synthesis, level-2 policy search) | `packages/coding-agent/src/lattice/`, [docs](lattice/README.md) | `test/lattice-*.test.ts` pass (83 tests, including crash injection by process death); `lattice selftest` reproduces the reference implementation's published numbers exactly. Effects are approved, journaled, reversible local moves; not part of the binary. |
 
 ## Removed (2026-09-27)

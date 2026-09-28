@@ -839,6 +839,30 @@ export class LatticeStore {
 		);
 	}
 
+	/** Evaluations of one suite, oldest first; optionally only those of one program or campaign. */
+	evaluationsOf(
+		suite: string,
+		filter: { programHash?: string; campaignId?: string } = {},
+	): { campaign_id: string | null; program_hash: string; metrics: unknown; verdict: string; created_at: number }[] {
+		const rows = this.all<{
+			campaign_id: string | null;
+			program_hash: string;
+			metrics_json: string;
+			verdict: string;
+			created_at: number;
+		}>(
+			`SELECT campaign_id, program_hash, metrics_json, verdict, created_at FROM evaluations
+			 WHERE suite = ? AND (? IS NULL OR program_hash = ?) AND (? IS NULL OR campaign_id = ?)
+			 ORDER BY evaluation_id`,
+			suite,
+			filter.programHash ?? null,
+			filter.programHash ?? null,
+			filter.campaignId ?? null,
+			filter.campaignId ?? null,
+		);
+		return rows.map(({ metrics_json, ...row }) => ({ ...row, metrics: JSON.parse(metrics_json) as unknown }));
+	}
+
 	saveCheckpoint(campaignId: string, state: unknown): void {
 		this.run(
 			"INSERT INTO checkpoints (campaign_id, state_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(campaign_id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at",
