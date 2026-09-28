@@ -2,13 +2,15 @@
 
 ## [Unreleased]
 
+## [0.87.1-midnight.4] - 2026-09-28
+
 ### Breaking Changes
 
 - The harness is now lean by default ([docs/harness.md](docs/harness.md)). `harness.json` keys `masking` and `mutation`, and the features `masking`, `inRunChecks`, `checkCache`, `checkpoints`, `adaptiveRepair`, `divergence`, `reasoningBoost`, `mutationProbe`, `contextPack`, `lookup` and `diagnostics`, are rejected as unknown. `MIDNIGHT_SERVER_HARNESS_LEARN` and `MIDNIGHT_SERVER_HARNESS_POLICY` are no longer read.
 
 ### Changed
 
-- Changed the harness to do nothing slow while the model works: checks run once when the model finishes, not after each batch of edits; the baseline for pre-existing type and lint failures runs only after a static check fails, on a temporary copy of the tree as the request found it, instead of at the start of every request (where the first edit waited up to 15 s for it); and a check the model already ran successfully after its last change is not run again. Detected full test suites are left to the model; configured ones still run.
+- Changed the harness to do nothing slow while the model works: checks run once when the model finishes, not after each batch of edits; the baseline for pre-existing type and lint failures runs only after a static check fails, on a temporary copy of the tree as the request found it, instead of at the start of every request (where the first edit waited up to 15 s for it); a check the model already ran successfully after its last change is not run again; and a session starts no background work, so a request that only reads or answers runs no git. Detected full test suites are left to the model; configured ones still run.
 - Changed the harness defaults: one repair round instead of two; `escalation` is off by default and opt-in through `harness.json` features. The fast/frontier model classes are gone: every model gets the same defaults.
 - Changed the environment facts (OS, shell, test command, checks) to a system-prompt section, so they stay in the cached prompt prefix instead of a per-request context message.
 - `/harness` and the harness telemetry show the time spent in each harness hook.
