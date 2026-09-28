@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed pasted and attached images being dropped with "could not be resized below the inline image size limit" when the release binary runs inside a midnight.server source checkout; the binary now loads its embedded image resize worker, which it also missed elsewhere, where resizing fell back to the main thread.
+
 ## [0.87.1-midnight.4] - 2026-09-28
 
 ### Breaking Changes
