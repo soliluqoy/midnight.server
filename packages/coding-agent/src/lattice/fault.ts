@@ -12,7 +12,9 @@ export type FaultPoint =
 	| "promote-after-commit"
 	| "snapshot-before-manifest"
 	| "effect-after-prepare"
-	| "effect-after-rename";
+	| "effect-after-rename"
+	| "pause-before-commit"
+	| "pause-after-commit";
 
 export function faultPoint(name: FaultPoint): void {
 	if (process.env.LATTICE_FAULT === name) process.exit(FAULT_EXIT_CODE);

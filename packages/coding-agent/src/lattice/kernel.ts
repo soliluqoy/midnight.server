@@ -137,13 +137,16 @@ export class Lattice implements KernelContext {
 	private libraryCache: Map<string, LibrarySkill> | undefined;
 	/** Effects a crash had left half-done, resolved when the store was opened. */
 	readonly recovered: ReconcileEntry[];
+	/** Campaigns a dead process had left running, resolved when the store was opened. */
+	readonly interruptedCampaigns: ReturnType<LatticeStore["reconcileCampaigns"]>;
 
 	private constructor(store: LatticeStore, adapter: GoalAdapter | undefined) {
 		this.store = store;
 		this.governor = new Governor(store);
 		this.adapter = adapter;
-		// Startup recovery (section 19.3): interrupted effects are reconciled before any new work.
+		// Startup recovery (section 19.3): interrupted effects and campaigns are reconciled before any new work.
 		this.recovered = reconcileEffects(store);
+		this.interruptedCampaigns = store.reconcileCampaigns();
 	}
 
 	static open(
@@ -1152,6 +1155,7 @@ export class Lattice implements KernelContext {
 			adapter: this.adapter?.id ?? "none",
 			quota: this.quota(),
 			effects_reconciled_at_open: this.recovered,
+			campaigns_reconciled_at_open: this.interruptedCampaigns,
 			plans_needing_attention: this.store
 				.plans()
 				.filter((plan) => plan.status === "unresolved" || plan.status === "partial")

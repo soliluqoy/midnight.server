@@ -33,6 +33,13 @@ switch (action) {
 	case "apply":
 		lattice.applyPlan(argument);
 		break;
+	case "pause": {
+		// Interactive work arrives one second into the search: the campaign pauses.
+		const controller = new AbortController();
+		setTimeout(() => controller.abort(), 1_000);
+		await lattice.improve("inventory.report", { explore: true, isolate: true, signal: controller.signal });
+		break;
+	}
 	default:
 		throw new Error(`unknown action ${action}`);
 }

@@ -691,7 +691,13 @@ export class LatticeStore {
 			canonical(args.record),
 			Date.now(),
 		);
+		this.markCampaignOwner(args.campaignId);
 		this.audit("campaign_started", args.skillId, { campaign: args.campaignId, parent: args.parentVersion });
+	}
+
+	/** The process running a campaign, so a later open can tell a live campaign from a dead one. */
+	markCampaignOwner(campaignId: string): void {
+		this.setMeta(`campaign_owner:${campaignId}`, String(process.pid));
 	}
 
 	finishCampaign(campaignId: string, status: string, record: unknown): void {
@@ -701,6 +707,61 @@ export class LatticeStore {
 			canonical(record),
 			campaignId,
 		);
+		this.run("DELETE FROM meta WHERE key = ?", `campaign_owner:${campaignId}`);
+	}
+
+	/**
+	 * Pause for interactive work (spec section 42.5): the checkpoint and the `paused` status commit
+	 * together, so a crash during cancellation leaves the campaign either running (and later
+	 * reconciled) or paused with a checkpoint it can resume from, never paused without one.
+	 */
+	pauseCampaign(campaignId: string, skillId: string, state: unknown, record: unknown, detail: unknown): void {
+		this.transaction(() => {
+			this.saveCheckpoint(campaignId, state);
+			this.run(
+				"UPDATE campaigns SET status = 'paused', record_json = ? WHERE campaign_id = ?",
+				canonical(record),
+				campaignId,
+			);
+			this.run("DELETE FROM meta WHERE key = ?", `campaign_owner:${campaignId}`);
+			this.audit("campaign_paused", skillId, detail);
+			faultPoint("pause-before-commit");
+		});
+		faultPoint("pause-after-commit");
+	}
+
+	/**
+	 * Campaigns left `running` by a process that no longer exists (spec section 46.2). One with a
+	 * search checkpoint becomes `paused` and can resume from it; any other is `aborted`. Neither
+	 * promotes anything: promotion is a separate compare-and-swap that either committed or did not.
+	 * A campaign whose owner is still alive is left alone. Process IDs can be reused, so a crashed
+	 * campaign may stay `running` until its old ID is free; it never becomes resolved wrongly.
+	 */
+	reconcileCampaigns(): { campaign_id: string; resolution: "paused" | "aborted" }[] {
+		const out: { campaign_id: string; resolution: "paused" | "aborted" }[] = [];
+		const running = this.all<{ campaign_id: string; skill_id: string }>(
+			"SELECT campaign_id, skill_id FROM campaigns WHERE status = 'running'",
+		);
+		for (const campaign of running) {
+			const owner = Number(this.getMeta(`campaign_owner:${campaign.campaign_id}`));
+			if (Number.isInteger(owner) && owner > 0 && processAlive(owner)) continue;
+			const checkpoint = this.loadCheckpoint<{ stage?: string }>(campaign.campaign_id);
+			const resolution = checkpoint?.stage === "search" ? "paused" : "aborted";
+			this.transaction(() => {
+				this.run("UPDATE campaigns SET status = ? WHERE campaign_id = ?", resolution, campaign.campaign_id);
+				this.run("DELETE FROM meta WHERE key = ?", `campaign_owner:${campaign.campaign_id}`);
+				this.audit("campaign_interrupted", campaign.skill_id, {
+					campaign: campaign.campaign_id,
+					resolution,
+					reason:
+						resolution === "paused"
+							? "its process ended; resumable from the last search checkpoint"
+							: "its process ended before a resumable checkpoint",
+				});
+			});
+			out.push({ campaign_id: campaign.campaign_id, resolution });
+		}
+		return out;
 	}
 
 	campaign(
@@ -1358,6 +1419,16 @@ export interface SnapshotManifest {
 	policy_sha256: string;
 	audit_root: string;
 	artifacts: string[];
+}
+
+/** Signal 0 checks existence only; EPERM means the process exists under another user. */
+function processAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
 }
 
 function recomputeHash(row: { kind: string; canonical_ir: string; primitives_hash: string }): string | undefined {

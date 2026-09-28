@@ -226,8 +226,10 @@ export async function runCampaign(kernel: KernelContext, options: CampaignOption
 	}
 
 	const allocation = governor.allocate("background");
-	if (paused) store.setCampaignStatus(campaignId, "running", "resumed from checkpoint");
-	else {
+	if (paused) {
+		store.setCampaignStatus(campaignId, "running", "resumed from checkpoint");
+		store.markCampaignOwner(campaignId);
+	} else {
 		store.startCampaign({
 			campaignId,
 			skillId,
@@ -269,14 +271,12 @@ export async function runCampaign(kernel: KernelContext, options: CampaignOption
 				seed,
 				policy,
 			};
-			store.saveCheckpoint(campaignId, state);
-			report.status = "paused";
-			store.finishCampaign(campaignId, "paused", record);
-			store.audit("campaign_paused", skillId, {
+			store.pauseCampaign(campaignId, skillId, state, record, {
 				campaign: campaignId,
 				evaluations: search.evaluations,
 				best_cost: search.bestCost,
 			});
+			report.status = "paused";
 			return report;
 		}
 		record.candidate_count = search.generated;

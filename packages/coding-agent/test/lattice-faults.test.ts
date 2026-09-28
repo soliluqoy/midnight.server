@@ -122,4 +122,67 @@ describe("lattice crash injection (milestone M2)", () => {
 			}
 		});
 	}
+	describe("cancellation", () => {
+		const campaigns = (lattice: Lattice) => lattice.store.campaigns("inventory.report");
+
+		it("a crash before the pause commits leaves a campaign that is resolved as aborted on open", () => {
+			crash("pause-before-commit", "pause");
+			const lattice = Lattice.open(data);
+			try {
+				const [campaign] = campaigns(lattice);
+				expect(lattice.interruptedCampaigns).toEqual([
+					{ campaign_id: campaign.campaign_id, resolution: "aborted" },
+				]);
+				expect(campaign.status).toBe("aborted");
+				expect(lattice.store.loadCheckpoint(campaign.campaign_id)).toBeUndefined();
+				expect(lattice.store.auditLog("inventory.report", 1)[0].kind).toBe("campaign_interrupted");
+				expect(lattice.store.head("inventory.report")!.version.seed).toBe(1);
+				expect(lattice.store.verify().ok).toBe(true);
+			} finally {
+				lattice.close();
+			}
+		});
+
+		it("a crash right after the pause commits leaves a paused campaign that resumes", async () => {
+			crash("pause-after-commit", "pause");
+			const lattice = Lattice.open(data);
+			try {
+				expect(lattice.interruptedCampaigns).toEqual([]);
+				const [campaign] = campaigns(lattice);
+				expect(campaign.status).toBe("paused");
+				const resumed = await lattice.improve("inventory.report", {
+					explore: true,
+					isolate: true,
+					resume: campaign.campaign_id,
+				});
+				expect(["promoted", "rejected", "incomplete", "no_candidate"]).toContain(resumed.status);
+				expect(lattice.store.verify().ok).toBe(true);
+			} finally {
+				lattice.close();
+			}
+		}, 120_000);
+
+		it("a resumed campaign whose process died returns to paused; one with a live owner is left alone", () => {
+			crash("pause-after-commit", "pause");
+			const dead = spawnSync(process.execPath, ["-e", "process.pid"]).pid!;
+			let lattice = Lattice.open(data);
+			const [campaign] = campaigns(lattice);
+			lattice.store.setCampaignStatus(campaign.campaign_id, "running", "resumed from checkpoint");
+			lattice.store.setMeta(`campaign_owner:${campaign.campaign_id}`, String(process.pid));
+			lattice.close();
+			lattice = Lattice.open(data);
+			expect(lattice.interruptedCampaigns).toEqual([]);
+			expect(campaigns(lattice)[0].status).toBe("running");
+			lattice.store.setMeta(`campaign_owner:${campaign.campaign_id}`, String(dead));
+			lattice.close();
+			lattice = Lattice.open(data);
+			try {
+				expect(lattice.interruptedCampaigns).toEqual([{ campaign_id: campaign.campaign_id, resolution: "paused" }]);
+				expect(campaigns(lattice)[0].status).toBe("paused");
+				expect(lattice.store.verify().ok).toBe(true);
+			} finally {
+				lattice.close();
+			}
+		});
+	});
 });
