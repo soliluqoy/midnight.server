@@ -86,8 +86,31 @@ export interface GoalResult {
 	questions?: string[];
 	error?: string;
 	adapter?: AdapterOutput;
+	/** Why the goal did not complete (spec section 19.1); absent when it completed. */
+	failure_class?: FailureClass;
 	/** For effect contracts: the proposed plan. Nothing changes until `applyPlan(plan_id)`. */
 	plan?: { plan_id: string; plan_hash: string; moves: number; expires_at: string };
+}
+
+/**
+ * Failure classes (spec section 19.1), plus `invalid_input` for input that is well specified but
+ * outside the contract's schema or bounds.
+ */
+export type FailureClass =
+	| "input_ambiguity"
+	| "invalid_input"
+	| "missing_capability"
+	| "permission_denial"
+	| "deterministic_skill_bug"
+	| "resource_exhaustion"
+	| "external_dependency_failure";
+
+/** Class of a runtime error raised while a skill ran. */
+function runFailureClass(code: string): FailureClass {
+	if (code === "fuel" || code === "steps" || code === "bound" || code === "deadline") return "resource_exhaustion";
+	if (code === "effect") return "permission_denial";
+	if (code === "host") return "external_dependency_failure";
+	return "deterministic_skill_bug";
 }
 
 /** Contracts whose input is a directory inventory observed by the broker. */
@@ -247,6 +270,13 @@ export class Lattice implements KernelContext {
 		const done = (result: Omit<GoalResult, "goal_id" | "runtime_ms">): GoalResult => ({
 			goal_id: goalId,
 			runtime_ms: Math.round((performance.now() - started) * 1000) / 1000,
+			// Defaults by status; sites with a more specific cause set it themselves.
+			failure_class:
+				result.status === "needs_clarification"
+					? "input_ambiguity"
+					: result.status === "declined"
+						? "missing_capability"
+						: undefined,
 			...result,
 		});
 		let adapterOutput: AdapterOutput | undefined;
@@ -284,7 +314,8 @@ export class Lattice implements KernelContext {
 			}
 		}
 		const refusal = this.quotaRefusal();
-		if (refusal) return done({ status: "declined", summary: {}, evidence: [refusal] });
+		if (refusal)
+			return done({ status: "declined", summary: {}, evidence: [refusal], failure_class: "resource_exhaustion" });
 		if (req.constraints?.network === "allow") {
 			return done({
 				status: "declined",
@@ -337,7 +368,21 @@ export class Lattice implements KernelContext {
 					);
 				}
 			} catch (error) {
-				return done({ status: "failed", summary: {}, evidence, error: (error as Error).message });
+				const code = (error as NodeJS.ErrnoException).code ?? (error as { code?: string }).code;
+				return done({
+					status: "failed",
+					summary: {},
+					evidence,
+					error: (error as Error).message,
+					failure_class:
+						code === "EACCES" || code === "EPERM" || code === "effect"
+							? "permission_denial"
+							: code === "bound"
+								? "resource_exhaustion"
+								: code === "ENOENT" || code === "ENOTDIR"
+									? "invalid_input"
+									: "external_dependency_failure",
+				});
 			}
 		}
 		if (raw === undefined)
@@ -346,7 +391,13 @@ export class Lattice implements KernelContext {
 		try {
 			input = contract.validateInput(raw);
 		} catch (error) {
-			return done({ status: "failed", summary: {}, evidence, error: `invalid input: ${(error as Error).message}` });
+			return done({
+				status: "failed",
+				summary: {},
+				evidence,
+				error: `invalid input: ${(error as Error).message}`,
+				failure_class: "invalid_input",
+			});
 		}
 		const inputHash = this.store.putArtifact(
 			Buffer.from(canonical(input)),
@@ -415,6 +466,7 @@ export class Lattice implements KernelContext {
 					evidence,
 					skill_used: { skill_id: skillId, version, engine },
 					error: `${run.error.code}: ${run.error.message}`,
+					failure_class: runFailureClass(run.error.code),
 				});
 			}
 			output = run.value;
@@ -479,6 +531,7 @@ export class Lattice implements KernelContext {
 				evidence,
 				skill_used: { skill_id: skillId, version, engine },
 				error: `verification failed: ${failures.join("; ")}`,
+				failure_class: "deterministic_skill_bug",
 			});
 		}
 

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { canonical, digest, sha256 } from "./canonical.ts";
 import { type Contract, evaluatorHash } from "./contracts.ts";
+import { faultPoint } from "./fault.ts";
 import { type LibrarySkill, librarySkillHash, type Program, programHash } from "./ir.ts";
 import { PRIMITIVE_LIBRARY_HASH } from "./primitives.ts";
 
@@ -524,7 +525,7 @@ export class LatticeStore {
 		report: unknown;
 	}): number {
 		this.requireUnpaused();
-		return this.transaction(() => {
+		const promoted = this.transaction(() => {
 			const head = this.get<{ version_id: number; promotion_enabled: number }>(
 				"SELECT version_id, promotion_enabled FROM active_heads_v1 WHERE skill_id = ?",
 				args.skillId,
@@ -562,8 +563,11 @@ export class LatticeStore {
 				program_hash: hash,
 				campaign: args.campaignId,
 			});
+			faultPoint("promote-before-commit");
 			return versionId;
 		});
+		faultPoint("promote-after-commit");
+		return promoted;
 	}
 
 	/** A canary that kept agreeing with its parent becomes the champion; the parent is retired but kept. */
@@ -1073,6 +1077,7 @@ export class LatticeStore {
 			}
 			renameSync(temp, path);
 		}
+		faultPoint("artifact-before-row");
 		// `created_at` is refreshed on every reference, so retention ages bytes by their last use.
 		this.run(
 			"INSERT INTO artifacts (hash, mime, size, producer, retention, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at",
@@ -1258,6 +1263,7 @@ export class LatticeStore {
 			audit_root: this.auditRoot(),
 			artifacts: this.all<{ hash: string }>("SELECT hash FROM artifacts ORDER BY hash").map((row) => row.hash),
 		};
+		faultPoint("snapshot-before-manifest");
 		writeFileSync(join(dir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 		this.audit("snapshot_created", snapshotId, {
 			database_sha256: manifest.database_sha256,

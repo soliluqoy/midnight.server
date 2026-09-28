@@ -2,6 +2,7 @@ import { lstatSync, mkdirSync, readdirSync, renameSync, rmdirSync } from "node:f
 import { dirname } from "node:path";
 import { type Capability, type FileIdentity, observeIdentity, resolveInside, verifyCapability } from "./broker.ts";
 import { canonical, digest } from "./canonical.ts";
+import { faultPoint } from "./fault.ts";
 import { LatticeError } from "./primitives.ts";
 import type { EffectPlanRow, LatticeStore } from "./store.ts";
 
@@ -186,6 +187,7 @@ export function applyPlan(
 		}
 		store.journalSet(planId, index, intent.idempotency_key, "prepared", { intent });
 		hooks.afterPrepared?.(index);
+		faultPoint("effect-after-prepare");
 		const fail = (reason: string, created: string[] = []) => {
 			const removed = removeIfEmpty(plan.root, [...created].reverse());
 			store.journalSet(planId, index, intent.idempotency_key, "failed", { intent, reason, removed_dirs: removed });
@@ -236,6 +238,7 @@ export function applyPlan(
 			break;
 		}
 		hooks.afterRename?.(index);
+		faultPoint("effect-after-rename");
 		const moved = observeIdentity(destination);
 		// A rename keeps size, modification time and inode, so the full identity must match.
 		if (!sameFile(moved, intent.expected) || observeIdentity(source)) {

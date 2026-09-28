@@ -9,6 +9,7 @@ import { inventoryReport, recordFixture, recordsFilter, recordsFilterProgram } f
 import { IdleScheduler } from "../src/lattice/idle.ts";
 import type { Value } from "../src/lattice/ir.ts";
 import { CANARY_RUNS, Lattice, selftest } from "../src/lattice/kernel.ts";
+import { PyRandom } from "../src/lattice/random.ts";
 import { searchImprovement } from "../src/lattice/search.ts";
 import { INBOX_LIMIT, KernelLoop, serve } from "../src/lattice/server.ts";
 import { runIsolated } from "../src/lattice/worker.ts";
@@ -98,6 +99,59 @@ function scanEntries(): unknown {
 	];
 	return entries;
 }
+
+describe("lattice goal fuzzing (spec section 21.4)", () => {
+	it("answers every malformed goal with a structured result and a failure class, never an exception", async () => {
+		const rng = new PyRandom(2026);
+		const value = (depth: number): unknown => {
+			switch (rng.below(depth > 3 ? 5 : 8)) {
+				case 0:
+					return null;
+				case 1:
+					return rng.random() < 0.5;
+				case 2:
+					return rng.choice([0, -1, 1.5, 1e300, Number.MAX_SAFE_INTEGER, 2 ** 60]);
+				case 3:
+					return rng.choice(["", "x", "ERROR", "../..", "\u0000", "é".repeat(300)]);
+				case 4:
+					return [];
+				case 5:
+					return Array.from({ length: rng.below(4) }, () => value(depth + 1));
+				case 6:
+					return { id: value(depth + 1), text: value(depth + 1), path: value(depth + 1), kind: value(depth + 1) };
+				default:
+					return Array.from({ length: rng.below(3) }, () => ({
+						id: rng.below(5),
+						text: "x",
+						size: value(depth + 1),
+						hidden: false,
+						ext: "log",
+						age: 20,
+					}));
+			}
+		};
+		const contracts = ["records.filter", "inventory.report", "organize.plan", "nope", undefined];
+		const classes = new Set<string>();
+		for (let i = 0; i < 300; i++) {
+			const request = {
+				contract_id: rng.choice(contracts),
+				input: rng.random() < 0.8 ? value(0) : undefined,
+				directory: rng.random() < 0.15 ? join(dir, `missing-${i}`) : undefined,
+				text: rng.random() < 0.2 ? rng.choice(["", "inventory", "filter records in x.json", "\u0000"]) : undefined,
+			};
+			const result = await lattice.submitGoal(request as never);
+			expect(["completed", "awaiting_approval", "failed", "needs_clarification", "declined"]).toContain(
+				result.status,
+			);
+			if (result.status !== "completed" && result.status !== "awaiting_approval") {
+				expect(result.failure_class, JSON.stringify(result)).toBeDefined();
+				classes.add(result.failure_class!);
+			}
+		}
+		expect([...classes].sort()).toEqual(["input_ambiguity", "invalid_input", "missing_capability"]);
+		expect(lattice.store.verify().ok).toBe(true);
+	});
+});
 
 describe("lattice canary lifecycle", () => {
 	it("confirms a canary as champion after agreeing live runs", async () => {
@@ -360,6 +414,18 @@ describe("lattice event loop and IPC", () => {
 				(await call("GET", "/v1/skills", { authorization: `Bearer ${token}`, origin: "https://evil.example" }))
 					.status,
 			).toBe(403);
+			const malformed = await new Promise<number>((resolve, reject) => {
+				const req = request(
+					{ socketPath: path, method: "POST", path: "/v1/goals", headers: { authorization: `Bearer ${token}` } },
+					(res) => {
+						res.resume();
+						resolve(res.statusCode ?? 0);
+					},
+				);
+				req.on("error", reject);
+				req.end("{not json");
+			});
+			expect(malformed).toBe(400);
 			const goal = await call(
 				"POST",
 				"/v1/goals",
