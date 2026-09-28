@@ -44,6 +44,7 @@
 		"shrinkwrap:coding-agent": "node scripts/generate-coding-agent-shrinkwrap.mjs",
 		"install-lock:coding-agent": "node scripts/generate-coding-agent-install-lock.mjs",
 		"release:notes": "node scripts/midnight-release-notes.mjs",
+		"lattice": "node packages/coding-agent/src/lattice/cli.ts",
 		"prepare": "husky"
 	},
 	"devDependencies": {

@@ -1,0 +1,107 @@
+# Lattice-1 in midnight.server
+
+This is an implementation of the Lattice-1 pseudo-RSI harness specification (`pseudo_rsi_harness_implementation.md`, 2026-09-28): a small fixed kernel, a typed and bounded program layer that is generated, tested, promoted, rolled back and compiled, and a second level that improves the search policy. It lives in `packages/coding-agent/src/lattice/`, has no dependencies beyond Node 24 (`node:sqlite`, `node:worker_threads`, `node:crypto`), and is not part of the `midnight.server` binary.
+
+Everything here is measured in a declared virtual-cost model on synthetic or local data. It is not evidence of general intelligence, and a passing test suite is not a proof of correctness (spec section 38.1).
+
+## Running it
+
+```bash
+node packages/coding-agent/src/lattice/cli.ts selftest                       # end-to-end, temporary store
+node packages/coding-agent/src/lattice/cli.ts init                           # store under $LATTICE_DATA or ~/.midnight.server/lattice
+node packages/coding-agent/src/lattice/cli.ts goal "inventory ./some/dir"    # template adapter
+node packages/coding-agent/src/lattice/cli.ts goal --contract records.filter --input records.json
+node packages/coding-agent/src/lattice/cli.ts improve skill inventory.report # one budgeted campaign
+node packages/coding-agent/src/lattice/cli.ts explain skill inventory.report # evidence behind the active version
+node packages/coding-agent/src/lattice/cli.ts improve policy                 # level 2 (research budget)
+node packages/coding-agent/src/lattice/cli.ts help                           # all commands
+```
+
+`npm run lattice -- <command>` is the same from the repository root. Every command prints one JSON document.
+
+The reference program from spec section 27.2 is kept verbatim in [`lattice_reference.py`](lattice_reference.py) (milestone M0). Its self-test and campaign were run once while extracting it; the TypeScript port reproduces its published numbers exactly (below), which is how the port is cross-checked.
+
+## Layout
+
+| Module | Spec | Responsibility |
+| --- | --- | --- |
+| `canonical.ts`, `random.ts` | 37.3, 27.2 | Canonical JSON and SHA-256; CPython-compatible Mersenne Twister, so fixtures and bootstrap resamples match the reference draw for draw |
+| `ir.ts`, `primitives.ts`, `typecheck.ts` | 8, 39.1-39.3 | Bounded expression IR (no recursion, every loop bounded), primitives with effect classes and pre-charged virtual costs, and a checker inferring type, effects, totality and upper bounds per node |
+| `interpreter.ts` | 39.5, 39.7 | Explicit-stack interpreter: fuel debited before each primitive, step, iteration, call-depth, deadline and output-size bounds, typed errors |
+| `compile.ts` | 21.3, 42.6 | Bytecode with validated operand tables, a VM with identical fuel accounting, differential testing |
+| `contracts.ts` | 10.1, 37.4, 38.2 | Kernel-owned contracts: oracle, postconditions, input validation, seed program, development/regression/release/shifted fixture families, fuzzers |
+| `evaluator.ts` | 10, 38 | Judging against oracle and postconditions, paired gains, percentile bootstrap, alpha spending, the conjunctive release gate |
+| `mutate.ts`, `search.ts` | 11, 39.4, 40.3-40.6 | Mutation operators with checked preconditions, hill climbing (reference) and beam search with screening, archive, diversity, counterexample search and shrinking |
+| `campaign.ts`, `worker.ts` | 12, 29.3, 38.3, 4.1 | The improvement protocol A-H; development search in an isolated worker thread |
+| `abstraction.ts`, `synthesis.ts` | 40.2, 40.7, 10.6 | Library learning by anti-unification; typed bottom-up enumeration with counterexample-guided rounds |
+| `metapolicy.ts` | 41 | Level 2: search policies as data, meta-evaluation over task families, promotion on fresh families |
+| `store.ts` | 7, 15, 19, 44 | SQLite (WAL, foreign keys, full sync), versions and heads, compare-and-swap promotion, rollback, release consumption, audit chain, integrity checks, recovery, snapshots, content-addressed artifacts, GC, ledger |
+| `governor.ts` | 9.4, 14, 42.2-42.4 | Budget tiers, daily CPU ledger with reservation, economic gate, UCB selection |
+| `broker.ts` | 13, 43 | Read-only filesystem capabilities (signed, expiring, episode-bound), inventory scans, a bounded `readText` host |
+| `adapter.ts` | 16, 37.2 | Optional goal adapter: exact task templates, output untrusted |
+| `kernel.ts` | 2, 5, 6, 29 | The hot path (cache, active skill, engine choice, verification, canary), operations, explanations, self-test |
+| `server.ts`, `cli.ts` | 5.2, 17, 44.6-44.8 | Bounded two-lane event loop; local API on a named pipe or Unix socket; the CLI |
+
+## Kernel invariants (spec section 5)
+
+| # | Invariant | Mechanism | Test |
+| --- | --- | --- | --- |
+| 1 | No writes outside declared capabilities | No write primitive exists; `read_text` needs a granted effect and a signed capability; paths resolve inside the root, links are not followed | `lattice-store` broker test, static admission tests |
+| 2, 3 | Candidates cannot alter the evaluator or protected metrics | Candidates are IR data; oracles, postconditions and gates are kernel code; the evaluator hash is stored per contract revision and a silent change is refused | `rejects a changed contract that did not bump its revision` |
+| 4 | No self-granted permissions | Effects are inferred, not declared by the candidate; manifests and policies are clamped by installation limits | static admission, `clampPolicy` test |
+| 5, 6 | Parent or signed seed; rollback target | `CHECK (seed = 1 OR parent_version IS NOT NULL)`, foreign keys to the parent; rollback is a pointer change | rollback tests |
+| 7 | Every execution is budgeted | Fuel, steps, items, depth, output bytes, deadlines; worker heap caps; campaign CPU bound; daily ledger | interpreter and governor tests |
+| 8 | Append-only audit chain | `record = H(previous, time, kind, subject, payload)`, verified on open | audit tampering test |
+| 9 | Failed promotion leaves the old version active | Promotion is one `BEGIN IMMEDIATE` transaction; the gate runs first | crash-after-reservation test |
+| 10 | Integrity failure stops promotion | A failed check on open sets `paused`; `promote` refuses | audit tampering test |
+| 11 | Hard constraints outrank score | The release gate is a conjunction; no gain compensates a failed condition | release gate test |
+| 12 | May decline when under-specified | Missing contract, input or directory yields `needs_clarification`; unavailable capabilities yield `declined` | clarification tests |
+
+## Definition of done (spec section 34)
+
+| Requirement | How |
+| --- | --- |
+| Receive a structured goal locally | `lattice goal --contract ...`, `POST /v1/goals` on the local pipe |
+| Execute a manually authored skill safely | Human-authored seeds, type-checked and run under fuel |
+| Record an episode | `episodes` table; inputs and reports stored as content-addressed artifacts |
+| Evaluate success and cost | Oracle and postconditions; virtual units per run |
+| Synthesize a candidate mutation | Seven mutation operators; bottom-up enumeration for example-defined tasks |
+| Reject invalid or unsafe candidates | Static admission, then development and regression cases, then counterexample search |
+| Test on regression and held-out suites | Development, regression, release and shifted families; release sets consumed once |
+| Promote a verified improvement | Frozen plan, reserved release set, conjunctive gate, compare-and-swap into canary |
+| Roll back a failed promotion | Automatic rollback when a canary fails at runtime (the goal is then answered by the restored parent) or disagrees with its parent and the oracle rejects it; `lattice rollback` |
+| Extract a reusable subskill | `lattice mine`: anti-unified abstractions with verified rewrites |
+| Compile a stable skill | `lattice compile`: bytecode accepted only after a differential test; the runtime picks an engine by measured speed |
+| Continue without optional adapters | `--no-adapter`; structured goals bypass the adapter (tested) |
+| Explain why the active version was chosen | `lattice explain skill`, generated only from stored evidence |
+
+## Measured results
+
+All from this repository on Windows 10, Node 24.21. Costs are virtual units (declared primitive charges), not CPU time.
+
+**Reference reproduction (M0, M1).** The TypeScript campaign over the same fixtures gives the published reference results exactly: 27 development evaluations, winning order `is_log, old_enough, size_positive, visible, text_hit`, release units 594,668 to 59,961, mean paired reduction 0.8993017556599967, bootstrap lower bound 0.8918515609205374, shifted ratio 0.3438064992314412. The conventional cost/selectivity ordering reaches the same result; the harness reproduces an ordinary optimization, as the spec notes.
+
+**Inventory report (a real read-only workload).** Starting from a deliberately naive seed (classification repeated per category, twice), one isolated campaign within the 10 CPU-second bound found: hoisting the repeated filter into a `let`, moving the most common extension class first, and testing `kind` before classifying. Release set 001: 3,315,209 to 1,478,586 units, mean reduction 55.4% (lower bound 55.1%, alpha 0.01), shifted-family cost ratio 0.479, shadowed on 5 live snapshots of repository directories, promoted to canary, then champion after 5 agreeing live runs. The compiled form of the result passed the differential test on 17 cases and ran 1.6 times faster than the interpreter in wall time.
+
+**Library learning and synthesis (M7).** From three accepted programs of the form `and(ext = C1, age >= C2, not hidden)`, mining produced one abstraction with three parameters (gain 8 nodes, 18 verified cases). On four held-out tasks with new constants and a budget of 20,000 enumerated candidates: 0 of 4 solved without the library, 4 of 4 with it (at most 758 candidates each, all held-out examples reproduced). Without the library the same size-6 predicate needs 567,813 candidates.
+
+**Level 2 (M8, bounded).** Policies are scored by the area under the best-valid-cost curve over evaluator work (case runs weighted by input size), with identical budgets and seeds, against the parent and a random-search baseline. A default-settings campaign selected a policy that disables `split_filter` (selection score 0.112 vs 0.099; random 0.099), then confirmed it on a fresh task family (paired lower bound +0.0019, final quality not worse) and promoted it. The effect is small; this is an existence check of the mechanism, not a claim of compounding improvement (spec section 41.5).
+
+## Deviations from the specification
+
+1. **TypeScript, not C++.** The spec chooses C++20 for a standalone native runtime. Here the runtime sits in a TypeScript monorepo; Node 24 supplies SQLite, worker threads and crypto without new dependencies. The C ABI (section 28.4) and the sanitizer matrix (section 28.6) do not apply.
+2. **Isolation is a worker thread, not WebAssembly or a process sandbox.** Candidates are IR interpreted by kernel code, so there is no arbitrary code to contain; the worker bounds memory (heap cap) and time, and receives no store, policy file or release data. It is not a privilege boundary (section 44.9). Arbitrary plugins are not supported.
+3. **CPU budgets are enforced through wall time** in single-threaded, CPU-bound phases (the worker's search, level-2 scoring); the ledger reconciles measured process CPU afterwards.
+4. **Read-only effects only.** The broker scans and reads; there are no moves or writes to user data, so the prepared/committed effect journal and compensation (sections 43.5-43.7, milestone M9) are not implemented. Reports go to the kernel's own artifact store.
+5. **Live verification uses postconditions and schemas; the oracle runs only in evaluation**, in campaign shadowing, and to adjudicate a canary disagreement. Running the full oracle on every live task would make it the product.
+6. **The local API** is HTTP over a named pipe or Unix socket with a per-installation token; no TCP port is opened. There is no idle scheduler that starts campaigns on its own; campaigns start from the CLI or the API.
+7. **Timing claims** use the virtual cost model; wall-time comparisons (section 38.6) are limited to the interpreter/bytecode measurement.
+8. **Planning tiers (section 9.1).** The hot path uses tier 0 (exact cache) and tier 1 (the active skill, interpreted or compiled). Tiers 4 (mutation) and 5 (synthesis) run only in explicit campaigns and `synthesize`. Tier 2 (composing skills), tier 3 (parameter search) and tier 6 (model proposals) are not implemented.
+9. **Semantic memory** holds only campaign cost profiles (with provenance and expiry); there is no episode clustering or fact extraction beyond that.
+
+## Known limitations
+
+- Release data comes from synthetic generator families; a shifted family changes one distribution. Real episodes feed development and the shadow phase, not release.
+- The audit chain detects accidental and naive edits; anyone who can rewrite the database can recompute it (section 44.5).
+- The mutation set and the grammar are small; the system cannot discover operations its primitives cannot express (section 37.1).
+- Level-2 gains are small and measured on few task families.

@@ -14,6 +14,7 @@ Updated 2026-09-27. The plan is [HARNESS_REBUILD_PLAN.md](HARNESS_REBUILD_PLAN.m
 | Windows build and release | `scripts/bootstrap.ps1`, `build.ps1`, `package.ps1`, `verify-release.ps1`, `.github/workflows/midnight-windows.yml` | Scripts parse; not re-run since the local model was removed. |
 | Linux/macOS build and release | `scripts/build-unix.sh`, `package-unix.sh`, `verify-release.mjs`, `.github/workflows/midnight-release.yml` | Not re-run since the local model was removed. |
 | Eval runner and analysis | `scripts/harness-eval*.mjs`, `evals/` | Script unit tests pass. |
+| Lattice-1 pseudo-RSI harness (bounded IR, evaluator, versioned promotion and rollback, campaigns, library learning, synthesis, level-2 policy search) | `packages/coding-agent/src/lattice/`, [docs](lattice/README.md) | `test/lattice-*.test.ts` pass (60 tests); `lattice selftest` reproduces the reference implementation's published numbers exactly. Read-only effects only; not part of the binary. |
 
 ## Removed (2026-09-27)
 

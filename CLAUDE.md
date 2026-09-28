@@ -41,6 +41,10 @@ Model-agnostic built-in extension (`docs/harness.md`). `extension.ts` wires the 
 
 `scripts/harness-eval.mjs` runs tasks from `evals/harness/tasks/` (dev/holdout split, ablation variants via `MIDNIGHT_SERVER_HARNESS_FEATURES`, manifests via `scripts/harness-eval-design.mjs`, paired statistics in `scripts/harness-eval-stats.mjs`); `scripts/harness-eval-validate.mjs` checks the tasks without a model. `evals/drift/` holds the drift pilots and re-scoring scripts; `evals/sensitivity-lab/` analyzes factorial experiments. Pure-Luna claims require `-escalation` in every arm.
 
+### Lattice-1
+
+`packages/coding-agent/src/lattice/` implements the Lattice-1 pseudo-RSI harness spec (design, results and deviations in `docs/lattice/README.md`): a bounded typed IR run under fuel, kernel-owned contracts and evaluator, SQLite store with compare-and-swap promotion, rollback and an audit chain, improvement campaigns, library learning, synthesis and a level-2 policy loop. It is standalone (`npm run lattice -- <command>`, `selftest` for a quick end-to-end check) and not imported by the product CLI. Tests: `test/lattice-*.test.ts`.
+
 ### Tests
 
 - Harness unit tests: `packages/coding-agent/test/harness-*.test.ts`; UI and config: `test/midnight-*.test.ts`.

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Lattice-1, a local pseudo-RSI harness run with `npm run lattice -- <command>` ([docs/lattice](../../docs/lattice/README.md)). A fixed kernel checks, runs, evaluates, promotes and rolls back typed, bounded programs. Improvement campaigns search in an isolated worker, consume each fresh release set once, pass a conjunctive release gate and shadow runs, then promote through compare-and-swap into a monitored canary. Library learning, synthesis from examples, bytecode compilation with differential tests, and a level-2 search-policy loop are included. Effects are read-only, and it is not part of the `midnight.server` binary.
+
 ## [0.87.1-midnight.2] - 2026-09-27
 
 ### Added
