@@ -1,7 +1,7 @@
-import { canonical, digest } from "./canonical.ts";
+import { canonical, digest, sha256 } from "./canonical.ts";
 import { type Expr, IR_VERSION, type Program, T, type Type, type Value } from "./ir.ts";
 import { INSTALLATION_LIMITS } from "./limits.ts";
-import type { Effect, Summary } from "./primitives.ts";
+import { type Effect, type Host, LatticeError, type Summary } from "./primitives.ts";
 import { PyRandom } from "./random.ts";
 import { validateValue } from "./typecheck.ts";
 
@@ -22,7 +22,12 @@ export interface Contract {
 	granted: Effect[];
 	/** Throws on an input outside the schema or bounds. */
 	validateInput(raw: unknown): Value;
-	oracle(input: Value): Value;
+	/** The contract's meaning. `host` is the world the case ran against (for `read` effects). */
+	oracle(input: Value, host?: Host): Value;
+	/** Synthetic world for fixture inputs, for contracts whose programs read through a host. */
+	host?(input: Value): Host;
+	/** Wall budget for one live task when inputs are large (spec section 42.1); default interactive. */
+	budgetMs?: number;
 	postconditions: { name: string; check(input: Value, output: Value): boolean }[];
 	/** The human-authored seed program, installed as version 1. */
 	seed(): Program;
@@ -688,8 +693,224 @@ export const organizePlan: Contract = {
 	},
 };
 
+/* ------------------------------------------------------------------------------------------ */
+/* duplicates.report: files whose content appears more than once (a `read` effect contract).  */
+/* ------------------------------------------------------------------------------------------ */
+
+export const DUPLICATE_TYPE = T.record({ path: T.string, copies: T.int });
+
+interface Duplicate {
+	path: string;
+	copies: number;
+}
+
+/**
+ * The synthetic world behind fixture inputs: a `~gN` marker in a file name puts it in content
+ * group N, every other file has its own content, and all empty files are equal (as on disk).
+ * Programs cannot see contents; they must read through `content_hash`, and the oracle uses the
+ * same host, so the naming is only this world's storage scheme.
+ */
+export function syntheticContentHost(input: Value): Host {
+	const entries = new Map((input as unknown as Entry[]).map((entry) => [entry.path, entry]));
+	return {
+		contentHash(ref: string, size: number): string {
+			const entry = entries.get(ref);
+			if (!entry || entry.kind !== "file") throw new LatticeError("host", "file not found");
+			// The real broker refuses a file whose byte count differs from the observed size; so does this one.
+			if (entry.size !== size) throw new LatticeError("host", "unstable input: size differs from the snapshot");
+			const group = /~g(\d+)/.exec(ref.slice(ref.lastIndexOf("/") + 1));
+			const content = size === 0 ? "empty" : group ? `group:${group[1]}` : `unique:${ref}`;
+			return sha256(`${content}\0${size}`);
+		},
+	};
+}
+
+/** Seed: correct, and hashes both files of every pair, twice (quadratic reads). */
+function duplicatesSeed(): Program {
+	const sameContent = (): Expr =>
+		call(
+			"eq",
+			call("content_hash", f(v("g"), "path"), f(v("g"), "size")),
+			call("content_hash", f(v("f"), "path"), f(v("f"), "size")),
+		);
+	const copies = (): Expr =>
+		call("length", {
+			node: "filter",
+			list: v("files"),
+			param: "g",
+			body: sameContent(),
+			maxItems: INVENTORY_MAX_ENTRIES,
+		});
+	return {
+		ir_version: IR_VERSION,
+		input_type: T.list(ENTRY_TYPE),
+		output_type: T.list(DUPLICATE_TYPE),
+		body: {
+			node: "let",
+			name: "files",
+			value: {
+				node: "filter",
+				list: { node: "input" },
+				param: "e",
+				body: and(call("eq", f(v("e"), "kind"), s("file")), call("not", f(v("e"), "hidden"))),
+				maxItems: INVENTORY_MAX_ENTRIES,
+			},
+			body: {
+				node: "map",
+				list: {
+					node: "filter",
+					list: v("files"),
+					param: "f",
+					body: call("gt", copies(), i(1)),
+					maxItems: INVENTORY_MAX_ENTRIES,
+				},
+				param: "f",
+				body: { node: "record", fields: { path: f(v("f"), "path"), copies: copies() } },
+				maxItems: INVENTORY_MAX_ENTRIES,
+			},
+		},
+	};
+}
+
+export function duplicatesFixture(
+	seed: number,
+	count = 100,
+	options: { maxSize?: number; groups?: number } = {},
+): Entry[] {
+	const rng = new PyRandom(seed);
+	const maxSize = options.maxSize ?? 20_000;
+	const dirs = ["photos", "docs", "backup", "misc"];
+	const entries = new Map<string, Entry>();
+	const add = (entry: Entry) => entries.set(entry.path, entry);
+	for (const dir of dirs) add({ path: dir, size: 0, hidden: false, kind: "dir" });
+	add({ path: ".cache", size: 0, hidden: true, kind: "dir" });
+	for (let index = 0; index < count; index++) {
+		const dir = rng.choice(dirs);
+		const hidden = rng.random() < 0.05;
+		add({ path: `${dir}/${hidden ? "." : ""}f${index}.bin`, size: rng.randint(1, maxSize), hidden, kind: "file" });
+	}
+	const groups = options.groups ?? Math.max(1, Math.round(count / 12));
+	for (let group = 0; group < groups; group++) {
+		const size = rng.randint(1, maxSize);
+		const members = 2 + rng.below(3);
+		for (let member = 0; member < members; member++) {
+			const hidden = rng.random() < 0.1;
+			add({
+				path: `${rng.choice(dirs)}/${hidden ? "." : ""}copy${group}_${member}~g${group}.bin`,
+				size,
+				hidden,
+				kind: "file",
+			});
+		}
+		// A decoy: same size, different content.
+		add({ path: `${rng.choice(dirs)}/decoy${group}.bin`, size, hidden: false, kind: "file" });
+	}
+	if (rng.random() < 0.5) {
+		add({ path: "misc/empty-a.txt", size: 0, hidden: false, kind: "file" });
+		add({ path: "docs/empty-b.txt", size: 0, hidden: false, kind: "file" });
+	}
+	return [...entries.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+export const duplicatesReport: Contract = {
+	id: "duplicates.report",
+	revision: 1,
+	description: "Visible files whose content appears more than once among visible files, with the number of copies",
+	inputType: T.list(ENTRY_TYPE),
+	outputType: T.list(DUPLICATE_TYPE),
+	inputBounds: inventoryReport.inputBounds,
+	granted: ["read"],
+	budgetMs: 60_000,
+	validateInput: (raw: unknown) => inventoryReport.validateInput(raw),
+	host: syntheticContentHost,
+	oracle(input: Value, host?: Host): Value {
+		const world = host ?? syntheticContentHost(input);
+		const files = (input as unknown as Entry[]).filter((entry) => entry.kind === "file" && !entry.hidden);
+		const hashes = files.map((file) => world.contentHash!(file.path, file.size));
+		const counts = new Map<string, number>();
+		for (const hash of hashes) counts.set(hash, (counts.get(hash) ?? 0) + 1);
+		return files
+			.map((file, index) => ({ path: file.path, copies: counts.get(hashes[index])! }))
+			.filter((row) => row.copies >= 2) as unknown as Value;
+	},
+	postconditions: [
+		{
+			name: "copies_at_least_two",
+			check: (_input, output) => (output as unknown as Duplicate[]).every((row) => row.copies >= 2),
+		},
+		{
+			name: "paths_are_visible_files",
+			check: (input, output) => {
+				const files = new Set(
+					(input as unknown as Entry[])
+						.filter((entry) => entry.kind === "file" && !entry.hidden)
+						.map((entry) => entry.path),
+				);
+				return (output as unknown as Duplicate[]).every((row) => files.has(row.path));
+			},
+		},
+		{
+			// Independent of hashing: identical files have identical sizes.
+			name: "copies_bounded_by_same_size_files",
+			check: (input, output) => {
+				const sizes = new Map<number, number>();
+				const byPath = new Map<string, number>();
+				for (const entry of input as unknown as Entry[]) {
+					if (entry.kind !== "file" || entry.hidden) continue;
+					sizes.set(entry.size, (sizes.get(entry.size) ?? 0) + 1);
+					byPath.set(entry.path, entry.size);
+				}
+				return (output as unknown as Duplicate[]).every(
+					(row) => row.copies <= (sizes.get(byPath.get(row.path)!) ?? 0),
+				);
+			},
+		},
+	],
+	seed: duplicatesSeed,
+	fixtures: {
+		development: () => Array.from({ length: 6 }, (_, index) => duplicatesFixture(index) as unknown as Value),
+		regression: () =>
+			[
+				[],
+				[
+					{ path: "a.bin", size: 5, hidden: false, kind: "file" },
+					{ path: "b.bin", size: 5, hidden: false, kind: "file" },
+					{ path: "c~g1.bin", size: 7, hidden: false, kind: "file" },
+					{ path: "d~g1.bin", size: 7, hidden: false, kind: "file" },
+					{ path: ".e~g1.bin", size: 7, hidden: true, kind: "file" },
+					{ path: "f~g2.bin", size: 9, hidden: false, kind: "file" },
+					{ path: "g~g2.bin", size: 9, hidden: false, kind: "file" },
+					{ path: "h~g2.bin", size: 9, hidden: false, kind: "file" },
+					{ path: "x.txt", size: 0, hidden: false, kind: "file" },
+					{ path: "y.txt", size: 0, hidden: false, kind: "file" },
+					{ path: "z~g3.bin", size: 4, hidden: false, kind: "file" },
+					{ path: "dir~g3.bin", size: 0, hidden: false, kind: "dir" },
+				],
+			] as unknown as Value[],
+		release: (n) =>
+			Array.from({ length: 32 }, (_, index) => duplicatesFixture(10_000 + (n - 1) * 32 + index) as unknown as Value),
+		// Many size collisions: the protected group where a size prefilter helps least.
+		shifted: (n) =>
+			Array.from(
+				{ length: 8 },
+				(_, index) =>
+					duplicatesFixture(20_000 + (n - 1) * 8 + index, 100, { maxSize: 40, groups: 12 }) as unknown as Value,
+			),
+	},
+	fuzz(rng: PyRandom): Value {
+		const entries = new Map<string, Entry>();
+		for (let i = 0; i < 14; i++) {
+			const group = rng.below(4);
+			const size = rng.choice([0, 1, 2, 3]);
+			const path = rng.random() < 0.5 ? `f${i}~g${group}.bin` : `f${i}.bin`;
+			entries.set(path, { path, size, hidden: rng.random() < 0.15, kind: rng.random() < 0.1 ? "dir" : "file" });
+		}
+		return [...entries.values()] as unknown as Value;
+	},
+};
+
 export const CONTRACTS: ReadonlyMap<string, Contract> = new Map(
-	[recordsFilter, inventoryReport, organizePlan].map((contract) => [contract.id, contract]),
+	[recordsFilter, inventoryReport, organizePlan, duplicatesReport].map((contract) => [contract.id, contract]),
 );
 
 export function getContract(id: string): Contract {

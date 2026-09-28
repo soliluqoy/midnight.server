@@ -12,6 +12,7 @@ import {
 	substitute,
 	walk,
 } from "./ir.ts";
+import { PRIMITIVES } from "./primitives.ts";
 import type { NodeInfo } from "./typecheck.ts";
 
 /**
@@ -26,6 +27,7 @@ export const MUTATION_OPS = [
 	"reorder_exclusive",
 	"hoist_common",
 	"hoist_invariant",
+	"insert_implied_guard",
 	"fuse_filters",
 	"split_filter",
 	"dedupe_conjunct",
@@ -136,6 +138,11 @@ export function enumerateMutations(program: Program, info: Info, allowed: Readon
 					});
 				}
 			}
+		}
+
+		if (node.node === "call" && node.op === "eq" && allowed.has("insert_implied_guard")) {
+			const guarded = impliedGuard(program, node, path, info);
+			if (guarded) out.push(guarded);
 		}
 
 		if (node.node === "if" && node.ifFalse.node === "if" && allowed.has("reorder_exclusive")) {
@@ -326,6 +333,50 @@ function hoistInvariant(program: Program, info: Info): Mutation[] {
 		}
 	}
 	return out;
+}
+
+/**
+ * Implied-guard insertion: `eq(P(a...), P(b...))` for a primitive P that declares
+ * `equalityImplies` (argument positions whose equality follows from equal results, guaranteed by
+ * the kernel's implementation) becomes `and(eq(a_i, b_i)..., eq(P(a...), P(b...)))`. When the
+ * cheap guard is false the result is false either way, so P is not evaluated. Example:
+ * `content_hash(path, size)` only returns for a file of exactly `size` bytes, so two equal
+ * digests have equal sizes; comparing sizes first skips hashing files that cannot match.
+ * The guard's operands must be pure and total; the guarded comparison may have effects, which
+ * the rewrite only ever skips, never reorders or adds.
+ */
+function impliedGuard(
+	program: Program,
+	node: Extract<Expr, { node: "call" }>,
+	path: readonly number[],
+	info: Info,
+): Mutation | undefined {
+	const [left, right] = node.args;
+	if (left?.node !== "call" || right?.node !== "call" || left.op !== right.op) return undefined;
+	const implied = PRIMITIVES.get(left.op)?.equalityImplies;
+	if (!implied || implied.length === 0) return undefined;
+	const guards: Expr[] = [];
+	for (const index of implied) {
+		const a = left.args[index];
+		const b = right.args[index];
+		if (!a || !b || !pureTotal(info, a) || !pureTotal(info, b)) return undefined;
+		guards.push({ node: "call", op: "eq", args: [a, b] });
+	}
+	// Already guarded: the comparison sits in an `and` right after the same guards.
+	if (path.length > 0) {
+		const parent = getAt(program.body, path.slice(0, -1));
+		const position = path[path.length - 1];
+		if (parent.node === "and") {
+			const before = parent.args.slice(Math.max(0, position - guards.length), position);
+			if (before.length === guards.length && before.every((expr, i) => exprEquals(expr, guards[i])))
+				return undefined;
+		}
+	}
+	return {
+		op: "insert_implied_guard",
+		description: `compare ${left.op} argument${implied.length > 1 ? "s" : ""} ${implied.join(", ")} before its results at /${path.join("/")}`,
+		program: atPath(program, path, { node: "and", args: [...guards, node] }),
+	};
 }
 
 /** Operator histogram: the coarse structural family used for archive diversity (section 11.4). */

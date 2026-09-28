@@ -853,9 +853,9 @@ export class LatticeStore {
 	episodes(
 		contractId: string,
 		limit = 200,
-	): { episode_id: string; input_hash: string; status: string; version_id: number | null }[] {
+	): { episode_id: string; input_hash: string; status: string; version_id: number | null; goal_json: string }[] {
 		return this.all(
-			"SELECT episode_id, input_hash, status, version_id FROM episodes WHERE contract_id = ? ORDER BY created_at DESC LIMIT ?",
+			"SELECT episode_id, input_hash, status, version_id, goal_json FROM episodes WHERE contract_id = ? ORDER BY created_at DESC LIMIT ?",
 			contractId,
 			limit,
 		);

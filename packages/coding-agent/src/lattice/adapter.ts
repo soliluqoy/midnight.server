@@ -31,6 +31,15 @@ const TEMPLATES: { pattern: RegExp; build(match: RegExpMatchArray): ProposedGoal
 		build: (match) => ({ contract_id: "inventory.report", directory: unquote(match.groups?.path) }),
 	},
 	{
+		pattern: /^(?:find\s+)?duplicates?(?:\s+files)?\s*$/i,
+		build: () => ({ contract_id: "duplicates.report" }),
+	},
+	{
+		pattern:
+			/^(?:find\s+)?duplicates?(?:\s+files)?(?:\s+(?:in|under))?\s+(?:the\s+)?(?:folder\s+|directory\s+)?(?<path>"[^"]+"|\S+)\s*$/i,
+		build: (match) => ({ contract_id: "duplicates.report", directory: unquote(match.groups?.path) }),
+	},
+	{
 		pattern: /^(?:inventory|report|summary)\s*$/i,
 		build: () => ({ contract_id: "inventory.report" }),
 	},
@@ -54,6 +63,8 @@ export const templateAdapter: GoalAdapter = {
 			const uncertainties: string[] = [];
 			if (goal.contract_id === "inventory.report" && !goal.directory)
 				uncertainties.push("which directory should be inventoried?");
+			if (goal.contract_id === "duplicates.report" && !goal.directory)
+				uncertainties.push("which directory should be searched for duplicates?");
 			if (goal.contract_id === "records.filter" && !goal.input_file)
 				uncertainties.push("which records file should be filtered?");
 			return { goal, confidence: uncertainties.length === 0 ? 1 : 0.5, uncertainties, adapter: this.id };
@@ -62,7 +73,7 @@ export const templateAdapter: GoalAdapter = {
 			goal: {},
 			confidence: 0,
 			uncertainties: [
-				'no task template matches; try "inventory <directory>" or "filter records in <file.json>", or pass --contract',
+				'no task template matches; try "inventory <directory>", "duplicates in <directory>" or "filter records in <file.json>", or pass --contract',
 			],
 			adapter: this.id,
 		};

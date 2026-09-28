@@ -6,11 +6,11 @@ import {
 	bootstrapLowerBound,
 	DEFAULT_GATE,
 	type EvalContext,
-	evaluateCase,
 	evaluateSuite,
 	execute,
 	type GateEvidence,
 	type GateThresholds,
+	judge,
 	pairedGains,
 	releaseGate,
 } from "./evaluator.ts";
@@ -18,7 +18,7 @@ import { economicGate, type Governor } from "./governor.ts";
 import { interpret } from "./interpreter.ts";
 import { type LibrarySkill, programHash, type Value } from "./ir.ts";
 import type { ExecutionLimits } from "./limits.ts";
-import { PRIMITIVE_LIBRARY_HASH } from "./primitives.ts";
+import { type Host, PRIMITIVE_LIBRARY_HASH } from "./primitives.ts";
 import { mean } from "./random.ts";
 import { clampPolicy, type SearchCheckpoint, type SearchPolicy, type SearchReport } from "./search.ts";
 import { KERNEL_VERSION, type LatticeStore, newId } from "./store.ts";
@@ -36,8 +36,13 @@ export interface KernelContext {
 	governor: Governor;
 	limits: ExecutionLimits;
 	library(): Map<string, LibrarySkill>;
-	/** Recent live inputs for this contract (newest first), used for development and shadow. */
+	/**
+	 * Recent live inputs for this contract (newest first), used for development and shadow. For a
+	 * contract that reads file contents, these are fresh rescans of the episodes' directories.
+	 */
 	episodeInputs(contract: Contract, limit: number): Value[];
+	/** The world each input runs against: the broker for rescanned live inputs, synthetic otherwise. */
+	hostFor(contract: Contract): ((input: Value) => Host) | undefined;
 }
 
 export interface CampaignOptions {
@@ -137,7 +142,7 @@ export async function runCampaign(kernel: KernelContext, options: CampaignOption
 	if (!head.promotionEnabled) throw new Error(`promotion is disabled for ${skillId}; run a diagnostic test first`);
 	if (store.paused) throw new Error(`promotion is stopped: ${store.paused}`);
 	const library = kernel.library();
-	const context: EvalContext = { limits: kernel.limits, library };
+	const context: EvalContext = { limits: kernel.limits, library, host: kernel.hostFor(contract) };
 	// A resumed campaign continues with exactly the cases, seed and policy it paused with.
 	const paused = options.resume ? loadPaused(store, options.resume, skillId, head.version.version_id) : undefined;
 	const policy = paused ? paused.policy : clampPolicy(options.policy);
@@ -146,12 +151,15 @@ export async function runCampaign(kernel: KernelContext, options: CampaignOption
 
 	// Development pool: contract fixtures plus earlier live snapshots (small ones only, so one huge
 	// tree cannot dominate the budget). Regression pool: edge cases plus every stored counterexample.
-	const live = paused
-		? []
-		: kernel
-				.episodeInputs(contract, 16)
-				.filter((input) => !Array.isArray(input) || input.length <= LIVE_DEVELOPMENT_MAX_ITEMS)
-				.slice(0, 6);
+	// The search worker holds no read capability, so live inputs of a contract that reads contents
+	// are replayed only by the kernel, in the shadow phase.
+	const live =
+		paused || contract.granted.includes("read")
+			? []
+			: kernel
+					.episodeInputs(contract, 16)
+					.filter((input) => !Array.isArray(input) || input.length <= LIVE_DEVELOPMENT_MAX_ITEMS)
+					.slice(0, 6);
 	const costCases = paused ? paused.costCases : [...contract.fixtures.development(), ...live];
 	const checkCases = paused
 		? paused.checkCases
@@ -182,7 +190,12 @@ export async function runCampaign(kernel: KernelContext, options: CampaignOption
 	const profile = new Map<string, number>();
 	let parentUnits = 0;
 	for (const input of costCases) {
-		const run = interpret(head.program, input, { limits: kernel.limits, library, profile });
+		const run = interpret(head.program, input, {
+			limits: kernel.limits,
+			library,
+			profile,
+			host: context.host?.(input),
+		});
 		if (!run.ok) throw new Error(`the active version fails a development case (${run.error.code}); run a diagnostic`);
 		parentUnits += run.metrics.units;
 	}
@@ -378,10 +391,11 @@ export async function runCampaign(kernel: KernelContext, options: CampaignOption
 		const shiftRatio = sum(childShift.costs) / Math.max(sum(parentShift.costs), 1);
 		// Reproducibility: a fresh run of the frozen candidate gives identical outputs and costs.
 		const reproducible = release.slice(0, 4).every((input, index) => {
-			const first = execute(candidate, input, context);
+			const host = context.host?.(input);
+			const first = execute(candidate, input, context, host);
 			return (
 				first.ok &&
-				canonical(first.value) === canonical(contract.oracle(input)) &&
+				canonical(first.value) === canonical(contract.oracle(input, host)) &&
 				first.metrics.units === childRelease.costs[index]
 			);
 		});
@@ -396,14 +410,10 @@ export async function runCampaign(kernel: KernelContext, options: CampaignOption
 		let shadowNote = "";
 		if (shadowInputs.length >= Math.max(shadowMin, 1)) {
 			shadowPassed = shadowInputs.every((input) => {
-				const a = execute(head.program, input, context);
-				const b = execute(candidate, input, context);
-				return (
-					a.ok &&
-					b.ok &&
-					canonical(a.value) === canonical(b.value) &&
-					evaluateCase(contract, candidate, input, context).correct
-				);
+				const host = context.host?.(input);
+				const a = execute(head.program, input, context, host);
+				const b = execute(candidate, input, context, host);
+				return a.ok && b.ok && canonical(a.value) === canonical(b.value) && judge(contract, input, b, host).correct;
 			});
 			shadowNote = `${shadowInputs.length} live snapshots`;
 		} else if (shadowMin === 0) {

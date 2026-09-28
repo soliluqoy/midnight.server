@@ -10,7 +10,7 @@ import {
 } from "./interpreter.ts";
 import type { Expr, LibrarySkill, Program, Value } from "./ir.ts";
 import type { ExecutionLimits } from "./limits.ts";
-import { LatticeError, PRIMITIVES } from "./primitives.ts";
+import { type Host, LatticeError, PRIMITIVES } from "./primitives.ts";
 
 /**
  * Compact bytecode for the bounded IR (spec section 42.6). Operands are indexes into validated
@@ -426,18 +426,21 @@ export interface DifferentialReport {
 /**
  * Differential test (spec section 21.3): run interpreted and compiled forms on every input and
  * compare outputs, error classes, virtual cost and primitive calls. Steps differ by design
- * (nodes versus instructions) and are the one allowed difference.
+ * (nodes versus instructions) and are the one allowed difference. `hostFor` gives each input its
+ * world (for `read` effects); both forms see the same host.
  */
 export function differential(
 	program: Program,
 	bytecode: Bytecode,
 	inputs: readonly Value[],
-	options: RunOptions,
+	options: Omit<RunOptions, "host"> & { hostFor?: (input: Value) => Host },
 ): DifferentialReport {
+	const { hostFor, ...rest } = options;
 	const mismatches: { index: number; reason: string }[] = [];
 	inputs.forEach((input, index) => {
-		const a = interpret(program, input, options);
-		const b = runBytecode(bytecode, input, options);
+		const run = { ...rest, host: hostFor?.(input) };
+		const a = interpret(program, input, run);
+		const b = runBytecode(bytecode, input, run);
 		if (a.ok !== b.ok) mismatches.push({ index, reason: "one form failed and the other did not" });
 		else if (a.ok && b.ok && canonical(a.value) !== canonical(b.value))
 			mismatches.push({ index, reason: "outputs differ" });

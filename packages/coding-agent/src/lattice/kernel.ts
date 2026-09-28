@@ -4,7 +4,13 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { type AbstractionReport, mineAbstractions } from "./abstraction.ts";
 import { type AdapterOutput, type GoalAdapter, templateAdapter } from "./adapter.ts";
-import { type InventorySnapshot, issueCapability, scanDirectory } from "./broker.ts";
+import {
+	type ContentHashHost,
+	contentHashHost,
+	type InventorySnapshot,
+	issueCapability,
+	scanDirectory,
+} from "./broker.ts";
 import { type CampaignReport, type KernelContext, runCampaign } from "./campaign.ts";
 import { canonical, digest } from "./canonical.ts";
 import {
@@ -48,7 +54,7 @@ import {
 	type PolicyCampaignReport,
 	policyEvaluatorHash,
 } from "./metapolicy.ts";
-import { PRIMITIVE_LIBRARY_HASH } from "./primitives.ts";
+import { type Host, LatticeError, PRIMITIVE_LIBRARY_HASH } from "./primitives.ts";
 import { DEFAULT_POLICY, REFERENCE_POLICY, type SearchPolicy } from "./search.ts";
 import { KERNEL_VERSION, LatticeStore, newId } from "./store.ts";
 import { type ExampleTask, type SynthesisResult, synthesize } from "./synthesis.ts";
@@ -114,7 +120,7 @@ function runFailureClass(code: string): FailureClass {
 }
 
 /** Contracts whose input is a directory inventory observed by the broker. */
-const DIRECTORY_CONTRACTS = new Set(["inventory.report", "organize.plan"]);
+const DIRECTORY_CONTRACTS = new Set(["inventory.report", "organize.plan", "duplicates.report"]);
 /** Contracts whose output is a list of effect intents. */
 const EFFECT_CONTRACTS = new Set(["organize.plan"]);
 
@@ -241,6 +247,7 @@ export class Lattice implements KernelContext {
 
 	/** Recent distinct, valid inputs of completed episodes, newest first. */
 	episodeInputs(contract: Contract, limit: number): Value[] {
+		if (contract.granted.includes("read")) return this.rescanEpisodes(contract, limit);
 		const out: Value[] = [];
 		const seen = new Set<string>();
 		for (const episode of this.store.episodes(contract.id, limit * 4)) {
@@ -254,6 +261,59 @@ export class Lattice implements KernelContext {
 			if (out.length >= limit) break;
 		}
 		return out;
+	}
+
+	/** Broker hosts of the latest rescan, by input digest. */
+	private readonly liveHosts = new Map<string, Host>();
+
+	hostFor(contract: Contract): ((input: Value) => Host) | undefined {
+		const synthetic = contract.host?.bind(contract);
+		if (!contract.granted.includes("read")) return synthetic;
+		return (input) => this.liveHosts.get(digest(input)) ?? synthetic?.(input) ?? {};
+	}
+
+	/**
+	 * Live inputs of a contract that reads file contents. The store keeps inventories, never file
+	 * bytes, so an old inventory cannot be replayed against the contents it described. Each
+	 * episode's directory is scanned again under a fresh capability and its input is paired with a
+	 * broker host; a directory that is gone, unreadable or now too large is skipped.
+	 */
+	private rescanEpisodes(contract: Contract, limit: number): Value[] {
+		this.liveHosts.clear();
+		const out: Value[] = [];
+		const seen = new Set<string>();
+		for (const episode of this.store.episodes(contract.id, limit * 4)) {
+			const directory = (JSON.parse(episode.goal_json) as { directory?: string }).directory;
+			if (episode.status !== "completed" || directory === undefined || seen.has(directory)) continue;
+			seen.add(directory);
+			try {
+				const { snapshot, host } = this.observe(contract, directory, newId("replay"));
+				const input = contract.validateInput(snapshot.entries);
+				if (host) this.liveHosts.set(digest(input), host);
+				out.push(input);
+			} catch {
+				// Nothing to replay from this directory now.
+			}
+			if (out.length >= limit) break;
+		}
+		return out;
+	}
+
+	/** Scan a directory read-only; contracts that read contents also get a content host for it. */
+	private observe(
+		contract: Contract,
+		directory: string,
+		episodeId: string,
+	): { snapshot: InventorySnapshot; host?: ContentHashHost } {
+		const key = this.capabilityKey();
+		const reads = contract.granted.includes("read");
+		const capability = issueCapability(key, {
+			root: directory,
+			verbs: reads ? ["list", "read"] : ["list"],
+			episodeId,
+		});
+		const snapshot = scanDirectory(key, capability, episodeId, INVENTORY_MAX_ENTRIES);
+		return { snapshot, host: reads ? contentHashHost(key, capability, episodeId, snapshot.identities) : undefined };
 	}
 
 	private capabilityKey(): string {
@@ -345,19 +405,28 @@ export class Lattice implements KernelContext {
 		const evidence: string[] = [];
 		let raw = req.input;
 		let observed: InventorySnapshot | undefined;
+		let host: ContentHashHost | undefined;
+		const reads = contract.granted.includes("read");
+		if (reads && req.directory === undefined) {
+			return done({
+				status: "needs_clarification",
+				summary: {},
+				evidence: [],
+				questions: [`${contract.id} reads file contents: which directory?`],
+			});
+		}
 		if (req.directory !== undefined) {
 			if (!DIRECTORY_CONTRACTS.has(contract.id)) {
 				return done({ status: "declined", summary: {}, evidence: [`${contract.id} does not take a directory`] });
 			}
 			try {
-				const capability = issueCapability(this.capabilityKey(), {
-					root: req.directory,
-					verbs: ["list"],
-					episodeId: goalId,
-				});
-				const snapshot = scanDirectory(this.capabilityKey(), capability, goalId, INVENTORY_MAX_ENTRIES);
+				const observation = this.observe(contract, req.directory, goalId);
+				const snapshot = observation.snapshot;
+				host = observation.host;
 				raw = snapshot.entries;
 				observed = snapshot;
+				// Episodes record the resolved root, so a later rescan finds the same directory.
+				req = { ...req, directory: snapshot.root };
 				evidence.push(`${snapshot.mode} of ${snapshot.root} at ${snapshot.observed_at}`);
 				if (snapshot.skipped.length > 0) {
 					evidence.push(
@@ -412,14 +481,14 @@ export class Lattice implements KernelContext {
 			skill: skillId,
 			version,
 		};
-		const deadline =
-			performance.now() +
-			Math.min(req.constraints?.max_runtime_ms ?? BUDGETS.interactive.wallMs, BUDGETS.interactive.wallMs);
+		const wallMs = contract.budgetMs ?? BUDGETS.interactive.wallMs;
+		const deadline = performance.now() + Math.min(req.constraints?.max_runtime_ms ?? wallMs, wallMs);
 
 		let output: Value | undefined;
 		let engine: "interpreter" | "bytecode" | "cache" = "cache";
 		let units: number | undefined;
-		const cached = this.store.cacheGet(cacheKey, version);
+		// The cache key covers the inventory, not file contents, so it cannot answer a content question.
+		const cached = reads ? undefined : this.store.cacheGet(cacheKey, version);
 		if (cached !== undefined) {
 			output = cached as Value;
 			evidence.push(`exact cache hit for version ${version}`);
@@ -437,8 +506,8 @@ export class Lattice implements KernelContext {
 			const runStarted = performance.now();
 			const run: RunResult =
 				engine === "bytecode" && compiled
-					? runBytecode(compiled, input, { limits: this.limits, library: this.library(), deadline })
-					: interpret(head.program, input, { limits: this.limits, library: this.library(), deadline });
+					? runBytecode(compiled, input, { limits: this.limits, library: this.library(), deadline, host })
+					: interpret(head.program, input, { limits: this.limits, library: this.library(), deadline, host });
 			const elapsed = performance.now() - runStarted;
 			this.store.banditUpdate(`engine:${head.version.program_hash}:${engine}`, 1 / (1 + elapsed));
 			if (!run.ok) {
@@ -455,7 +524,8 @@ export class Lattice implements KernelContext {
 					"failed",
 					started,
 				);
-				if (head.version.status === "canary") {
+				// A file that changed under the run is the world's failure, not the canary's.
+				if (head.version.status === "canary" && run.error.code !== "host") {
 					// The parent is restored as champion, so this retry runs it and cannot recurse again.
 					this.store.rollback(skillId, `canary failed on a live task: ${run.error.code}`);
 					return this.submitGoal(request);
@@ -471,6 +541,12 @@ export class Lattice implements KernelContext {
 			}
 			output = run.value;
 			units = run.metrics.units;
+		}
+		if (host) {
+			const { files, bytes, cacheHits } = host.observed;
+			evidence.push(
+				`exact content: ${files} files hashed by streaming SHA-256 (${bytes} bytes; ${cacheHits} repeated hashes reused), each checked against its inventory identity before and after reading`,
+			);
 		}
 
 		// Verify: output schema and every postcondition. The oracle is evaluation-time only.
@@ -498,6 +574,7 @@ export class Lattice implements KernelContext {
 				input,
 				output,
 				failures,
+				host,
 			);
 			if ((canary as { rolledBack?: boolean }).rolledBack) {
 				rolledBack = true;
@@ -537,7 +614,7 @@ export class Lattice implements KernelContext {
 
 		const outputBytes = Buffer.from(`${JSON.stringify(output, null, 2)}\n`);
 		const artifact = this.store.putArtifact(outputBytes, "application/json", `${skillId}@${version}`, "report");
-		if (engine !== "cache" && !rolledBack) this.store.cachePut(cacheKey, version, output);
+		if (engine !== "cache" && !rolledBack && !reads) this.store.cachePut(cacheKey, version, output);
 		const summary = summarize(contract, input, output, units);
 		const active = this.store.head(skillId)!.version.version_id;
 		// Effect intents over an observed directory become a plan awaiting explicit approval.
@@ -630,15 +707,27 @@ export class Lattice implements KernelContext {
 		input: Value,
 		output: Value,
 		failures: string[],
+		host: Host | undefined,
 	): { agree: number; rolledBack?: boolean; champion?: boolean; parentOutput?: Value } {
 		const parent = this.store.version(parentId)!;
 		const parentProgram = JSON.parse(this.store.programText(parent.program_hash)!) as Program;
-		const shadow = interpret(parentProgram, input, { limits: this.limits, library: this.library() });
+		const shadow = interpret(parentProgram, input, { limits: this.limits, library: this.library(), host });
 		const agrees = shadow.ok && canonical(shadow.value) === canonical(output) && failures.length === 0;
 		const key = `canary:${versionId}`;
 		const count = Number(this.store.getMeta(key) ?? "0");
 		if (!agrees) {
-			const oracle = contract.oracle(input);
+			let oracle: Value;
+			try {
+				oracle = contract.oracle(input, host);
+			} catch (error) {
+				if (!(error instanceof LatticeError)) throw error;
+				// The files changed under the oracle: neither version can be judged on this task.
+				this.store.audit("canary_disagreement", skillId, {
+					version: versionId,
+					verdict: `not adjudicated: ${error.message}`,
+				});
+				return { agree: count };
+			}
 			const candidateRight = failures.length === 0 && canonical(oracle) === canonical(output);
 			if (!candidateRight) {
 				this.store.rollback(
@@ -646,13 +735,16 @@ export class Lattice implements KernelContext {
 					"canary disagreed with its parent on a live task and the oracle rejected the canary",
 				);
 				const parentRight = shadow.ok && canonical(shadow.value) === canonical(oracle);
-				// The input becomes a regression case against the canary that failed it.
-				this.store.addRegression(
-					contract,
-					input,
-					"canary disagreement",
-					this.store.version(versionId)!.program_hash,
-				);
+				// The input becomes a regression case against the canary that failed it, unless the failure
+				// depended on file contents, which a stored inventory cannot reproduce.
+				if (!contract.granted.includes("read")) {
+					this.store.addRegression(
+						contract,
+						input,
+						"canary disagreement",
+						this.store.version(versionId)!.program_hash,
+					);
+				}
 				// The parent's answer replaces the canary's only when the oracle confirms it.
 				return { agree: count, rolledBack: true, parentOutput: parentRight ? shadow.value : undefined };
 			}
@@ -827,12 +919,13 @@ export class Lattice implements KernelContext {
 			...(this.store.regressions(contract) as Value[]),
 			...this.episodeInputs(contract, 16),
 		];
-		const options = { limits: this.limits, library };
-		const report = differential(head.program, bytecode, inputs, options);
+		const hostFor = this.hostFor(contract);
+		const report = differential(head.program, bytecode, inputs, { limits: this.limits, library, hostFor });
 		let interpreterMs = 0;
 		let bytecodeMs = 0;
 		for (let round = 0; round < 3; round++) {
 			for (const input of inputs) {
+				const options = { limits: this.limits, library, host: hostFor?.(input) };
 				const order = round % 2 === 0 ? ["i", "b"] : ["b", "i"];
 				for (const which of order) {
 					const start = performance.now();
@@ -887,6 +980,8 @@ export class Lattice implements KernelContext {
 					program: JSON.parse(this.store.programText(version.program_hash)!) as Program,
 					inputBounds: contract.inputBounds,
 					cases: [...contract.fixtures.development().slice(0, 4), ...contract.fixtures.regression()],
+					granted: contract.granted,
+					host: contract.host?.bind(contract),
 				});
 			}
 		}
@@ -937,6 +1032,11 @@ export class Lattice implements KernelContext {
 	): { version: number; output?: Value; error?: string; units?: number; evidence: string } {
 		const head = this.store.head(skillId);
 		if (!head) throw new Error(`no skill ${skillId}`);
+		if (CONTRACTS.get(head.version.contract_id)?.granted.includes("read")) {
+			throw new Error(
+				`${skillId} reads file contents; use \`goal --contract ${head.version.contract_id} --dir PATH\``,
+			);
+		}
 		const check = checkProgram(head.program, {
 			limits: this.limits,
 			granted: new Set(),
@@ -1103,6 +1203,16 @@ function summarize(
 			entries_examined: (input as Value[]).length,
 			files_reported: rows.reduce((sum, row) => sum + row.count, 0),
 			bytes_reported: rows.reduce((sum, row) => sum + row.bytes, 0),
+			virtual_units: units,
+		};
+	}
+	if (contract.id === "duplicates.report") {
+		const rows = output as { path: string; copies: number }[];
+		return {
+			entries_examined: (input as Value[]).length,
+			duplicate_files: rows.length,
+			// Every visible copy is listed with its group's size, so each group contributes 1.
+			content_groups: Math.round(rows.reduce((sum, row) => sum + 1 / row.copies, 0)),
 			virtual_units: units,
 		};
 	}

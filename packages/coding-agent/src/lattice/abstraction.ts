@@ -17,12 +17,12 @@ import {
 	walk,
 } from "./ir.ts";
 import type { ExecutionLimits } from "./limits.ts";
-import { PRIMITIVE_LIBRARY_HASH, type Summary } from "./primitives.ts";
+import { type Effect, type Host, PRIMITIVE_LIBRARY_HASH, type Summary } from "./primitives.ts";
 import { checkLibrarySkill, checkProgram, type NodeInfo } from "./typecheck.ts";
 
 /**
- * Bounded library learning (spec section 40.7), not full DreamCoder: collect accepted pure
- * programs, enumerate repeated subtrees of 3-12 nodes, anti-unify each group by turning differing
+ * Bounded library learning (spec section 40.7), not full DreamCoder: collect accepted
+ * programs, enumerate repeated pure subtrees of 3-12 nodes, anti-unify each group by turning differing
  * leaves (constants, free variables, the program input) into at most three typed parameters,
  * score the description-length saving, rewrite a copy of the corpus, and keep the abstraction
  * only if every rewritten program still type-checks and behaves identically on its cases.
@@ -33,6 +33,10 @@ export interface CorpusEntry {
 	inputBounds: Summary;
 	/** Inputs used to confirm the rewritten program is equivalent. */
 	cases: Value[];
+	/** Effects the program's contract grants (default: none). Only pure subtrees are abstracted. */
+	granted?: readonly Effect[];
+	/** The world each case runs against, for programs with `read` effects. */
+	host?: (input: Value) => Host;
 }
 
 export interface AbstractionReport {
@@ -133,7 +137,7 @@ export function mineAbstractions(
 	const checks = corpus.map((entry) => {
 		const check = checkProgram(entry.program, {
 			limits: options.limits,
-			granted: new Set(),
+			granted: new Set(entry.granted),
 			library: options.library,
 			inputSummary: entry.inputBounds,
 		});
@@ -257,7 +261,7 @@ export function mineAbstractions(
 			const rewrittenProgram = rewritten[entryIndex].program;
 			const check = checkProgram(rewrittenProgram, {
 				limits: options.limits,
-				granted: new Set(),
+				granted: new Set(original.granted),
 				library,
 				inputSummary: original.inputBounds,
 			});
@@ -267,8 +271,9 @@ export function mineAbstractions(
 			}
 			const context: EvalContext = { limits: options.limits, library };
 			for (const input of original.cases) {
-				const a = execute(original.program, input, context);
-				const b = execute(rewrittenProgram, input, context);
+				const host = original.host?.(input);
+				const a = execute(original.program, input, context, host);
+				const b = execute(rewrittenProgram, input, context, host);
 				const same =
 					a.ok === b.ok &&
 					(a.ok && b.ok

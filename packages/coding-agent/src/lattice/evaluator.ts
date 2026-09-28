@@ -4,6 +4,7 @@ import type { Contract } from "./contracts.ts";
 import { interpret, type RunResult } from "./interpreter.ts";
 import type { LibrarySkill, Program, Value } from "./ir.ts";
 import type { ExecutionLimits } from "./limits.ts";
+import { type Host, LatticeError } from "./primitives.ts";
 import { mean, PyRandom } from "./random.ts";
 
 /**
@@ -25,22 +26,38 @@ export interface EvalContext {
 	bytecode?: Bytecode;
 	signal?: AbortSignal;
 	deadline?: number;
+	/**
+	 * The world a case runs against (file contents for `read` effects). Content is never part of
+	 * the program's input; the kernel supplies it per case: synthetic for fixtures, the broker for
+	 * live directories.
+	 */
+	host?: (input: Value) => Host;
 }
 
-export function execute(program: Program, input: Value, context: EvalContext): RunResult {
+export function execute(program: Program, input: Value, context: EvalContext, host?: Host): RunResult {
 	const options = {
 		limits: context.limits,
 		library: context.library,
 		signal: context.signal,
 		deadline: context.deadline,
+		host: host ?? context.host?.(input),
 	};
 	return context.bytecode ? runBytecode(context.bytecode, input, options) : interpret(program, input, options);
 }
 
 /** Compare a run with the oracle and every postcondition. */
-export function judge(contract: Contract, input: Value, run: RunResult): CaseResult {
+export function judge(contract: Contract, input: Value, run: RunResult, host?: Host): CaseResult {
 	if (!run.ok) return { correct: false, failure: `error:${run.error.code}` };
-	if (canonical(run.value) !== canonical(contract.oracle(input))) {
+	let expected: Value;
+	try {
+		expected = contract.oracle(input, host);
+	} catch (error) {
+		// A live world can change under the oracle too; a case it cannot judge does not pass.
+		if (error instanceof LatticeError)
+			return { correct: false, units: run.metrics.units, failure: `oracle:${error.code}` };
+		throw error;
+	}
+	if (canonical(run.value) !== canonical(expected)) {
 		return { correct: false, units: run.metrics.units, failure: "output differs from oracle" };
 	}
 	for (const post of contract.postconditions) {
@@ -50,7 +67,9 @@ export function judge(contract: Contract, input: Value, run: RunResult): CaseRes
 }
 
 export function evaluateCase(contract: Contract, program: Program, input: Value, context: EvalContext): CaseResult {
-	return judge(contract, input, execute(program, input, context));
+	// One host per case, shared by the candidate and the oracle, so both see the same world.
+	const host = (context.host ?? contract.host?.bind(contract))?.(input);
+	return judge(contract, input, execute(program, input, context, host), host);
 }
 
 export interface SuiteResult {

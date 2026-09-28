@@ -29,6 +29,7 @@ const USAGE = `lattice [--data DIR] [--no-adapter] <command>
   rollback skill ID [--to-version N]
   compile skill ID                       bytecode with differential test
   goal --contract organize.plan --dir PATH   propose moves (nothing changes yet)
+  goal --contract duplicates.report --dir PATH   files with identical content (reads files)
   plans                                  proposed and applied effect plans
   apply PLAN_ID                          approve and apply a plan (journaled, verified)
   undo PLAN_ID                           compensate a plan's committed moves

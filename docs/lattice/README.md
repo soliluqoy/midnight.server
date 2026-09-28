@@ -15,6 +15,7 @@ node packages/coding-agent/src/lattice/cli.ts improve skill inventory.report # o
 node packages/coding-agent/src/lattice/cli.ts explain skill inventory.report # evidence behind the active version
 node packages/coding-agent/src/lattice/cli.ts improve policy                 # level 2 (research budget)
 node packages/coding-agent/src/lattice/cli.ts goal --contract organize.plan --dir ./downloads  # propose moves
+node packages/coding-agent/src/lattice/cli.ts goal "duplicates in ./downloads"  # files with identical content
 node packages/coding-agent/src/lattice/cli.ts apply PLAN_ID                  # approve: journaled, verified moves
 node packages/coding-agent/src/lattice/cli.ts undo PLAN_ID                   # conditional compensation
 node packages/coding-agent/src/lattice/cli.ts serve --idle-ms 300000         # local API plus idle-time improvement
@@ -41,7 +42,7 @@ The reference program from spec section 27.2 is kept verbatim in [`lattice_refer
 | `metapolicy.ts` | 41 | Level 2: search policies as data, meta-evaluation over task families, promotion on fresh families |
 | `store.ts` | 7, 15, 19, 44 | SQLite (WAL, foreign keys, full sync), versions and heads, compare-and-swap promotion, rollback, release consumption, audit chain, integrity checks, recovery, snapshots, content-addressed artifacts, GC, ledger |
 | `governor.ts` | 9.4, 14, 42.2-42.4 | Budget tiers, daily CPU ledger with reservation, economic gate, UCB selection |
-| `broker.ts` | 13, 43.1-43.4 | Filesystem capabilities (signed, expiring, episode-bound; `list`, `read`, `rename`), inventory scans with file identities, a bounded `readText` host |
+| `broker.ts` | 13, 43.1-43.4 | Filesystem capabilities (signed, expiring, episode-bound; `list`, `read`, `rename`), inventory scans with file identities, a streaming content-hash host checked against the inventory, a bounded `readText` host |
 | `effects.ts` | 13.6, 43.5-43.8 | Effect plans from intents, apply with a prepared/committed journal, conditional compensation, crash reconciliation |
 | `adapter.ts` | 16, 37.2 | Optional goal adapter: exact task templates, output untrusted |
 | `kernel.ts` | 2, 5, 6, 29 | The hot path (cache, active skill, engine choice, verification, canary), operations, explanations, self-test |
@@ -70,7 +71,7 @@ The reference program from spec section 27.2 is kept verbatim in [`lattice_refer
 | Execute a manually authored skill safely | Human-authored seeds, type-checked and run under fuel |
 | Record an episode | `episodes` table; inputs and reports stored as content-addressed artifacts |
 | Evaluate success and cost | Oracle and postconditions; virtual units per run |
-| Synthesize a candidate mutation | Eight mutation operators (including loop-invariant hoisting); bottom-up enumeration for example-defined tasks |
+| Synthesize a candidate mutation | Nine mutation operators (including loop-invariant hoisting and implied-guard insertion); bottom-up enumeration for example-defined tasks |
 | Reject invalid or unsafe candidates | Static admission, then development and regression cases, then counterexample search |
 | Test on regression and held-out suites | Development, regression, release and shifted families; release sets consumed once |
 | Promote a verified improvement | Frozen plan, reserved release set, conjunctive gate, compare-and-swap into canary |
@@ -90,6 +91,8 @@ All from this repository on Windows 10, Node 24.21. Costs are virtual units (dec
 
 **Organize plan (effects, M9).** The seed rebuilds the list of all paths inside the per-file loop and classifies each file three times. A campaign within the 10 CPU-second bound hoisted the loop-invariant path list and reordered classification branches: release set 001 mean reduction 26.5% (lower bound 26.4%). A standalone search that also merged the three classifications reached 34%. It once proposed dropping the `kind = file` check, which no fixture could refute; adding a directory named like a file (`photos.png/`) to the regression suite made the counterexample search reject it. Applying a plan moved only what the plan listed, and undo restored the tree exactly, removing only the folders the plan created.
 
+**Duplicate files (sections 25, 43.4).** `duplicates.report` lists visible files whose content appears more than once, read through the broker's content-hash host. The seed hashes both files of every pair. `content_hash` declares that equal digests imply equal sizes (the host refuses a file whose byte count differs), and the `insert_implied_guard` operator uses such declarations to test the cheap argument first. One isolated campaign found the size-before-hash guard at both comparison sites without being told: release set 001 went from 184,934,154 to 3,581,176 units, mean reduction 98.1% (lower bound 98.0%), shifted-family ratio 0.245 (many equal sizes, where the guard helps least), shadowed on a rescanned live directory. The compiled form passed its differential test.
+
 **Library learning and synthesis (M7).** From three accepted programs of the form `and(ext = C1, age >= C2, not hidden)`, mining produced one abstraction with three parameters (gain 8 nodes, 18 verified cases). On four held-out tasks with new constants and a budget of 20,000 enumerated candidates: 0 of 4 solved without the library, 4 of 4 with it (at most 758 candidates each, all held-out examples reproduced). Without the library the same size-6 predicate needs 567,813 candidates.
 
 **Level 2 (M8, bounded).** Policies are scored by the area under the best-valid-cost curve over evaluator work (case runs weighted by input size), with identical budgets and seeds, against the parent and a random-search baseline. A default-settings campaign selected a policy that disables `split_filter` (selection score 0.112 vs 0.099; random 0.099), then confirmed it on a fresh task family (paired lower bound +0.0019, final quality not worse) and promoted it. The effect is small; this is an existence check of the mechanism, not a claim of compounding improvement (spec section 41.5).
@@ -104,10 +107,10 @@ All from this repository on Windows 10, Node 24.21. Costs are virtual units (dec
 6. **The local API** is HTTP over a named pipe or Unix socket with a per-installation token; no TCP port is opened. Idle-time improvement runs only in `serve --idle-ms`; it resumes paused campaigns first, gates new ones economically and backs off exponentially. Thermal and battery signals (section 42.3) are not read.
 7. **Timing claims** use the virtual cost model; wall-time comparisons (section 38.6) are limited to the interpreter/bytecode measurement.
 8. **Planning tiers (section 9.1).** The hot path uses tier 0 (exact cache) and tier 1 (the active skill, interpreted or compiled). Tiers 4 (mutation) and 5 (synthesis) run only in explicit campaigns and `synthesize`. Tier 2 (composing skills), tier 3 (parameter search) and tier 6 (model proposals) are not implemented: no current contract is solved by composing others, and every constant in the current contracts is part of the task definition, which section 39.4 says must not be tuned.
-12. **No content hashing or duplicate detection (sections 25, 43.4).** Its characteristic optimization, hashing only files whose sizes collide, needs a guard-insertion operator that the current mutation set cannot justify soundly, so it is left out rather than hand-written.
 9. **Semantic memory** holds only campaign cost profiles (with provenance and expiry); there is no episode clustering or fact extraction beyond that.
 10. **Installation limits** allow 512 AST nodes (section 40.1 proposes 64 for searched skills, to be measured); readable seed programs for the inventory and organize contracts need 160-310 nodes.
 11. **Retention** releases episode inputs after 30 days and reports after 90 days without reuse, and cache entries after 7 days; episode rows keep the content hash, so provenance stays. There is no sampling of successful episodes.
+12. **Content reads are a verified bounded read, not a filesystem snapshot (section 43.3).** `content_hash` streams SHA-256 and checks each file's size, modification time and file ID against the inventory before and after reading; a change fails the goal with "unstable input". A writer that restores size and modification time can go unnoticed. The kernel stores inventories, never file bytes, so read contracts skip the exact cache, and their live episodes are replayed by rescanning the directory (shadow and compile only; the search worker holds no read capability). Release and development data for them come from a synthetic content world.
 
 ## Operations
 

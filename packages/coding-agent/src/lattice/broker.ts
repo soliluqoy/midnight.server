@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import {
 	type BigIntStats,
 	closeSync,
@@ -12,15 +12,16 @@ import {
 } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { canonical } from "./canonical.ts";
-import { LatticeError } from "./primitives.ts";
+import { type Host, LatticeError } from "./primitives.ts";
 
 /**
  * The effect broker, read-only as R1 requires (spec section 43.1). A path string is not a
  * capability (section 43.2): the kernel issues a signed, short-lived record bound to one episode,
  * and every access resolves relative to its root, rejecting absolute paths, parent traversal and
  * symlink or reparse-point escapes. Inventory is "best-effort": metadata observed at a time,
- * labeled as such (section 43.3). Writes and compensation (section 43.6) are not implemented;
- * reports go only to the kernel's own content-addressed artifact store.
+ * labeled as such (section 43.3); exact content goes through `contentHashHost`, which checks each
+ * file against that inventory. Renames are applied by `effects.ts`; reports go only to the
+ * kernel's own content-addressed artifact store.
  */
 export type Verb = "list" | "read" | "rename";
 
@@ -185,6 +186,99 @@ export function scanDirectory(
 		entries,
 		identities,
 		skipped,
+	};
+}
+
+export const HASH_CHUNK_BYTES = 65_536;
+
+export interface ContentHashHost extends Host {
+	/** What was read (spec section 43.4 step 7), for the goal's evidence. */
+	readonly observed: { files: number; bytes: number; cacheHits: number };
+}
+
+/**
+ * A `contentHash` host bound to one capability and the inventory it was issued with (spec section
+ * 43.4). For each file: resolve inside the root without following links, open it, check that the
+ * opened object still has the identity the inventory recorded, stream SHA-256 over bounded chunks,
+ * and check the identity again. A file that changed while it was read is retried once; a file that
+ * changed since the inventory, or keeps changing, fails with "unstable input" rather than giving a
+ * digest of bytes the inventory never described. This is a verified bounded read, not a
+ * filesystem snapshot: a writer that restores size and modification time can go unnoticed.
+ *
+ * Digests are kept for the host's lifetime (one episode), keyed by path and re-validated against
+ * the file's identity on every use, so a program that hashes a file twice reads it once.
+ */
+export function contentHashHost(
+	key: string,
+	capability: Capability,
+	episodeId: string,
+	identities: { readonly [path: string]: FileIdentity },
+): ContentHashHost {
+	const digests = new Map<string, string>();
+	const observed = { files: 0, bytes: 0, cacheHits: 0 };
+	const sameIdentity = (stats: BigIntStats, expected: FileIdentity) =>
+		stats.isFile() &&
+		Number(stats.size) === expected.size &&
+		stats.mtimeNs.toString() === expected.mtime_ns &&
+		stats.ino.toString() === expected.ino;
+	const hashOnce = (real: string, expected: FileIdentity): string | undefined => {
+		const fd = openSync(real, "r");
+		try {
+			if (!sameIdentity(fstatSync(fd, { bigint: true }), expected)) {
+				throw new LatticeError("host", "unstable input: file changed since the inventory");
+			}
+			const hash = createHash("sha256");
+			const buffer = Buffer.alloc(Math.min(HASH_CHUNK_BYTES, Math.max(expected.size, 1)));
+			let total = 0;
+			for (;;) {
+				const read = readSync(fd, buffer, 0, buffer.length, total);
+				if (read === 0) break;
+				hash.update(buffer.subarray(0, read));
+				total += read;
+				if (total > expected.size) return undefined;
+			}
+			observed.bytes += total;
+			return total === expected.size && sameIdentity(fstatSync(fd, { bigint: true }), expected)
+				? hash.digest("hex")
+				: undefined;
+		} finally {
+			closeSync(fd);
+		}
+	};
+	return {
+		observed,
+		contentHash(ref: string, size: number): string {
+			verifyCapability(key, capability, "read", episodeId);
+			const expected = identities[ref];
+			if (!expected) throw new LatticeError("host", "file is not in the inventory");
+			// `content_hash` declares that equal digests imply equal sizes; this check is what makes it true.
+			if (expected.size !== size) throw new LatticeError("host", "unstable input: size differs from the inventory");
+			const target = resolveInside(capability.root, ref);
+			const current = observeIdentity(target);
+			if (!current || current.kind !== "file")
+				throw new LatticeError("host", "unstable input: file is gone or replaced");
+			if (current.size !== expected.size || current.mtime_ns !== expected.mtime_ns || current.ino !== expected.ino) {
+				throw new LatticeError("host", "unstable input: file changed since the inventory");
+			}
+			const cached = digests.get(ref);
+			if (cached !== undefined) {
+				observed.cacheHits++;
+				return cached;
+			}
+			const real = realpathSync(target);
+			if (relative(capability.root, real).split(sep).join("/") !== ref.split(/[\\/]+/).join("/")) {
+				throw new LatticeError("effect", "path resolves through a link");
+			}
+			for (let attempt = 0; attempt < 2; attempt++) {
+				const digest = hashOnce(real, expected);
+				if (digest !== undefined) {
+					observed.files++;
+					digests.set(ref, digest);
+					return digest;
+				}
+			}
+			throw new LatticeError("host", "unstable input: file changed while it was read");
+		},
 	};
 }
 

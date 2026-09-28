@@ -453,8 +453,9 @@ describe("lattice idle scheduler", () => {
 		loop.lastInteractiveAt = Number.NEGATIVE_INFINITY;
 		// No episodes: the economic gate declines every skill, and each backs off.
 		const decisions = [];
-		for (let i = 0; i < 3; i++) decisions.push(await scheduler.tick());
+		for (let i = 0; i < 4; i++) decisions.push(await scheduler.tick());
 		expect(decisions.map((decision) => [decision.action, decision.skill, decision.outcome])).toEqual([
+			["improve", "duplicates.report", "no_candidate"],
 			["improve", "inventory.report", "no_candidate"],
 			["improve", "organize.plan", "no_candidate"],
 			["improve", "records.filter", "no_candidate"],

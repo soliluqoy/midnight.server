@@ -6,6 +6,7 @@ import { mineAbstractions } from "../src/lattice/abstraction.ts";
 import { canonical } from "../src/lattice/canonical.ts";
 import {
 	type Contract,
+	duplicatesReport,
 	inventoryReport,
 	organizePlan,
 	RECORD_TYPE,
@@ -30,7 +31,7 @@ const context = { limits: INSTALLATION_LIMITS, library: new Map() };
 const info = (program: Program, contract: Contract) => {
 	const check = checkProgram(program, {
 		limits: INSTALLATION_LIMITS,
-		granted: new Set(),
+		granted: new Set(contract.granted),
 		library: new Map(),
 		inputSummary: contract.inputBounds,
 	});
@@ -41,7 +42,7 @@ const info = (program: Program, contract: Contract) => {
 describe("lattice mutation operators", () => {
 	const all = new Set(MUTATION_OPS);
 
-	for (const contract of [inventoryReport, recordsFilter, organizePlan]) {
+	for (const contract of [inventoryReport, recordsFilter, organizePlan, duplicatesReport]) {
 		it(`preserves ${contract.id} semantics for every operator with a provable precondition`, () => {
 			const program = contract.seed();
 			const inputs = [
@@ -57,13 +58,13 @@ describe("lattice mutation operators", () => {
 				expect(
 					checkProgram(mutation.program, {
 						limits: INSTALLATION_LIMITS,
-						granted: new Set(),
+						granted: new Set(contract.granted),
 						library: new Map(),
 						inputSummary: contract.inputBounds,
 					}).ok,
 				).toBe(true);
 				inputs.forEach((input, index) => {
-					const run = interpret(mutation.program, input, context);
+					const run = interpret(mutation.program, input, { ...context, host: contract.host?.(input) });
 					expect(run.ok && canonical(run.value), `${mutation.description}`).toBe(expected[index]);
 				});
 			}

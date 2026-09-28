@@ -32,6 +32,11 @@ export const MAX_INT = Number.MAX_SAFE_INTEGER;
 /** Host functions a primitive may use. Only the broker supplies them, bound to a capability. */
 export interface Host {
 	readText?(ref: string, maxBytes: number): string;
+	/**
+	 * SHA-256 of the file's bytes. Must fail unless the file has exactly `size` bytes and stayed
+	 * the same while it was read: `content_hash` declares that equal results imply equal sizes.
+	 */
+	contentHash?(ref: string, size: number): string;
 }
 
 export interface Primitive {
@@ -47,6 +52,11 @@ export interface Primitive {
 	/** Declared virtual cost, charged before the implementation runs (spec section 39.5). */
 	cost(args: readonly Value[]): number;
 	impl(args: readonly Value[], host: Host): Value;
+	/**
+	 * Argument positions whose equality is implied by equal results, guaranteed by the kernel's
+	 * implementation (and its hosts). `insert_implied_guard` may test those arguments first.
+	 */
+	equalityImplies?: number[];
 }
 
 export const READ_TEXT_MAX_BYTES = 65_536;
@@ -255,6 +265,25 @@ const PRIMITIVE_LIST: Primitive[] = [
 		impl: (args) => (args[0] as Value[]).includes(args[1]),
 	},
 	{
+		id: "content_hash",
+		version: 1,
+		effect: "read",
+		signature: (args) =>
+			args.length === 2 && args[0].kind === "string" && args[1].kind === "int"
+				? T.string
+				: "content_hash expects (String path, Int size)",
+		total: () => false,
+		summarize: () => ({ bytes: 64 }),
+		// Charged before reading: proportional to the declared size, which the host enforces.
+		cost: (args) => 1 + Math.ceil(Math.max(0, args[1] as number) / 64),
+		impl: (args, host) => {
+			if (!host.contentHash) throw new LatticeError("effect", "content_hash needs a read capability");
+			return host.contentHash(args[0] as string, args[1] as number);
+		},
+		// Equal SHA-256 digests mean equal bytes; the host returns only when the file has `size` bytes.
+		equalityImplies: [1],
+	},
+	{
 		id: "read_text",
 		version: 1,
 		effect: "read",
@@ -276,5 +305,10 @@ export const PRIMITIVES: ReadonlyMap<string, Primitive> = new Map(
 
 /** Identity of the primitive set: ids, versions and effect classes. Recorded in every program hash. */
 export const PRIMITIVE_LIBRARY_HASH = digest(
-	PRIMITIVE_LIST.map((primitive) => [primitive.id, primitive.version, primitive.effect]),
+	PRIMITIVE_LIST.map((primitive) => [
+		primitive.id,
+		primitive.version,
+		primitive.effect,
+		primitive.equalityImplies ?? [],
+	]),
 );

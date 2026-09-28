@@ -43,6 +43,7 @@ export const DEFAULT_POLICY: SearchPolicy = {
 		reorder_exclusive: 0.2,
 		hoist_common: 0.15,
 		hoist_invariant: 0.15,
+		insert_implied_guard: 0.15,
 		fuse_filters: 0.05,
 		split_filter: 0.05,
 		dedupe_conjunct: 0.1,
