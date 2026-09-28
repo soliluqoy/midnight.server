@@ -199,11 +199,6 @@ function newErrorsBlock(comparison: BaselineComparison): string[] {
 }
 
 /**
- * The message a failed round sends back to the model. On a repeated failure of the same
- * checks it asks for a diagnosis before another edit: retrying the same fix is the common
- * failure after a first repair misses, and naming competing causes breaks that loop.
- */
-/**
  * Added to failing-check feedback when the blocker rule is on. Without it, "fix the cause, do not
  * weaken the tests" leaves a model facing a test that contradicts the request two ways out, both
  * drift: undo the requested behavior, or special-case the test (seen in evals/drift pilot-01).
@@ -211,14 +206,12 @@ function newErrorsBlock(comparison: BaselineComparison): string[] {
 export const REQUEST_WINS_NOTE =
 	"If a failing test contradicts what the user asked for, the request wins: keep the requested behavior, do not special-case the test's inputs, and say in your final message which test conflicts and why.";
 
+/** The message a failed settle pass sends back to the model: the smallest actionable output. */
 export function formatCheckFeedback(
 	outcomes: readonly CheckOutcome[],
 	round: number,
 	maxRounds: number,
-	repeated: boolean,
 	requestWins = false,
-	adaptiveRepair = true,
-	divergence?: string,
 ): string {
 	const lines = [`Harness checks failed after your changes (repair round ${round} of ${maxRounds}).`];
 	for (const outcome of outcomes) {
@@ -232,25 +225,6 @@ export function formatCheckFeedback(
 				if (diagnostics) lines.push("<diagnostic-lines>", diagnostics, "</diagnostic-lines>");
 			}
 		}
-	}
-	if (divergence) {
-		// Divergence (divergence.ts) asks for causes that differ in kind, so it replaces the
-		// two-hypothesis request instead of adding a second one.
-		if (repeated && adaptiveRepair) {
-			lines.push(
-				"The same checks failed again after your last fix. Treat the previous approach as rejected: do not make a cosmetic edit or repeat the same hypothesis.",
-			);
-		}
-		lines.push(divergence);
-		if (adaptiveRepair) lines.push("Choose a materially different repair or report the blocker.");
-	} else if (repeated && adaptiveRepair) {
-		lines.push(
-			"The same checks failed again after your last fix. Treat the previous approach as rejected: do not make a cosmetic edit or repeat the same hypothesis. Before editing, state the most likely root cause and one alternative explanation, then check which one the output supports. Choose a materially different repair or report the blocker.",
-		);
-	} else if (repeated) {
-		lines.push(
-			"The same checks failed again after your last fix. Before editing, state the most likely root cause and one alternative explanation, then check which one the output supports.",
-		);
 	}
 	lines.push("Fix the cause, then finish. Do not weaken, skip or delete the checks or the tests they run.");
 	if (requestWins) lines.push(REQUEST_WINS_NOTE);

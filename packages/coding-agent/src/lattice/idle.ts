@@ -1,5 +1,4 @@
 import type { CampaignReport } from "./campaign.ts";
-import { HARNESS_POLICY_SKILL } from "./harness-policy.ts";
 import type { Lattice } from "./kernel.ts";
 import { POLICY_SKILL } from "./metapolicy.ts";
 import type { KernelLoop } from "./server.ts";
@@ -105,8 +104,8 @@ export class IdleScheduler {
 			const skills = store
 				.skills()
 				.map((row) => row.skill_id)
-				// Policies improve through their own campaigns; the harness policy needs model evals.
-				.filter((skill) => skill !== POLICY_SKILL && skill !== HARNESS_POLICY_SKILL && !skill.startsWith("user."));
+				// Policies improve through their own campaigns.
+				.filter((skill) => skill !== POLICY_SKILL && !skill.startsWith("user."));
 			// Paused campaigns first: their population is already paid for.
 			for (const skill of skills) {
 				const paused = store.campaigns(skill).find((campaign) => campaign.status === "paused");

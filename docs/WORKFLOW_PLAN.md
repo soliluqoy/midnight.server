@@ -1,6 +1,6 @@
 # Workflow plan: a lean harness that has to beat vanilla Pi
 
-Status (2026-09-28): proposal. It replaces the feature-accumulation approach of [HARNESS_REBUILD_PLAN.md](HARNESS_REBUILD_PLAN.md) for the product's default behavior. The measurement goals of that plan (Luna vs Astra) stay; this plan changes what runs in a user's session while they are measured.
+Status (2026-09-28): approved and implemented (Sections 3 and 4, and the receipt fields in Section 5 item 1; deviations in Section 8). The lean-versus-vanilla measurement in Section 5 has not run yet. It replaces the feature-accumulation approach of [HARNESS_REBUILD_PLAN.md](HARNESS_REBUILD_PLAN.md) for the product's default behavior. The measurement goals of that plan (Luna vs Astra) stay; this plan changes what runs in a user's session while they are measured.
 
 ## 1. Problem
 
@@ -134,3 +134,12 @@ The comparison the project has not run: lean vs current vs vanilla Pi, on the sa
 | Escalation default | Off; opt-in with its cost shown in `/harness` |
 | Context pack and `lookup` default | Off until a large-repo receipt shows a gain |
 | Keep the fast/frontier split | Only if a receipt shows different best defaults per class |
+
+## 8. Implementation notes and deviations
+
+- `extension.ts` was rewritten in place (1,200 lines, down from 1,700) rather than split into `guards.ts` and `settle.ts`: the hooks share one per-request state, and a split would only pass that state around.
+- No `MIDNIGHT_SERVER_HARNESS_PROFILE=lean` stage: the lean set is the default directly. The comparison with the old harness runs from the commit before this change.
+- The start tree (`git write-tree` through a throwaway index) runs in the background when a request starts; edit, write and shell calls wait for it, which normally costs nothing because it finishes before the model's first tool call.
+- The lazy baseline links ignored directories (dependencies, build output) into the temporary copy. A check that writes into one of them, such as a build cache, writes into the real checkout.
+- The environment facts moved from the context pack into a system-prompt section. The context pack itself (opt-in) now carries only git state, ranked files and file contents.
+- `harness/` is 5,400 lines, not the 3,000 estimated in Section 4: the opt-in features (context pack, workspace index, outlines, language-server client, `lookup`) stay in the code, off by default, so the eval can still measure them. Deleting them is the next step if they do not earn a place.

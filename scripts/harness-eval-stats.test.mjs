@@ -37,8 +37,8 @@ test("paired comparison and summary", () => {
 	const records = [];
 	for (const task of ["a", "b", "c", "d"]) {
 		for (const repeat of [0, 1]) {
-			records.push({ task, repeat, variant: "bare", passed: task === "a", input: 100, output: 10, cost: 0.01, cacheRead: 0, elapsedMs: 1000, turns: 5 });
-			records.push({ task, repeat, variant: "harness", passed: task !== "d", input: 80, output: 10, cost: 0.01, cacheRead: 0, elapsedMs: 900, turns: 3 });
+			records.push({ task, repeat, variant: "bare", passed: task === "a", input: 100, output: 10, cost: 0.01, cacheRead: 300, elapsedMs: 1000, turns: 5 });
+			records.push({ task, repeat, variant: "harness", passed: task !== "d", input: 80, output: 10, cost: 0.01, cacheRead: 0, elapsedMs: 900, turns: 3, harnessMs: 500 });
 		}
 	}
 	const result = pairedComparison(records, "bare", "harness");
@@ -50,6 +50,9 @@ test("paired comparison and summary", () => {
 	const summary = variantSummary(records, "harness");
 	assert.equal(summary.passed, 6);
 	assert.equal(summary.tokensPerSolved, (90 * 8) / 6);
+	assert.equal(summary.harnessSecondsPerRun, 0.5);
+	assert.equal(summary.cacheShare, 0);
+	assert.equal(variantSummary(records, "bare").cacheShare, 0.75);
 	const report = formatReport(records, ["bare", "harness"]);
 	assert.match(report, /Paired against bare/);
 	assert.match(report, /\+50%/);

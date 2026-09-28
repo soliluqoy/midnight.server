@@ -40,7 +40,7 @@ describe("harness", () => {
 	});
 
 	it("runs checks before settling and feeds a failure back for one repair round", async () => {
-		const harness = await harnessWith({ checks: [CHECK], features: { inRunChecks: false } });
+		const harness = await harnessWith({ checks: [CHECK] });
 		harnesses.push(harness);
 		const requests: string[] = [];
 		harness.setResponses([
@@ -58,7 +58,7 @@ describe("harness", () => {
 		await harness.session.prompt("write the answer");
 
 		expect(requests).toHaveLength(1);
-		expect(requests[0]).toContain("Harness checks failed after your changes (repair round 1 of 2)");
+		expect(requests[0]).toContain("Harness checks failed after your changes (repair round 1 of 1)");
 		expect(requests[0]).toContain("answer.txt must contain good");
 		expect(readFileSync(join(harness.tempDir, "answer.txt"), "utf8")).toBe("good");
 		expect(customMessages(harness, CHECK_MESSAGE_TYPE)).toHaveLength(1);
@@ -70,7 +70,6 @@ describe("harness", () => {
 		const harness = await harnessWith({
 			checks: [CHECK],
 			maxRepairRounds: 1,
-			features: { inRunChecks: false },
 		});
 		harnesses.push(harness);
 		harness.setResponses([
@@ -123,32 +122,6 @@ describe("harness", () => {
 		expect(results).toHaveLength(2);
 		expect(results.every((text) => text.includes("protected by the harness"))).toBe(true);
 		expect(existsSync(join(harness.tempDir, "tests", "spec.txt"))).toBe(false);
-	});
-
-	it("elides old large tool results in one batch through context edits", async () => {
-		const harness = await harnessWith({
-			masking: { keepRecentResults: 1, minResultBytes: 1_000, batchBytes: 5_000 },
-		});
-		harnesses.push(harness);
-		for (const name of ["a", "b", "c"]) writeFileSync(join(harness.tempDir, `${name}.txt`), name.repeat(3_000));
-		const requests: string[] = [];
-		harness.setResponses([
-			fauxAssistantMessage(fauxToolCall("read", { path: "a.txt" }), { stopReason: "toolUse" }),
-			fauxAssistantMessage(fauxToolCall("read", { path: "b.txt" }), { stopReason: "toolUse" }),
-			fauxAssistantMessage(fauxToolCall("read", { path: "c.txt" }), { stopReason: "toolUse" }),
-			(context) => {
-				requests.push(JSON.stringify(context.messages));
-				return fauxAssistantMessage("done");
-			},
-		]);
-
-		await harness.session.prompt("read them");
-
-		const edits = harness.sessionManager.getEntries().filter((entry) => entry.type === "context_edit");
-		expect(edits).toHaveLength(2);
-		expect(requests[0]).toContain('read {\\"path\\":\\"a.txt\\"} output elided');
-		expect(requests[0]).not.toContain("a".repeat(3_000));
-		expect(requests[0]).toContain("c".repeat(3_000));
 	});
 
 	it("is inert when disabled", async () => {

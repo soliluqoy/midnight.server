@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- The harness is now lean by default ([docs/harness.md](docs/harness.md), [plan](../../docs/WORKFLOW_PLAN.md)). `harness.json` keys `masking` and `mutation`, and the features `masking`, `inRunChecks`, `checkCache`, `checkpoints`, `adaptiveRepair`, `divergence`, `reasoningBoost` and `mutationProbe`, are rejected as unknown. `MIDNIGHT_SERVER_HARNESS_LEARN` and `MIDNIGHT_SERVER_HARNESS_POLICY` are no longer read.
+
+### Changed
+
+- Changed the harness to do nothing slow while the model works: checks run once when the model finishes, not after each batch of edits; the baseline for pre-existing type and lint failures runs only after a static check fails, on a temporary copy of the tree as the request found it, instead of at the start of every request (where the first edit waited up to 15 s for it); and a check the model already ran successfully after its last change is not run again. Detected full test suites are left to the model; configured ones still run.
+- Changed the harness defaults: one repair round instead of two; `contextPack`, `lookup`, language-server `diagnostics` and `escalation` are off by default and opt-in through `harness.json` features. The fast/frontier model classes are gone: every model gets the same defaults.
+- Changed the environment facts (OS, shell, test command, checks) to a system-prompt section, so they stay in the cached prompt prefix instead of a per-request context message.
+- `/harness` and the harness telemetry show the time spent in each harness hook; the eval report adds the harness's own time per run and the share of prompt tokens served from cache.
+
+### Removed
+
+- Removed observation masking: rewriting old tool results invalidated the provider's prompt cache from that point on. Pi's compaction handles long sessions.
+- Removed mid-run checks, rollback to checkpoints, divergence feedback, the reasoning boost, the verifier probe and escalation on repeated tool calls.
+- Removed the Lattice-1 policy loop from the harness: sessions no longer run live trials of feature changes. Lattice-1 itself stays a standalone tool (`npm run lattice`).
+
 ## [0.87.1-midnight.3] - 2026-09-28
 
 ### Added

@@ -12,7 +12,7 @@ function contextText(context: Context): string {
 }
 
 /** A git project with source, a test and a passing check (`node test.js`). */
-function writeProject(dir: string, options: { checks?: boolean } = {}): void {
+function writeProject(dir: string, options: { checks?: boolean; maxRepairRounds?: number } = {}): void {
 	writeFileSync(
 		join(dir, "port.js"),
 		"function parsePort(value) {\n\treturn Number(value);\n}\nmodule.exports = { parsePort };\n",
@@ -27,6 +27,7 @@ function writeProject(dir: string, options: { checks?: boolean } = {}): void {
 		JSON.stringify({
 			checks: options.checks === false ? [] : [{ name: "unit", command: ["node", "test.js"], when: ["*.js"] }],
 			autoChecks: false,
+			...(options.maxRepairRounds !== undefined ? { maxRepairRounds: options.maxRepairRounds } : {}),
 		}),
 	);
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "ignore" });
@@ -103,16 +104,16 @@ describe("drift guard in a session", () => {
 	it("sees edits made outside the edit tools, such as by a shell command", async () => {
 		const harness = await setup();
 		writeProject(harness.tempDir);
+		// What a `sed -i` would do: no edit tool call, the file just changes.
+		writeFileSync(
+			join(harness.tempDir, "shrink.js"),
+			`require("fs").writeFileSync("test.js", ${JSON.stringify('const assert = require("node:assert");\nconst { parsePort } = require("./port.js");\nassert.strictEqual(parsePort("8080"), 8080);\n')});\n`,
+		);
+		const shell = process.platform === "win32" ? "powershell" : "bash";
 		let feedback = "";
 		harness.setResponses([
-			() => {
-				// What a `sed -i` would do: no edit tool call, the file just changes.
-				writeFileSync(
-					join(harness.tempDir, "test.js"),
-					'const assert = require("node:assert");\nconst { parsePort } = require("./port.js");\nassert.strictEqual(parsePort("8080"), 8080);\n',
-				);
-				return fauxAssistantMessage("Removed the failing case.");
-			},
+			fauxAssistantMessage([fauxToolCall(shell, { command: "node shrink.js" })], { stopReason: "toolUse" }),
+			fauxAssistantMessage("Removed the failing case."),
 			(context) => {
 				feedback = contextText(context);
 				return fauxAssistantMessage("That test encoded the request; I removed it and the request is not done.");
@@ -173,7 +174,7 @@ describe("drift guard in a session", () => {
 
 	it("keeps repairing when the model does not report why the checks fail", async () => {
 		const harness = await setup();
-		writeProject(harness.tempDir);
+		writeProject(harness.tempDir, { maxRepairRounds: 2 });
 		let rounds = 0;
 		harness.setResponses([
 			edit("port.js", "\treturn Number(value);", "\treturn Number(value) + 1;"),

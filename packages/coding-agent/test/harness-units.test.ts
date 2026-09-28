@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
-import type { ProjectedSessionEntry } from "../src/core/session-manager.ts";
 import {
 	boundOutput,
 	diagnosticExcerpt,
@@ -17,7 +16,6 @@ import {
 import { DEFAULT_CHECK_TIMEOUT_MS, defaultHarnessConfig, parseHarnessConfig } from "../src/harness/config.ts";
 import harnessExtension from "../src/harness/extension.ts";
 import { remapForeignPath, repairPowerShellCommand } from "../src/harness/interface-repair.ts";
-import { planMasking } from "../src/harness/masking.ts";
 
 describe("harness config", () => {
 	it("fills defaults and validates checks", () => {
@@ -29,7 +27,7 @@ describe("harness config", () => {
 			{ name: "types", command: ["npx", "tsc", "--noEmit"], when: ["**/*.ts"], timeoutMs: DEFAULT_CHECK_TIMEOUT_MS },
 		]);
 		expect(config.protect).toEqual(["test/**"]);
-		expect(config.masking).toEqual(defaultHarnessConfig().masking);
+		expect(config.maxRepairRounds).toBe(defaultHarnessConfig().maxRepairRounds);
 	});
 
 	it.each([
@@ -37,7 +35,8 @@ describe("harness config", () => {
 		[{ checks: [{ command: ["a"] }] }, /name is required/],
 		[{ chekcs: [] }, /Unknown key "chekcs"/],
 		[{ maxRepairRounds: -1 }, /non-negative integer/],
-		[{ masking: { batchBytes: "big" } }, /masking.batchBytes/],
+		[{ masking: { enabled: false } }, /Unknown key "masking"/],
+		[{ features: { divergence: true } }, /Unknown feature "divergence"/],
 	])("rejects %j", (value, message) => {
 		expect(() => parseHarnessConfig(value)).toThrow(message);
 	});
@@ -77,7 +76,7 @@ describe("harness checks", () => {
 		expect(diagnosticExcerpt(output)).toBe("expected: 2\nreceived: 3");
 	});
 
-	it("asks for a diagnosis when the same checks fail again", () => {
+	it("sends the failing output and the request-wins rule", () => {
 		const outcome = {
 			name: "test",
 			argv: ["npm", "test"],
@@ -88,15 +87,12 @@ describe("harness checks", () => {
 			output: "1 failed",
 			truncated: false,
 		};
-		expect(formatCheckFeedback([outcome], 1, 2, false)).not.toContain("root cause");
-		const repeated = formatCheckFeedback([outcome], 2, 2, true);
-		expect(repeated).toContain("repair round 2 of 2");
-		expect(repeated).toContain("[FAIL] test: npm test (exit 1, 1.2 s)");
-		expect(repeated).toContain("root cause");
-		expect(repeated).toContain("materially different repair");
-		expect(formatCheckFeedback([outcome], 2, 2, true, false, false)).not.toContain(
-			"Treat the previous approach as rejected",
-		);
+		const feedback = formatCheckFeedback([outcome], 1, 1);
+		expect(feedback).toContain("repair round 1 of 1");
+		expect(feedback).toContain("[FAIL] test: npm test (exit 1, 1.2 s)");
+		expect(feedback).toContain("<output>\n1 failed\n</output>");
+		expect(feedback).not.toContain("the request wins");
+		expect(formatCheckFeedback([outcome], 1, 1, true)).toContain("the request wins");
 	});
 
 	it("parses porcelain -z output including renames", () => {
@@ -162,77 +158,6 @@ describe("harness checks", () => {
 	});
 });
 
-describe("observation masking", () => {
-	const settings = { enabled: true, keepRecentResults: 1, minResultBytes: 100, batchBytes: 1_000 };
-	let counter = 0;
-	const assistant = (callId: string, args: unknown): ProjectedSessionEntry => {
-		const message = {
-			role: "assistant",
-			content: [{ type: "toolCall", id: callId, name: "read", arguments: args }],
-			timestamp: 0,
-		};
-		return {
-			sourceEntry: { type: "message", id: `a${counter++}`, parentId: null, timestamp: "", message },
-			messages: [message],
-		} as unknown as ProjectedSessionEntry;
-	};
-	const result = (id: string, callId: string, bytes: number, toolName = "read"): ProjectedSessionEntry => {
-		const message = {
-			role: "toolResult",
-			toolCallId: callId,
-			toolName,
-			content: [{ type: "text", text: "x".repeat(bytes) }],
-			isError: false,
-			timestamp: 0,
-		};
-		return {
-			sourceEntry: { type: "message", id, parentId: null, timestamp: "", message },
-			messages: [message],
-		} as unknown as ProjectedSessionEntry;
-	};
-
-	it("waits for a full batch, then elides every eligible old result at once", () => {
-		const small = [
-			assistant("c1", { path: "a.ts" }),
-			result("r1", "c1", 600),
-			assistant("c2", {}),
-			result("r2", "c2", 600),
-		];
-		// Only r1 is old enough (keepRecentResults: 1) and 600 bytes is below the batch.
-		expect(planMasking(small, settings).edits).toEqual([]);
-		const entries = [...small, assistant("c3", {}), result("r3", "c3", 600)];
-		const plan = planMasking(entries, settings);
-		expect(plan.edits.map((edit) => edit.targetId)).toEqual(["r1", "r2"]);
-		expect(plan.elidedBytes).toBe(1_200);
-		const stub = plan.edits[0].replacement;
-		expect(stub).toEqual({ content: expect.stringContaining('read {"path":"a.ts"} output elided') });
-	});
-
-	it("skips already-edited and small results", () => {
-		const entries = [
-			assistant("c1", {}),
-			result("r1", "c1", 5_000),
-			assistant("c3", {}),
-			result("r3", "c3", 50),
-			{
-				sourceEntry: {
-					type: "context_edit",
-					id: "e1",
-					parentId: null,
-					timestamp: "",
-					targetId: "r1",
-					replacement: null,
-				},
-				messages: [],
-			} as unknown as ProjectedSessionEntry,
-			assistant("c4", {}),
-			result("r4", "c4", 5_000),
-		];
-		expect(planMasking(entries, settings).edits).toEqual([]);
-		expect(planMasking(entries, { ...settings, enabled: false }).edits).toEqual([]);
-	});
-});
-
 describe("harness tool set", () => {
 	type Handler = (event: Record<string, unknown>, ctx: unknown) => unknown;
 
@@ -266,12 +191,23 @@ describe("harness tool set", () => {
 		return { start, activeTools: () => activeTools, handlers };
 	}
 
-	it("adds lookup and leaves the other tools alone", async () => {
-		const fake = fakePi(["read", "edit", "mcp", "mcpScript"]);
-		await fake.start("anthropic");
-		expect(fake.activeTools().sort()).toEqual(["edit", "lookup", "mcp", "mcpScript", "read"]);
-		await fake.start("anthropic");
-		expect(fake.activeTools().sort()).toEqual(["edit", "lookup", "mcp", "mcpScript", "read"]);
+	it("leaves the tool set alone by default and adds lookup when it is switched on", async () => {
+		const previous = process.env.MIDNIGHT_SERVER_HARNESS_FEATURES;
+		try {
+			const plain = fakePi(["read", "edit", "mcp", "mcpScript"]);
+			const sections = await plain.start("anthropic");
+			expect(plain.activeTools().sort()).toEqual(["edit", "mcp", "mcpScript", "read"]);
+			expect(sections.environment).toMatch(/^OS: /);
+			process.env.MIDNIGHT_SERVER_HARNESS_FEATURES = "+lookup";
+			const fake = fakePi(["read", "edit", "mcp", "mcpScript"]);
+			await fake.start("anthropic");
+			expect(fake.activeTools().sort()).toEqual(["edit", "lookup", "mcp", "mcpScript", "read"]);
+			await fake.start("anthropic");
+			expect(fake.activeTools().sort()).toEqual(["edit", "lookup", "mcp", "mcpScript", "read"]);
+		} finally {
+			if (previous === undefined) delete process.env.MIDNIGHT_SERVER_HARNESS_FEATURES;
+			else process.env.MIDNIGHT_SERVER_HARNESS_FEATURES = previous;
+		}
 	});
 
 	it("gives shell calls without a timeout the default one, and keeps an explicit timeout", () => {
