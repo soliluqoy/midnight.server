@@ -491,8 +491,205 @@ export const inventoryReport: Contract = {
 	},
 };
 
+/* ------------------------------------------------------------------------------------------ */
+/* organize.plan: effect intents that move top-level files into category directories.          */
+/* ------------------------------------------------------------------------------------------ */
+
+export const MOVE_TYPE = T.record({ from: T.string, to: T.string });
+
+/** `let x = ext_of(record.path) in if-chain` over the fixed classification table. */
+export function classifyExpr(record: Expr): Expr {
+	let chain: Expr = s("other");
+	for (const category of Object.keys(CATEGORIES).reverse()) {
+		chain = {
+			node: "if",
+			cond: or(...CATEGORIES[category].map((extension) => call("eq", v("x"), s(extension)))),
+			ifTrue: s(category),
+			ifFalse: chain,
+		};
+	}
+	return { node: "let", name: "x", value: call("ext_of", f(record, "path")), body: chain };
+}
+
+interface Move {
+	from: string;
+	to: string;
+}
+
+/**
+ * The seed is correct and deliberately naive: inside the per-file filter it rebuilds the list of
+ * all paths (quadratic work) and classifies each file three times.
+ */
+function organizeSeed(): Program {
+	const e = v("e");
+	const destination = (): Expr => call("concat", call("concat", classifyExpr(e), s("/")), f(e, "path"));
+	const allPaths = (): Expr => ({
+		node: "map",
+		list: { node: "input" },
+		param: "p",
+		body: f(v("p"), "path"),
+		maxItems: INVENTORY_MAX_ENTRIES,
+	});
+	const filePaths = (): Expr => ({
+		node: "map",
+		list: {
+			node: "filter",
+			list: { node: "input" },
+			param: "q",
+			body: call("eq", f(v("q"), "kind"), s("file")),
+			maxItems: INVENTORY_MAX_ENTRIES,
+		},
+		param: "p",
+		body: f(v("p"), "path"),
+		maxItems: INVENTORY_MAX_ENTRIES,
+	});
+	return {
+		ir_version: IR_VERSION,
+		input_type: T.list(ENTRY_TYPE),
+		output_type: T.list(MOVE_TYPE),
+		body: {
+			node: "map",
+			list: {
+				node: "filter",
+				list: { node: "input" },
+				param: "e",
+				body: and(
+					call("eq", f(e, "kind"), s("file")),
+					call("not", f(e, "hidden")),
+					call("not", call("contains", f(e, "path"), s("/"))),
+					call("ne", classifyExpr(e), s("other")),
+					call("not", call("in_list", allPaths(), destination())),
+					call("not", call("in_list", filePaths(), classifyExpr(e))),
+				),
+				maxItems: INVENTORY_MAX_ENTRIES,
+			},
+			param: "e",
+			body: { node: "record", fields: { from: f(e, "path"), to: destination() } },
+			maxItems: INVENTORY_MAX_ENTRIES,
+		},
+	};
+}
+
+export function organizeFixture(seed: number, count = 160): Entry[] {
+	const rng = new PyRandom(seed);
+	const extensions = ["ts", "md", "json", "png", "zip", "txt", "", "exe", "js", "jpg"];
+	const entries = new Map<string, Entry>();
+	const add = (entry: Entry) => entries.set(entry.path, entry);
+	for (let index = 0; index < count; index++) {
+		const extension = rng.choice(extensions);
+		const name = `f${index}${extension ? `.${extension}` : ""}`;
+		const roll = rng.random();
+		if (roll < 0.1) add({ path: `.${name}`, size: rng.randint(0, 999), hidden: true, kind: "file" });
+		else if (roll < 0.25) add({ path: `nested/${name}`, size: rng.randint(0, 999), hidden: false, kind: "file" });
+		else add({ path: name, size: rng.randint(0, 999), hidden: false, kind: "file" });
+	}
+	// Existing category folders, a collision inside one, and a file squatting on a category name.
+	add({ path: "nested", size: 0, hidden: false, kind: "dir" });
+	add({ path: "code", size: 0, hidden: false, kind: "dir" });
+	const first = [...entries.values()].find((entry) => entry.path.endsWith(".ts") && !entry.path.includes("/"));
+	if (first) add({ path: `code/${first.path}`, size: 1, hidden: false, kind: "file" });
+	if (rng.random() < 0.5) add({ path: "media", size: 3, hidden: false, kind: "file" });
+	return [...entries.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+export const organizePlan: Contract = {
+	id: "organize.plan",
+	revision: 1,
+	description:
+		"Move every visible top-level file into <category>/<name>, except category other, taken destinations and categories blocked by a file",
+	inputType: T.list(ENTRY_TYPE),
+	outputType: T.list(MOVE_TYPE),
+	inputBounds: inventoryReport.inputBounds,
+	granted: [],
+	validateInput: (raw: unknown) => inventoryReport.validateInput(raw),
+	oracle(input: Value): Value {
+		const entries = input as unknown as Entry[];
+		const paths = new Set(entries.map((entry) => entry.path));
+		const files = new Set(entries.filter((entry) => entry.kind === "file").map((entry) => entry.path));
+		const moves: Move[] = [];
+		for (const entry of entries) {
+			if (entry.kind !== "file" || entry.hidden || entry.path.includes("/")) continue;
+			const category = categoryOf(entry.path);
+			const to = `${category}/${entry.path}`;
+			if (category === "other" || paths.has(to) || files.has(category)) continue;
+			moves.push({ from: entry.path, to });
+		}
+		return moves as unknown as Value;
+	},
+	postconditions: [
+		{
+			name: "destinations_unique",
+			check: (_input, output) => {
+				const moves = output as unknown as Move[];
+				return new Set(moves.map((move) => move.to)).size === moves.length;
+			},
+		},
+		{
+			name: "sources_are_visible_top_level_files",
+			check: (input, output) => {
+				const files = new Set(
+					(input as unknown as Entry[])
+						.filter((entry) => entry.kind === "file" && !entry.hidden && !entry.path.includes("/"))
+						.map((entry) => entry.path),
+				);
+				return (output as unknown as Move[]).every((move) => files.has(move.from));
+			},
+		},
+		{
+			name: "destinations_absent_and_categorized",
+			check: (input, output) => {
+				const paths = new Set((input as unknown as Entry[]).map((entry) => entry.path));
+				return (output as unknown as Move[]).every(
+					(move) =>
+						!paths.has(move.to) &&
+						categoryOf(move.from) !== "other" &&
+						move.to === `${categoryOf(move.from)}/${move.from}`,
+				);
+			},
+		},
+	],
+	seed: organizeSeed,
+	fixtures: {
+		development: () => Array.from({ length: 6 }, (_, index) => organizeFixture(index) as unknown as Value),
+		regression: () =>
+			[
+				[],
+				[
+					{ path: "a.ts", size: 1, hidden: false, kind: "file" },
+					{ path: "code", size: 3, hidden: false, kind: "file" },
+					{ path: "b.md", size: 1, hidden: false, kind: "file" },
+					{ path: "docs", size: 0, hidden: false, kind: "dir" },
+					{ path: "docs/b.md", size: 1, hidden: false, kind: "file" },
+					{ path: ".c.png", size: 1, hidden: true, kind: "file" },
+					{ path: "d.PNG", size: 1, hidden: false, kind: "file" },
+					{ path: "e", size: 1, hidden: false, kind: "file" },
+					// A directory whose name looks like a file must never be moved.
+					{ path: "photos.png", size: 0, hidden: false, kind: "dir" },
+					{ path: "photos.png/1.jpg", size: 1, hidden: false, kind: "file" },
+				],
+			] as unknown as Value[],
+		release: (n) =>
+			Array.from({ length: 32 }, (_, index) => organizeFixture(10_000 + (n - 1) * 32 + index) as unknown as Value),
+		shifted: (n) =>
+			Array.from(
+				{ length: 8 },
+				(_, index) => organizeFixture(20_000 + (n - 1) * 8 + index, 400) as unknown as Value,
+			),
+	},
+	fuzz(rng: PyRandom): Value {
+		const names = ["a.ts", "b.md", "c.png", "d", "e.zip", "code", "docs", "f.json"];
+		const entries = new Map<string, Entry>();
+		for (let i = 0; i < 16; i++) {
+			const name = rng.choice(names);
+			const path = rng.random() < 0.3 ? `${rng.choice(["code", "docs", "media"])}/${name}` : name;
+			entries.set(path, { path, size: 1, hidden: rng.random() < 0.2, kind: rng.random() < 0.15 ? "dir" : "file" });
+		}
+		return [...entries.values()] as unknown as Value;
+	},
+};
+
 export const CONTRACTS: ReadonlyMap<string, Contract> = new Map(
-	[recordsFilter, inventoryReport].map((contract) => [contract.id, contract]),
+	[recordsFilter, inventoryReport, organizePlan].map((contract) => [contract.id, contract]),
 );
 
 export function getContract(id: string): Contract {

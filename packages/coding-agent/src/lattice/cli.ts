@@ -23,19 +23,25 @@ const USAGE = `lattice [--data DIR] [--no-adapter] <command>
   run skill ID --input FILE              run any installed skill on a JSON input
   inspect skill ID                       active program and version metadata
   explain skill ID | explain episode ID  evidence behind a version or an episode
-  improve skill ID [--policy reference] [--gated] [--no-isolate] [--seed N] [--no-shadow]
+  improve skill ID [--policy reference] [--gated] [--no-isolate] [--seed N] [--no-shadow] [--resume CAMPAIGN]
   improve policy [--proposals N] [--budget N] [--tasks N]
   test skill ID                          diagnostic run; re-enables promotion when it passes
   rollback skill ID [--to-version N]
   compile skill ID                       bytecode with differential test
+  goal --contract organize.plan --dir PATH   propose moves (nothing changes yet)
+  plans                                  proposed and applied effect plans
+  apply PLAN_ID                          approve and apply a plan (journaled, verified)
+  undo PLAN_ID                           compensate a plan's committed moves
   mine [--keep N]                        library learning over accepted programs
   synthesize --examples FILE [--install] program synthesis from examples
-  snapshot create | snapshot list | snapshot verify ID
+  snapshot create | snapshot list | snapshot verify ID | snapshot restore ID
   policy show | policy check
   audit [--subject S] [--limit N] | audit verify
   recover                                corruption recovery of active versions
   maintenance                            garbage collection, WAL checkpoint, integrity
-  serve [--path PIPE]                    local API on a named pipe / Unix socket`;
+  serve [--path PIPE] [--idle-ms N] [--maintenance]
+                                         local API on a named pipe / Unix socket; with --idle-ms,
+                                         improve skills after N ms without interactive work`;
 
 interface Args {
 	positional: string[];
@@ -46,6 +52,8 @@ function parse(argv: readonly string[]): Args {
 	const positional: string[] = [];
 	const flags = new Map<string, string | true>();
 	const valued = new Set([
+		"resume",
+		"idle-ms",
 		"data",
 		"contract",
 		"dir",
@@ -115,6 +123,11 @@ export async function main(
 		print(await selftest());
 		return 0;
 	}
+	if (command === "snapshot" && sub === "restore") {
+		// Restore replaces the database file, so it runs with the store closed.
+		print(Lattice.restore(str(args, "data") ?? defaultDataDir(), need(target, "snapshot id")));
+		return 0;
+	}
 	const lattice = Lattice.open(str(args, "data") ?? defaultDataDir(), {
 		adapter: args.flags.has("no-adapter") ? null : undefined,
 	});
@@ -137,7 +150,7 @@ export async function main(
 					constraints: { max_runtime_ms: int(args, "max-ms") },
 				});
 				print(result);
-				return result.status === "completed" ? 0 : 1;
+				return result.status === "completed" || result.status === "awaiting_approval" ? 0 : 1;
 			}
 			case "run":
 				if (sub !== "skill") throw new Error(USAGE);
@@ -172,6 +185,7 @@ export async function main(
 							seed: int(args, "seed"),
 							policy: str(args, "policy") === "reference" ? "reference" : "active",
 							shadowMin: args.flags.has("no-shadow") ? 0 : undefined,
+							resume: str(args, "resume"),
 						}),
 					);
 				} else throw new Error(USAGE);
@@ -181,6 +195,15 @@ export async function main(
 				break;
 			case "rollback":
 				print(lattice.rollback(need(target, "skill id"), int(args, "to-version")));
+				break;
+			case "plans":
+				print(lattice.plans());
+				break;
+			case "apply":
+				print(lattice.applyPlan(need(sub, "plan id")));
+				break;
+			case "undo":
+				print(lattice.undoPlan(need(sub, "plan id")));
 				break;
 			case "compile":
 				print(lattice.compile(need(target, "skill id")));
@@ -241,13 +264,21 @@ export async function main(
 				else print(lattice.store.auditLog(str(args, "subject"), int(args, "limit") ?? 50));
 				break;
 			case "recover":
-				print({ recovered: lattice.store.recover(), integrity: lattice.store.verify() });
+				print({
+					recovered: lattice.store.recover(),
+					effects_reconciled_at_open: lattice.recovered,
+					integrity: lattice.store.verify(),
+				});
 				break;
 			case "maintenance":
 				print(lattice.maintenance());
 				break;
 			case "serve": {
-				const { path, token } = serve(lattice, { path: str(args, "path") });
+				const idleMs = int(args, "idle-ms");
+				const { path, token } = serve(lattice, {
+					path: str(args, "path"),
+					idle: idleMs === undefined ? undefined : { idleMs, maintenance: args.flags.has("maintenance") },
+				});
 				keepOpen = true;
 				print({
 					listening: path,

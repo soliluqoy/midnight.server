@@ -241,6 +241,20 @@ const PRIMITIVE_LIST: Primitive[] = [
 		impl: (args) => (args[0] as number[]).reduce((total, value) => checkedInt(total + value), 0),
 	},
 	{
+		id: "in_list",
+		version: 1,
+		effect: "pure",
+		signature: (args) =>
+			args.length === 2 && args[0].kind === "list" && isScalar(args[0].item) && args[0].item.kind === args[1].kind
+				? T.bool
+				: "in_list expects (List<T>, T) for a scalar T",
+		total: () => true,
+		summarize: () => ({}),
+		// A linear scan: charged per element, so repeating it inside a loop is visibly expensive.
+		cost: (args) => 1 + (args[0] as Value[]).length,
+		impl: (args) => (args[0] as Value[]).includes(args[1]),
+	},
+	{
 		id: "read_text",
 		version: 1,
 		effect: "read",

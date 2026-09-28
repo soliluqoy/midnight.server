@@ -25,6 +25,7 @@ export const MUTATION_OPS = [
 	"swap_independent",
 	"reorder_exclusive",
 	"hoist_common",
+	"hoist_invariant",
 	"fuse_filters",
 	"split_filter",
 	"dedupe_conjunct",
@@ -210,6 +211,7 @@ export function enumerateMutations(program: Program, info: Info, allowed: Readon
 	}
 
 	if (allowed.has("hoist_common")) out.push(...hoistCommon(program, info));
+	if (allowed.has("hoist_invariant")) out.push(...hoistInvariant(program, info));
 	return out;
 }
 
@@ -266,6 +268,62 @@ function hoistCommon(program: Program, info: Info): Mutation[] {
 			description: `bind ${outer.length} copies of a ${countNodes(expr)}-node expression once at /${lca.join("/")}`,
 			program: atPath(program, lca, { node: "let", name, value: expr, body: target }),
 		});
+	}
+	return out;
+}
+
+/**
+ * Loop-invariant hoisting: inside the body of a map, filter, sort or fold, a pure, total
+ * subexpression that uses none of the variables bound by the loop (or inside it) computes the
+ * same value on every iteration, so it is bound once in a `let` just outside the loop. Only
+ * maximal invariant subtrees are taken. Totality matters because the loop may run zero times.
+ */
+function hoistInvariant(program: Program, info: Info): Mutation[] {
+	const out: Mutation[] = [];
+	const loops: { node: Expr; path: number[] }[] = [];
+	walk(program.body, (node, path) => {
+		if (node.node === "map" || node.node === "filter" || node.node === "sort" || node.node === "fold") {
+			loops.push({ node, path: [...path] });
+		}
+	});
+	for (const { node, path } of loops) {
+		const bodyIndex = node.node === "fold" ? 2 : 1;
+		const found: { rel: number[]; expr: Expr }[] = [];
+		const visit = (expr: Expr, rel: number[], bound: ReadonlySet<string>) => {
+			const invariant =
+				expr.node !== "var" &&
+				expr.node !== "const" &&
+				expr.node !== "input" &&
+				countNodes(expr) >= 3 &&
+				pureTotal(info, expr) &&
+				[...freeVars(expr)].every((name) => !bound.has(name));
+			if (invariant) {
+				found.push({ rel, expr });
+				return;
+			}
+			children(expr).forEach((child, index) => {
+				const extra = bindersFor(expr, index);
+				visit(child, [...rel, index], extra.length === 0 ? bound : new Set([...bound, ...extra]));
+			});
+		};
+		visit(children(node)[bodyIndex], [bodyIndex], new Set(bindersFor(node, bodyIndex)));
+		const groups = new Map<string, { expr: Expr; rels: number[][] }>();
+		for (const { rel, expr } of found) {
+			const key = canonical(expr);
+			const group = groups.get(key) ?? { expr, rels: [] };
+			group.rels.push(rel);
+			groups.set(key, group);
+		}
+		for (const { expr, rels } of groups.values()) {
+			const name = fresh(program.body, "k");
+			let target = node;
+			for (const rel of rels) target = replaceAt(target, rel, { node: "var", name });
+			out.push({
+				op: "hoist_invariant",
+				description: `hoist a ${countNodes(expr)}-node loop-invariant expression out of the ${node.node} at /${path.join("/")}`,
+				program: atPath(program, path, { node: "let", name, value: expr, body: target }),
+			});
+		}
 	}
 	return out;
 }

@@ -74,6 +74,19 @@ export class PyRandom {
 		return y >>> 0;
 	}
 
+	/** Generator state, for search checkpoints (spec section 42.5). */
+	getState(): { mt: number[]; index: number } {
+		return { mt: [...this.state], index: this.index };
+	}
+
+	setState(state: { mt: readonly number[]; index: number }): void {
+		if (state.mt.length !== 624 || !Number.isInteger(state.index) || state.index < 0 || state.index > 625) {
+			throw new Error("invalid generator state");
+		}
+		this.state.set(state.mt);
+		this.index = state.index;
+	}
+
 	/** Uniform float in [0, 1) with 53 random bits. */
 	random(): number {
 		const a = this.next32() >>> 5;

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -12,7 +12,7 @@ import {
 } from "../src/lattice/broker.ts";
 import { runCampaign } from "../src/lattice/campaign.ts";
 import { canonical } from "../src/lattice/canonical.ts";
-import { recordsFilter, recordsFilterProgram } from "../src/lattice/contracts.ts";
+import { recordFixture, recordsFilter, recordsFilterProgram } from "../src/lattice/contracts.ts";
 import { Governor, localDay } from "../src/lattice/governor.ts";
 import { Lattice } from "../src/lattice/kernel.ts";
 import { REFERENCE_POLICY } from "../src/lattice/search.ts";
@@ -209,6 +209,74 @@ describe("lattice integrity and recovery", () => {
 		db.exec("UPDATE meta SET value = 'x' WHERE key = 'kernel_version'");
 		db.close();
 		expect(lattice.store.verifySnapshot(snapshotId).problems).toContain("snapshot database hash mismatch");
+	});
+});
+
+describe("lattice restore, quota and retention", () => {
+	it("restores a validated snapshot and keeps the replaced database", () => {
+		const { snapshotId } = lattice.store.createSnapshot("policy");
+		const seed = lattice.store.head("records.filter")!.version.version_id;
+		lattice.store.startCampaign({
+			campaignId: "camp_s",
+			skillId: "records.filter",
+			kind: "program",
+			parentVersion: seed,
+			record: {},
+		});
+		lattice.store.promote({
+			skillId: "records.filter",
+			expectedParent: seed,
+			program: better,
+			campaignId: "camp_s",
+			report: {},
+		});
+		lattice.close();
+		const result = Lattice.restore(join(dir, "data"), snapshotId);
+		expect(existsSync(join(result.previous, "lattice.db"))).toBe(true);
+		lattice = Lattice.open(join(dir, "data"));
+		expect(lattice.store.head("records.filter")!.version.version_id).toBe(seed);
+		expect(lattice.store.verify().ok).toBe(true);
+		expect(lattice.store.auditLog(snapshotId, 1)[0].kind).toBe("restored");
+	});
+
+	it("refuses to restore a snapshot that fails validation and leaves the live store alone", () => {
+		const { snapshotId, path } = lattice.store.createSnapshot("policy");
+		lattice.close();
+		const db = new DatabaseSync(join(path, "lattice.db"));
+		db.exec("UPDATE meta SET value = 'x' WHERE key = 'kernel_version'");
+		db.close();
+		expect(() => Lattice.restore(join(dir, "data"), snapshotId)).toThrow(/failed validation/);
+		lattice = Lattice.open(join(dir, "data"));
+		expect(lattice.store.verify().ok).toBe(true);
+	});
+
+	it("declines new work at the storage quota and recovers after maintenance", async () => {
+		lattice.quotaBytes = lattice.store.usageBytes() + 50_000;
+		expect((await lattice.submitGoal({ contract_id: "records.filter", input: recordFixture(1) })).status).toBe(
+			"completed",
+		);
+		lattice.store.putArtifact(Buffer.alloc(60_000, 1), "application/octet-stream", "test", "episode");
+		const refused = await lattice.submitGoal({ contract_id: "records.filter", input: recordFixture(2) });
+		expect(refused.status).toBe("declined");
+		expect(refused.evidence[0]).toMatch(/storage quota reached/);
+		await expect(lattice.improve("records.filter", { explore: true, isolate: false })).rejects.toThrow(
+			/storage quota/,
+		);
+		// Age every episode artifact past retention; maintenance releases them and frees the quota.
+		lattice.store.db.prepare("UPDATE artifacts SET created_at = 0 WHERE retention = 'episode'").run();
+		const report = lattice.maintenance({ graceMs: 0 }) as {
+			retention: { artifactsReleased: number };
+			quota: { state: string };
+		};
+		expect(report.retention.artifactsReleased).toBeGreaterThanOrEqual(2);
+		expect(report.quota.state).toBe("ok");
+		expect((await lattice.submitGoal({ contract_id: "records.filter", input: recordFixture(2) })).status).toBe(
+			"completed",
+		);
+		// A declined goal never became an episode; the two that ran keep their input hashes.
+		const episodes = lattice.store.episodes("records.filter");
+		expect(episodes).toHaveLength(2);
+		expect(episodes.every((episode) => /^[0-9a-f]{64}$/.test(episode.input_hash))).toBe(true);
 	});
 });
 

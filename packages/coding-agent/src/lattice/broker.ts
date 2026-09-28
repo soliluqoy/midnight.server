@@ -1,5 +1,15 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { closeSync, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync, statSync } from "node:fs";
+import {
+	type BigIntStats,
+	closeSync,
+	fstatSync,
+	lstatSync,
+	openSync,
+	readdirSync,
+	readSync,
+	realpathSync,
+	statSync,
+} from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { canonical } from "./canonical.ts";
 import { LatticeError } from "./primitives.ts";
@@ -12,7 +22,7 @@ import { LatticeError } from "./primitives.ts";
  * labeled as such (section 43.3). Writes and compensation (section 43.6) are not implemented;
  * reports go only to the kernel's own content-addressed artifact store.
  */
-export type Verb = "list" | "read";
+export type Verb = "list" | "read" | "rename";
 
 export interface Capability {
 	capability_id: string;
@@ -78,11 +88,36 @@ export interface InventoryEntry {
 	kind: "file" | "dir";
 }
 
+/** What the broker observed about a file: enough to notice it was replaced or changed later. */
+export interface FileIdentity {
+	size: number;
+	mtime_ns: string;
+	ino: string;
+}
+
+/** Identity of the object at `path` without following links, or undefined when nothing is there. */
+export function observeIdentity(path: string): (FileIdentity & { kind: "file" | "dir" | "other" }) | undefined {
+	try {
+		const stats = lstatSync(path, { bigint: true });
+		return {
+			size: Number(stats.size),
+			mtime_ns: stats.mtimeNs.toString(),
+			ino: stats.ino.toString(),
+			kind: stats.isSymbolicLink() ? "other" : stats.isFile() ? "file" : stats.isDirectory() ? "dir" : "other",
+		};
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
+	}
+}
+
 export interface InventorySnapshot {
 	mode: "best-effort inventory";
 	observed_at: string;
 	root: string;
 	entries: InventoryEntry[];
+	/** Identity of every regular file entry, for effect plans that must detect later changes. */
+	identities: { [path: string]: FileIdentity };
 	/** Paths not included, with the reason (symlink, permission denied, vanished). */
 	skipped: { path: string; reason: string }[];
 }
@@ -100,6 +135,7 @@ export function scanDirectory(
 ): InventorySnapshot {
 	verifyCapability(key, capability, "list", episodeId);
 	const entries: InventoryEntry[] = [];
+	const identities: { [path: string]: FileIdentity } = {};
 	const skipped: { path: string; reason: string }[] = [];
 	const pending: string[] = [""];
 	while (pending.length > 0) {
@@ -113,9 +149,9 @@ export function scanDirectory(
 		}
 		for (const name of names) {
 			const path = dir ? `${dir}/${name}` : name;
-			let stats: ReturnType<typeof lstatSync>;
+			let stats: BigIntStats;
 			try {
-				stats = lstatSync(join(capability.root, ...path.split("/")));
+				stats = lstatSync(join(capability.root, ...path.split("/")), { bigint: true });
 			} catch (error) {
 				skipped.push({ path, reason: (error as NodeJS.ErrnoException).code ?? "vanished" });
 				continue;
@@ -128,8 +164,14 @@ export function scanDirectory(
 			if (stats.isDirectory()) {
 				entries.push({ path, size: 0, hidden, kind: "dir" });
 				pending.push(path);
-			} else if (stats.isFile()) entries.push({ path, size: stats.size, hidden, kind: "file" });
-			else skipped.push({ path, reason: "not a regular file" });
+			} else if (stats.isFile()) {
+				entries.push({ path, size: Number(stats.size), hidden, kind: "file" });
+				identities[path] = {
+					size: Number(stats.size),
+					mtime_ns: stats.mtimeNs.toString(),
+					ino: stats.ino.toString(),
+				};
+			} else skipped.push({ path, reason: "not a regular file" });
 			if (entries.length > maxEntries) {
 				throw new LatticeError("bound", `directory has more than ${maxEntries} entries; use a larger task budget`);
 			}
@@ -141,6 +183,7 @@ export function scanDirectory(
 		observed_at: new Date().toISOString(),
 		root: capability.root,
 		entries,
+		identities,
 		skipped,
 	};
 }

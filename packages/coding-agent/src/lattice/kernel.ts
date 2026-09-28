@@ -1,10 +1,10 @@
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { type AbstractionReport, mineAbstractions } from "./abstraction.ts";
 import { type AdapterOutput, type GoalAdapter, templateAdapter } from "./adapter.ts";
-import { issueCapability, scanDirectory } from "./broker.ts";
+import { type InventorySnapshot, issueCapability, scanDirectory } from "./broker.ts";
 import { type CampaignReport, type KernelContext, runCampaign } from "./campaign.ts";
 import { canonical, digest } from "./canonical.ts";
 import {
@@ -26,11 +26,21 @@ import {
 	recordsFilter,
 	recordsFilterProgram,
 } from "./contracts.ts";
+import {
+	type ApplyReport,
+	applyPlan,
+	buildPlan,
+	type CompensationReport,
+	compensatePlan,
+	type EffectHooks,
+	type ReconcileEntry,
+	reconcileEffects,
+} from "./effects.ts";
 import { evaluateSuite } from "./evaluator.ts";
 import { Governor, ucbSelect } from "./governor.ts";
 import { interpret, type RunResult } from "./interpreter.ts";
 import { type LibrarySkill, type Program, programHash, T, type Value } from "./ir.ts";
-import { BUDGETS, type ExecutionLimits, INSTALLATION_LIMITS } from "./limits.ts";
+import { BUDGETS, type ExecutionLimits, INSTALLATION_LIMITS, RETENTION, STATE_QUOTA_BYTES } from "./limits.ts";
 import {
 	improvePolicy,
 	META_CONTRACT,
@@ -57,7 +67,7 @@ export interface GoalRequest {
 	skill_id?: string;
 	/** Structured input for the contract. */
 	input?: unknown;
-	/** Directory for inventory goals; the broker scans it read-only. */
+	/** Directory for inventory or organize goals; the broker scans it read-only. */
 	directory?: string;
 	/** Free text for the optional adapter. */
 	text?: string;
@@ -66,7 +76,7 @@ export interface GoalRequest {
 
 export interface GoalResult {
 	goal_id: string;
-	status: "completed" | "failed" | "needs_clarification" | "declined";
+	status: "completed" | "awaiting_approval" | "failed" | "needs_clarification" | "declined";
 	summary: { [key: string]: unknown };
 	evidence: string[];
 	skill_used?: { skill_id: string; version: number; engine: "interpreter" | "bytecode" | "cache" };
@@ -76,7 +86,14 @@ export interface GoalResult {
 	questions?: string[];
 	error?: string;
 	adapter?: AdapterOutput;
+	/** For effect contracts: the proposed plan. Nothing changes until `applyPlan(plan_id)`. */
+	plan?: { plan_id: string; plan_hash: string; moves: number; expires_at: string };
 }
+
+/** Contracts whose input is a directory inventory observed by the broker. */
+const DIRECTORY_CONTRACTS = new Set(["inventory.report", "organize.plan"]);
+/** Contracts whose output is a list of effect intents. */
+const EFFECT_CONTRACTS = new Set(["organize.plan"]);
 
 export function defaultDataDir(): string {
 	return process.env.LATTICE_DATA || join(homedir(), ".midnight.server", "lattice");
@@ -89,16 +106,80 @@ export class Lattice implements KernelContext {
 	/** Optional; the kernel keeps working with `undefined` (structured goals only). */
 	adapter: GoalAdapter | undefined;
 	private libraryCache: Map<string, LibrarySkill> | undefined;
+	/** Effects a crash had left half-done, resolved when the store was opened. */
+	readonly recovered: ReconcileEntry[];
 
 	private constructor(store: LatticeStore, adapter: GoalAdapter | undefined) {
 		this.store = store;
 		this.governor = new Governor(store);
 		this.adapter = adapter;
+		// Startup recovery (section 19.3): interrupted effects are reconciled before any new work.
+		this.recovered = reconcileEffects(store);
 	}
 
-	static open(dataDir = defaultDataDir(), options: { adapter?: GoalAdapter | null; memory?: boolean } = {}): Lattice {
+	static open(
+		dataDir = defaultDataDir(),
+		options: { adapter?: GoalAdapter | null; memory?: boolean; quotaBytes?: number } = {},
+	): Lattice {
 		const store = options.memory ? LatticeStore.memory(dataDir) : LatticeStore.open(dataDir);
-		return new Lattice(store, options.adapter === null ? undefined : (options.adapter ?? templateAdapter));
+		const lattice = new Lattice(store, options.adapter === null ? undefined : (options.adapter ?? templateAdapter));
+		if (options.quotaBytes !== undefined) lattice.quotaBytes = options.quotaBytes;
+		return lattice;
+	}
+
+	/**
+	 * Restore a snapshot (spec section 44.4): validate the snapshot (database hash, integrity,
+	 * artifacts), copy it next to the live database, validate the copy, and only then move the
+	 * current database aside (kept under `pre-restore-*`) and put the copy in its place. The
+	 * restore itself is appended to the restored audit chain. The store must not be open.
+	 */
+	static restore(dataDir: string, snapshotId: string): { restored: string; previous: string } {
+		const current = LatticeStore.open(dataDir);
+		let check: ReturnType<LatticeStore["verifySnapshot"]>;
+		try {
+			check = current.verifySnapshot(snapshotId);
+		} finally {
+			current.close();
+		}
+		if (!check.ok) throw new Error(`snapshot ${snapshotId} failed validation: ${check.problems.join("; ")}`);
+		const live = join(dataDir, "lattice.db");
+		const staged = join(dataDir, "lattice.db.restoring");
+		copyFileSync(join(dataDir, "snapshots", snapshotId, "lattice.db"), staged);
+		const staging = LatticeStore.verifyFile(staged, dataDir);
+		if (!staging.ok) {
+			rmSync(staged, { force: true });
+			throw new Error(`restored copy failed validation: ${staging.problems.join("; ")}`);
+		}
+		const previous = join(dataDir, `pre-restore-${Date.now()}`);
+		mkdirSync(previous);
+		for (const suffix of ["", "-wal", "-shm"]) {
+			if (existsSync(live + suffix)) renameSync(live + suffix, join(previous, `lattice.db${suffix}`));
+		}
+		renameSync(staged, live);
+		const store = LatticeStore.open(dataDir);
+		try {
+			store.audit("restored", snapshotId, { previous_database: previous });
+		} finally {
+			store.close();
+		}
+		return { restored: snapshotId, previous };
+	}
+
+	/** Local state quota (spec section 42.1). */
+	quotaBytes = STATE_QUOTA_BYTES;
+
+	quota(): { usedBytes: number; limitBytes: number; state: "ok" | "near" | "full" } {
+		const usedBytes = this.store.usageBytes();
+		const state = usedBytes >= this.quotaBytes ? "full" : usedBytes >= this.quotaBytes * 0.9 ? "near" : "ok";
+		return { usedBytes, limitBytes: this.quotaBytes, state };
+	}
+
+	/** Backpressure before exhaustion: new work is refused, with the reason, once the quota is reached. */
+	private quotaRefusal(): string | undefined {
+		const quota = this.quota();
+		if (quota.state !== "full") return undefined;
+		const mib = (bytes: number) => (bytes / 1024 / 1024).toFixed(1);
+		return `storage quota reached (${mib(quota.usedBytes)} of ${mib(quota.limitBytes)} MiB); run \`lattice maintenance\``;
 	}
 
 	close(): void {
@@ -202,6 +283,8 @@ export class Lattice implements KernelContext {
 				});
 			}
 		}
+		const refusal = this.quotaRefusal();
+		if (refusal) return done({ status: "declined", summary: {}, evidence: [refusal] });
 		if (req.constraints?.network === "allow") {
 			return done({
 				status: "declined",
@@ -230,8 +313,9 @@ export class Lattice implements KernelContext {
 		// Inputs: structured, or observed through a read-only capability.
 		const evidence: string[] = [];
 		let raw = req.input;
+		let observed: InventorySnapshot | undefined;
 		if (req.directory !== undefined) {
-			if (contract.id !== "inventory.report") {
+			if (!DIRECTORY_CONTRACTS.has(contract.id)) {
 				return done({ status: "declined", summary: {}, evidence: [`${contract.id} does not take a directory`] });
 			}
 			try {
@@ -242,6 +326,7 @@ export class Lattice implements KernelContext {
 				});
 				const snapshot = scanDirectory(this.capabilityKey(), capability, goalId, INVENTORY_MAX_ENTRIES);
 				raw = snapshot.entries;
+				observed = snapshot;
 				evidence.push(`${snapshot.mode} of ${snapshot.root} at ${snapshot.observed_at}`);
 				if (snapshot.skipped.length > 0) {
 					evidence.push(
@@ -402,6 +487,28 @@ export class Lattice implements KernelContext {
 		if (engine !== "cache" && !rolledBack) this.store.cachePut(cacheKey, version, output);
 		const summary = summarize(contract, input, output, units);
 		const active = this.store.head(skillId)!.version.version_id;
+		// Effect intents over an observed directory become a plan awaiting explicit approval.
+		let proposed: GoalResult["plan"];
+		if (EFFECT_CONTRACTS.has(contract.id) && observed) {
+			const { row } = buildPlan({
+				planId: newId("plan"),
+				episodeId: goalId,
+				skillId,
+				versionId: active,
+				root: observed.root,
+				moves: output as unknown as { from: string; to: string }[],
+				identities: observed.identities,
+			});
+			this.store.createPlan(row);
+			proposed = {
+				plan_id: row.plan_id,
+				plan_hash: row.plan_hash,
+				moves: (output as Value[]).length,
+				expires_at: new Date(row.expires_at).toISOString(),
+			};
+			summary.plan_id = row.plan_id;
+			evidence.push(`plan ${row.plan_id} proposed; nothing was changed. Apply it to approve exactly these moves.`);
+		}
 		this.recordEpisode(
 			goalId,
 			contract,
@@ -416,14 +523,50 @@ export class Lattice implements KernelContext {
 			started,
 		);
 		return done({
-			status: "completed",
+			status: proposed ? "awaiting_approval" : "completed",
 			summary,
 			evidence,
 			skill_used: { skill_id: skillId, version, engine },
 			output,
 			artifact: this.store.artifactPath(artifact),
 			adapter: adapterOutput,
+			plan: proposed,
 		});
+	}
+
+	/** Approve and apply one proposed plan. The capability is bound to the plan's root and episode. */
+	applyPlan(planId: string, hooks?: EffectHooks): ApplyReport {
+		const plan = this.store.plan(planId);
+		if (!plan) throw new Error(`no plan ${planId}`);
+		const capability = issueCapability(this.capabilityKey(), {
+			root: plan.root,
+			verbs: ["list", "rename"],
+			episodeId: plan.episode_id,
+		});
+		return applyPlan(this.store, this.capabilityKey(), capability, planId, hooks);
+	}
+
+	/** Undo the committed moves of a plan where the files are exactly as the plan left them. */
+	undoPlan(planId: string): CompensationReport {
+		const plan = this.store.plan(planId);
+		if (!plan) throw new Error(`no plan ${planId}`);
+		const capability = issueCapability(this.capabilityKey(), {
+			root: plan.root,
+			verbs: ["rename"],
+			episodeId: plan.episode_id,
+		});
+		return compensatePlan(this.store, this.capabilityKey(), capability, planId);
+	}
+
+	plans(): unknown[] {
+		return this.store.plans().map((plan) => ({
+			plan_id: plan.plan_id,
+			status: plan.status,
+			skill: `${plan.skill_id}@${plan.version_id}`,
+			root: plan.root,
+			moves: (JSON.parse(plan.intents_json) as unknown[]).length,
+			journal: this.store.journal(plan.plan_id).map((row) => ({ op: row.op_index, state: row.state })),
+		}));
 	}
 
 	private monitorCanary(
@@ -533,8 +676,12 @@ export class Lattice implements KernelContext {
 			policy?: "active" | "reference";
 			shadowMin?: number;
 			signal?: AbortSignal;
+			/** Continue a paused campaign from its checkpoint. */
+			resume?: string;
 		} = {},
 	): Promise<CampaignReport> {
+		const refusal = this.quotaRefusal();
+		if (refusal) throw new Error(refusal);
 		const head = this.store.head(skillId);
 		if (!head) throw new Error(`no skill ${skillId}`);
 		const contract = getContract(head.version.contract_id);
@@ -550,10 +697,13 @@ export class Lattice implements KernelContext {
 			seed: options.seed,
 			shadowMin: options.shadowMin,
 			signal: options.signal,
+			resume: options.resume,
 		});
 	}
 
 	improveSearchPolicy(options: Parameters<typeof improvePolicy>[1] = {}): Promise<PolicyCampaignReport> {
+		const refusal = this.quotaRefusal();
+		if (refusal) return Promise.reject(new Error(refusal));
 		return improvePolicy(this, options);
 	}
 
@@ -847,6 +997,12 @@ export class Lattice implements KernelContext {
 			promotion: this.store.paused ? `stopped: ${this.store.paused}` : "allowed",
 			improvement_cpu_ms_left_today: Math.round(this.governor.remainingToday()),
 			adapter: this.adapter?.id ?? "none",
+			quota: this.quota(),
+			effects_reconciled_at_open: this.recovered,
+			plans_needing_attention: this.store
+				.plans()
+				.filter((plan) => plan.status === "unresolved" || plan.status === "partial")
+				.map((plan) => ({ plan_id: plan.plan_id, status: plan.status })),
 			skills: this.store.skills().map((row) => {
 				const version = this.store.version(row.version_id)!;
 				return {
@@ -869,11 +1025,12 @@ export class Lattice implements KernelContext {
 	}
 
 	/** Maintenance mode (spec section 4.3): compaction, retention and verification; no new behavior. */
-	maintenance(): unknown {
-		const gc = this.store.collectGarbage();
+	maintenance(options: { graceMs?: number } = {}): unknown {
+		const retention = this.store.applyRetention(RETENTION);
+		const gc = this.store.collectGarbage(options.graceMs);
 		this.store.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 		const integrity = this.store.verify();
-		return { gc, integrity: integrity.ok ? "ok" : integrity.problems };
+		return { retention, gc, quota: this.quota(), integrity: integrity.ok ? "ok" : integrity.problems };
 	}
 }
 
@@ -893,6 +1050,13 @@ function summarize(
 			entries_examined: (input as Value[]).length,
 			files_reported: rows.reduce((sum, row) => sum + row.count, 0),
 			bytes_reported: rows.reduce((sum, row) => sum + row.bytes, 0),
+			virtual_units: units,
+		};
+	}
+	if (contract.id === "organize.plan") {
+		return {
+			entries_examined: (input as Value[]).length,
+			moves_proposed: (output as Value[]).length,
 			virtual_units: units,
 		};
 	}

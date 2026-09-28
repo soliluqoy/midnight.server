@@ -20,7 +20,7 @@ import { type LibrarySkill, programHash, type Value } from "./ir.ts";
 import type { ExecutionLimits } from "./limits.ts";
 import { PRIMITIVE_LIBRARY_HASH } from "./primitives.ts";
 import { mean } from "./random.ts";
-import { clampPolicy, type SearchPolicy, type SearchReport } from "./search.ts";
+import { clampPolicy, type SearchCheckpoint, type SearchPolicy, type SearchReport } from "./search.ts";
 import { KERNEL_VERSION, type LatticeStore, newId } from "./store.ts";
 import { checkProgram } from "./typecheck.ts";
 import { handleRequest, runIsolated, type WorkerRequest } from "./worker.ts";
@@ -54,8 +54,13 @@ export interface CampaignOptions {
 	/** Minimum live snapshots for the shadow phase; 0 lets an operator waive it explicitly. */
 	shadowMin?: number;
 	verifierTrials?: number;
-	/** Cancels the development search (the worker is terminated); nothing is promoted. */
+	/**
+	 * Pauses the development search: the worker stops between candidates and returns a checkpoint,
+	 * the campaign is stored as `paused`, and nothing is promoted.
+	 */
 	signal?: AbortSignal;
+	/** Resume this paused campaign from its checkpoint (spec section 42.5). */
+	resume?: string;
 	/** Test hook: runs after the release set is reserved, before evaluation. */
 	onReserved?: () => void;
 }
@@ -63,7 +68,7 @@ export interface CampaignOptions {
 export interface CampaignReport {
 	campaign_id: string;
 	skill_id: string;
-	status: "promoted" | "rejected" | "incomplete" | "no_candidate" | "aborted";
+	status: "promoted" | "rejected" | "incomplete" | "no_candidate" | "aborted" | "paused";
 	parent_version: number;
 	diagnosis: { parent_units: number; profile: { [op: string]: number }; economic?: unknown };
 	development?: Omit<SearchReport, "best" | "curve" | "archive" | "counterexamples"> & {
@@ -92,6 +97,29 @@ export interface CampaignReport {
 
 const LIVE_DEVELOPMENT_MAX_ITEMS = 1_000;
 
+interface PausedCampaign {
+	stage: "search";
+	checkpoint: SearchCheckpoint;
+	costCases: Value[];
+	checkCases: Value[];
+	seed: number;
+	policy: SearchPolicy;
+}
+
+/** A paused campaign may resume only while its parent is still active. */
+function loadPaused(store: LatticeStore, campaignId: string, skillId: string, activeVersion: number): PausedCampaign {
+	const campaign = store.campaign(campaignId);
+	if (!campaign || campaign.skill_id !== skillId) throw new Error(`no campaign ${campaignId} for ${skillId}`);
+	if (campaign.status !== "paused") throw new Error(`campaign ${campaignId} is ${campaign.status}, not paused`);
+	if (campaign.parent_version !== activeVersion) {
+		store.finishCampaign(campaignId, "aborted", { reason: "parent changed while paused" });
+		throw new Error("the active version changed while the campaign was paused; its checkpoint is stale");
+	}
+	const state = store.loadCheckpoint<PausedCampaign>(campaignId);
+	if (!state || state.stage !== "search") throw new Error(`campaign ${campaignId} has no search checkpoint`);
+	return state;
+}
+
 export function kernelHash(contract: Contract): string {
 	return digest({
 		kernel: KERNEL_VERSION,
@@ -108,20 +136,26 @@ export async function runCampaign(kernel: KernelContext, options: CampaignOption
 	if (!head) throw new Error(`no active version for ${skillId}`);
 	if (!head.promotionEnabled) throw new Error(`promotion is disabled for ${skillId}; run a diagnostic test first`);
 	if (store.paused) throw new Error(`promotion is stopped: ${store.paused}`);
-	const policy = clampPolicy(options.policy);
-	const seed = options.seed ?? 8128;
 	const library = kernel.library();
 	const context: EvalContext = { limits: kernel.limits, library };
-	const campaignId = newId("camp");
+	// A resumed campaign continues with exactly the cases, seed and policy it paused with.
+	const paused = options.resume ? loadPaused(store, options.resume, skillId, head.version.version_id) : undefined;
+	const policy = paused ? paused.policy : clampPolicy(options.policy);
+	const seed = paused ? paused.seed : (options.seed ?? 8128);
+	const campaignId = paused ? options.resume! : newId("camp");
 
 	// Development pool: contract fixtures plus earlier live snapshots (small ones only, so one huge
 	// tree cannot dominate the budget). Regression pool: edge cases plus every stored counterexample.
-	const live = kernel
-		.episodeInputs(contract, 16)
-		.filter((input) => !Array.isArray(input) || input.length <= LIVE_DEVELOPMENT_MAX_ITEMS)
-		.slice(0, 6);
-	const costCases = [...contract.fixtures.development(), ...live];
-	const checkCases = [...contract.fixtures.regression(), ...(store.regressions(contract) as Value[])];
+	const live = paused
+		? []
+		: kernel
+				.episodeInputs(contract, 16)
+				.filter((input) => !Array.isArray(input) || input.length <= LIVE_DEVELOPMENT_MAX_ITEMS)
+				.slice(0, 6);
+	const costCases = paused ? paused.costCases : [...contract.fixtures.development(), ...live];
+	const checkCases = paused
+		? paused.checkCases
+		: [...contract.fixtures.regression(), ...(store.regressions(contract) as Value[])];
 	const developmentHash = digest({ costCases, checkCases });
 	const record: CampaignReport["reproducibility"] = {
 		campaign_id: campaignId,
@@ -154,15 +188,16 @@ export async function runCampaign(kernel: KernelContext, options: CampaignOption
 	}
 	report.diagnosis = { parent_units: parentUnits, profile: Object.fromEntries(profile) };
 	// Semantic memory (section 7.3): where the parent's cost goes, with provenance and an expiry.
-	store.addFact({
-		subject: skillId,
-		predicate: "cost_profile",
-		object: { version: head.version.version_id, units: parentUnits, by_primitive: report.diagnosis.profile },
-		confidence: 1,
-		provenance: campaignId,
-		ttlMs: 30 * 24 * 3600 * 1000,
-	});
-	if (!options.explore) {
+	if (!paused)
+		store.addFact({
+			subject: skillId,
+			predicate: "cost_profile",
+			object: { version: head.version.version_id, units: parentUnits, by_primitive: report.diagnosis.profile },
+			confidence: 1,
+			provenance: campaignId,
+			ttlMs: 30 * 24 * 3600 * 1000,
+		});
+	if (!options.explore && !paused) {
 		const weekAgo = Date.now() - 7 * 24 * 3600 * 1000;
 		const economic = economicGate({
 			expectedFutureCalls: store.countEpisodes(contract.id, weekAgo) * 4,
@@ -178,13 +213,16 @@ export async function runCampaign(kernel: KernelContext, options: CampaignOption
 	}
 
 	const allocation = governor.allocate("background");
-	store.startCampaign({
-		campaignId,
-		skillId,
-		kind: "program",
-		parentVersion: head.version.version_id,
-		record,
-	});
+	if (paused) store.setCampaignStatus(campaignId, "running", "resumed from checkpoint");
+	else {
+		store.startCampaign({
+			campaignId,
+			skillId,
+			kind: "program",
+			parentVersion: head.version.version_id,
+			record,
+		});
+	}
 	try {
 		// Stages B-E: propose, statically reject, evaluate on development and regression cases.
 		const request: WorkerRequest = {
@@ -201,11 +239,33 @@ export async function runCampaign(kernel: KernelContext, options: CampaignOption
 			// stop at the smaller of the campaign's CPU and wall budgets (spec section 42.1).
 			wallMs: Math.max(1, Math.min(allocation.deadline - performance.now(), allocation.budget.cpuMs)),
 			verifierTrials: options.verifierTrials ?? 16,
+			stopBuffer: options.signal && options.isolate !== false ? new SharedArrayBuffer(4) : undefined,
+			resume: paused?.checkpoint,
 		};
 		const response =
 			options.isolate === false ? handleRequest(request) : await runIsolated(request, undefined, options.signal);
 		if (response.kind !== "search") throw new Error("unexpected worker response");
 		const search = response.report;
+		if (search.stopReason === "cancelled" && search.checkpoint) {
+			// Paused for interactive work: keep the population and the exact cases, promote nothing.
+			const state: PausedCampaign = {
+				stage: "search",
+				checkpoint: search.checkpoint,
+				costCases,
+				checkCases,
+				seed,
+				policy,
+			};
+			store.saveCheckpoint(campaignId, state);
+			report.status = "paused";
+			store.finishCampaign(campaignId, "paused", record);
+			store.audit("campaign_paused", skillId, {
+				campaign: campaignId,
+				evaluations: search.evaluations,
+				best_cost: search.bestCost,
+			});
+			return report;
+		}
 		record.candidate_count = search.generated;
 		record.evaluation_count = search.evaluations;
 		const known = new Set([...costCases, ...checkCases].map((value) => digest(value)));

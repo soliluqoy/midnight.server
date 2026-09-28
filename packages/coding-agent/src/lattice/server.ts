@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
+import { type IdleOptions, IdleScheduler } from "./idle.ts";
 import type { GoalRequest, Lattice } from "./kernel.ts";
 
 /**
@@ -26,9 +27,16 @@ export class KernelLoop {
 	private readonly background: Job[] = [];
 	private interactiveBusy = false;
 	private backgroundRun: AbortController | undefined;
+	/** `performance.now()` of the last interactive submission; idle-time work waits after it. */
+	lastInteractiveAt = Number.NEGATIVE_INFINITY;
 
 	get depth(): number {
 		return this.interactive.length + this.background.length;
+	}
+
+	/** Nothing running and nothing queued. */
+	get idle(): boolean {
+		return !this.interactiveBusy && !this.backgroundRun && this.depth === 0;
 	}
 
 	/** Enqueue work; rejects immediately with a busy error when the inbox is full. */
@@ -37,6 +45,7 @@ export class KernelLoop {
 		return new Promise<T>((resolve, reject) => {
 			const job: Job = { run, resolve: resolve as (value: unknown) => void, reject };
 			if (interactive) {
+				this.lastInteractiveAt = performance.now();
 				this.interactive.push(job);
 				this.backgroundRun?.abort();
 			} else this.background.push(job);
@@ -99,8 +108,8 @@ function send(response: ServerResponse, status: number, value: unknown): void {
  */
 export function serve(
 	lattice: Lattice,
-	options: { path?: string } = {},
-): { server: Server; path: string; token: string; loop: KernelLoop } {
+	options: { path?: string; idle?: IdleOptions } = {},
+): { server: Server; path: string; token: string; loop: KernelLoop; scheduler?: IdleScheduler } {
 	let token = lattice.store.getMeta("ipc_token");
 	if (!token) {
 		token = randomBytes(24).toString("hex");
@@ -152,6 +161,18 @@ export function serve(
 						.get(parts[2]);
 					return campaign ? send(response, 200, campaign) : send(response, 404, { error: "unknown campaign" });
 				}
+				if (route === "GET /plans") return send(response, 200, lattice.plans());
+				if (method === "POST" && parts[1] === "plans" && (parts[3] === "apply" || parts[3] === "undo")) {
+					const planId = decodeURIComponent(parts[2]);
+					const action = parts[3];
+					return send(
+						response,
+						200,
+						await loop.submit(true, async () =>
+							action === "apply" ? lattice.applyPlan(planId) : lattice.undoPlan(planId),
+						),
+					);
+				}
 				if (route === "POST /rollback") {
 					const payload = (await body(request)) as { skill: string; to_version?: number };
 					return send(
@@ -172,5 +193,8 @@ export function serve(
 		})();
 	});
 	server.listen(path);
-	return { server, path, token, loop };
+	const scheduler = options.idle ? new IdleScheduler(lattice, loop, options.idle) : undefined;
+	scheduler?.start();
+	server.on("close", () => scheduler?.stop());
+	return { server, path, token, loop, scheduler };
 }

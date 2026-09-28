@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
 	skill_id TEXT NOT NULL,
 	kind TEXT NOT NULL,
 	parent_version INTEGER NOT NULL,
-	status TEXT NOT NULL CHECK (status IN ('running', 'promoted', 'rejected', 'incomplete', 'no_candidate', 'aborted')),
+	status TEXT NOT NULL CHECK (status IN ('running', 'paused', 'promoted', 'rejected', 'incomplete', 'no_candidate', 'aborted')),
 	record_json TEXT NOT NULL,
 	promoted_version INTEGER UNIQUE,
 	created_at INTEGER NOT NULL
@@ -154,6 +154,28 @@ CREATE TABLE IF NOT EXISTS ledger (
 );
 CREATE TABLE IF NOT EXISTS bandit (arm TEXT PRIMARY KEY, trials INTEGER NOT NULL, reward REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS checkpoints (campaign_id TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS effect_plans (
+	plan_id TEXT PRIMARY KEY,
+	episode_id TEXT NOT NULL,
+	skill_id TEXT NOT NULL,
+	version_id INTEGER NOT NULL,
+	root TEXT NOT NULL,
+	plan_hash TEXT NOT NULL,
+	intents_json TEXT NOT NULL,
+	status TEXT NOT NULL CHECK (status IN ('proposed', 'applying', 'applied', 'partial', 'compensated', 'unresolved', 'expired')),
+	expires_at INTEGER NOT NULL,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS effect_journal (
+	idempotency_key TEXT PRIMARY KEY,
+	plan_id TEXT NOT NULL REFERENCES effect_plans(plan_id),
+	op_index INTEGER NOT NULL,
+	state TEXT NOT NULL CHECK (state IN ('prepared', 'committed', 'failed', 'unperformed', 'compensated', 'unresolved')),
+	detail_json TEXT NOT NULL,
+	updated_at INTEGER NOT NULL,
+	UNIQUE (plan_id, op_index)
+);
 CREATE TABLE IF NOT EXISTS audit (
 	seq INTEGER PRIMARY KEY AUTOINCREMENT,
 	kind TEXT NOT NULL,
@@ -677,6 +699,20 @@ export class LatticeStore {
 		);
 	}
 
+	campaign(
+		campaignId: string,
+	): { campaign_id: string; skill_id: string; kind: string; parent_version: number; status: string } | undefined {
+		return this.get(
+			"SELECT campaign_id, skill_id, kind, parent_version, status FROM campaigns WHERE campaign_id = ?",
+			campaignId,
+		);
+	}
+
+	setCampaignStatus(campaignId: string, status: string, reason: string): void {
+		this.run("UPDATE campaigns SET status = ? WHERE campaign_id = ?", status, campaignId);
+		this.audit(`campaign_${status}`, campaignId, { reason });
+	}
+
 	campaigns(
 		skillId: string,
 	): { campaign_id: string; kind: string; status: string; record_json: string; created_at: number }[] {
@@ -893,6 +929,77 @@ export class LatticeStore {
 		).map((row) => ({ ...row, object: JSON.parse(row.object_json) as unknown }));
 	}
 
+	/* ------------------------------------------------------------------------ effects */
+
+	createPlan(plan: EffectPlanRow): void {
+		this.run(
+			`INSERT INTO effect_plans (plan_id, episode_id, skill_id, version_id, root, plan_hash, intents_json, status, expires_at,
+				created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			plan.plan_id,
+			plan.episode_id,
+			plan.skill_id,
+			plan.version_id,
+			plan.root,
+			plan.plan_hash,
+			plan.intents_json,
+			plan.status,
+			plan.expires_at,
+			plan.created_at,
+			plan.updated_at,
+		);
+		this.audit("effect_plan_proposed", plan.plan_id, {
+			plan_hash: plan.plan_hash,
+			root: plan.root,
+			skill: plan.skill_id,
+		});
+	}
+
+	plan(planId: string): EffectPlanRow | undefined {
+		return this.get<EffectPlanRow>("SELECT * FROM effect_plans WHERE plan_id = ?", planId);
+	}
+
+	plans(status?: string): EffectPlanRow[] {
+		return status
+			? this.all<EffectPlanRow>("SELECT * FROM effect_plans WHERE status = ? ORDER BY created_at", status)
+			: this.all<EffectPlanRow>("SELECT * FROM effect_plans ORDER BY created_at");
+	}
+
+	setPlanStatus(planId: string, status: EffectPlanRow["status"], detail: unknown): void {
+		this.run("UPDATE effect_plans SET status = ?, updated_at = ? WHERE plan_id = ?", status, Date.now(), planId);
+		this.audit(`effect_plan_${status}`, planId, detail);
+	}
+
+	journal(planId: string): JournalRow[] {
+		return this.all<JournalRow>("SELECT * FROM effect_journal WHERE plan_id = ? ORDER BY op_index", planId);
+	}
+
+	journalEntry(key: string): JournalRow | undefined {
+		return this.get<JournalRow>("SELECT * FROM effect_journal WHERE idempotency_key = ?", key);
+	}
+
+	/** Entries a crash may have left between prepare and commit. */
+	pendingJournal(): JournalRow[] {
+		return this.all<JournalRow>("SELECT * FROM effect_journal WHERE state = 'prepared' ORDER BY plan_id, op_index");
+	}
+
+	/**
+	 * Durably record one effect's state. Each transition is also an audit record (invariant 8),
+	 * so the chain holds the full history even though the journal row is updated in place.
+	 */
+	journalSet(planId: string, opIndex: number, key: string, state: JournalRow["state"], detail: unknown): void {
+		this.run(
+			`INSERT INTO effect_journal (idempotency_key, plan_id, op_index, state, detail_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(idempotency_key) DO UPDATE SET state = excluded.state, detail_json = excluded.detail_json, updated_at = excluded.updated_at`,
+			key,
+			planId,
+			opIndex,
+			state,
+			canonical(detail),
+			Date.now(),
+		);
+		this.audit(`effect_${state}`, planId, { op: opIndex, key, detail });
+	}
+
 	/* ----------------------------------------------------------------- library, compiled */
 
 	putLibrarySkill(skill: LibrarySkill, report: unknown): string {
@@ -966,8 +1073,9 @@ export class LatticeStore {
 			}
 			renameSync(temp, path);
 		}
+		// `created_at` is refreshed on every reference, so retention ages bytes by their last use.
 		this.run(
-			"INSERT OR IGNORE INTO artifacts (hash, mime, size, producer, retention, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+			"INSERT INTO artifacts (hash, mime, size, producer, retention, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at",
 			hash,
 			mime,
 			bytes.length,
@@ -982,6 +1090,57 @@ export class LatticeStore {
 		const bytes = readFileSync(this.artifactPath(hash));
 		if (sha256(bytes) !== hash) throw new Error(`artifact ${hash.slice(0, 12)} is corrupt`);
 		return bytes;
+	}
+
+	/**
+	 * Retention (spec section 7.7): release episode inputs and reports not referenced for a while,
+	 * old cache entries and expired facts. Episode rows keep the content hash, so provenance
+	 * survives; the bytes go at the next garbage collection. Compiled artifacts, audit records,
+	 * versions and counterexamples are never released here.
+	 */
+	applyRetention(policy: { episodeInputDays: number; reportDays: number; cacheDays: number }): {
+		artifactsReleased: number;
+		cacheRemoved: number;
+		factsExpired: number;
+	} {
+		const day = 24 * 3600 * 1000;
+		const now = Date.now();
+		const released =
+			Number(
+				this.run(
+					"DELETE FROM artifacts WHERE retention = 'episode' AND created_at < ?",
+					now - policy.episodeInputDays * day,
+				).changes,
+			) +
+			Number(
+				this.run(
+					"DELETE FROM artifacts WHERE retention = 'report' AND created_at < ?",
+					now - policy.reportDays * day,
+				).changes,
+			);
+		const cache = Number(this.run("DELETE FROM cache WHERE created_at < ?", now - policy.cacheDays * day).changes);
+		const facts = Number(this.run("DELETE FROM facts WHERE expires_at IS NOT NULL AND expires_at <= ?", now).changes);
+		const result = { artifactsReleased: released, cacheRemoved: cache, factsExpired: facts };
+		this.audit("maintenance_retention", "store", { policy, ...result });
+		return result;
+	}
+
+	/** Bytes of local state: the database plus every referenced artifact. */
+	usageBytes(): number {
+		const pages = this.get<{ page_count: number }>("PRAGMA page_count")?.page_count ?? 0;
+		const size = this.get<{ page_size: number }>("PRAGMA page_size")?.page_size ?? 0;
+		const artifacts = this.get<{ total: number | null }>("SELECT SUM(size) AS total FROM artifacts")?.total ?? 0;
+		return pages * size + artifacts;
+	}
+
+	/** Integrity of a database file that is not open (restore validation). */
+	static verifyFile(path: string, dataDir: string): IntegrityReport {
+		const db = new DatabaseSync(path, { readOnly: true });
+		try {
+			return verifyDatabase(db, dataDir);
+		} finally {
+			db.close();
+		}
 	}
 
 	/**
@@ -1158,6 +1317,29 @@ export class LatticeStore {
 		}
 		return out;
 	}
+}
+
+export interface EffectPlanRow {
+	plan_id: string;
+	episode_id: string;
+	skill_id: string;
+	version_id: number;
+	root: string;
+	plan_hash: string;
+	intents_json: string;
+	status: "proposed" | "applying" | "applied" | "partial" | "compensated" | "unresolved" | "expired";
+	expires_at: number;
+	created_at: number;
+	updated_at: number;
+}
+
+export interface JournalRow {
+	idempotency_key: string;
+	plan_id: string;
+	op_index: number;
+	state: "prepared" | "committed" | "failed" | "unperformed" | "compensated" | "unresolved";
+	detail_json: string;
+	updated_at: number;
 }
 
 export interface SnapshotManifest {

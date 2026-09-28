@@ -6,8 +6,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { canonical } from "../src/lattice/canonical.ts";
 import { main } from "../src/lattice/cli.ts";
 import { inventoryReport, recordFixture, recordsFilter, recordsFilterProgram } from "../src/lattice/contracts.ts";
+import { IdleScheduler } from "../src/lattice/idle.ts";
 import type { Value } from "../src/lattice/ir.ts";
 import { CANARY_RUNS, Lattice, selftest } from "../src/lattice/kernel.ts";
+import { searchImprovement } from "../src/lattice/search.ts";
 import { INBOX_LIMIT, KernelLoop, serve } from "../src/lattice/server.ts";
 import { runIsolated } from "../src/lattice/worker.ts";
 
@@ -207,6 +209,67 @@ describe("lattice isolated improvement", () => {
 		expect(report.cpu_ms).toBeLessThan(30_000);
 	}, 60_000);
 
+	it("pauses a campaign for interactive work and resumes it from the checkpoint", async () => {
+		const controller = new AbortController();
+		setTimeout(() => controller.abort(), 1_500);
+		const paused = await lattice.improve("inventory.report", {
+			explore: true,
+			isolate: true,
+			shadowMin: 0,
+			signal: controller.signal,
+		});
+		expect(paused.status).toBe("paused");
+		expect(lattice.store.campaign(paused.campaign_id)!.status).toBe("paused");
+		const state = lattice.store.loadCheckpoint<{
+			checkpoint: { counters: { evaluations: number }; best: { cost: number } };
+		}>(paused.campaign_id)!;
+		expect(state.checkpoint.counters.evaluations).toBeGreaterThan(0);
+		const resumed = await lattice.improve("inventory.report", {
+			explore: true,
+			isolate: true,
+			shadowMin: 0,
+			resume: paused.campaign_id,
+		});
+		expect(resumed.campaign_id).toBe(paused.campaign_id);
+		expect(resumed.status).toBe("promoted");
+		// Work before the pause is counted, never reset.
+		expect(resumed.development!.evaluations).toBeGreaterThan(state.checkpoint.counters.evaluations);
+		expect(resumed.development!.bestCost).toBeLessThanOrEqual(state.checkpoint.best.cost);
+		expect(lattice.store.campaigns("inventory.report")).toHaveLength(1);
+		await expect(
+			lattice.improve("inventory.report", { explore: true, isolate: false, resume: paused.campaign_id }),
+		).rejects.toThrow(/not paused/);
+	}, 60_000);
+
+	it("rejects a checkpoint whose policy, cases or parent changed", () => {
+		const base = {
+			contract: inventoryReport,
+			parent: inventoryReport.seed(),
+			costCases: inventoryReport.fixtures.development().slice(0, 2),
+			checkCases: inventoryReport.fixtures.regression(),
+			policy: lattice.policy().record,
+			limits: lattice.limits,
+			library: new Map(),
+			seed: 1,
+		};
+		const stopFlag = new Int32Array(new SharedArrayBuffer(4));
+		// Request the stop before starting: the search pauses at its first check with a checkpoint.
+		Atomics.store(stopFlag, 0, 1);
+		const report = searchImprovement({ ...base, stopFlag });
+		expect(report.stopReason).toBe("cancelled");
+		const checkpoint = report.checkpoint!;
+		expect(searchImprovement({ ...base, resume: checkpoint }).stopReason).not.toBe("cancelled");
+		expect(() =>
+			searchImprovement({ ...base, policy: { ...base.policy, beam_width: 3 }, resume: checkpoint }),
+		).toThrow(/policy_hash changed/);
+		expect(() => searchImprovement({ ...base, costCases: base.costCases.slice(0, 1), resume: checkpoint })).toThrow(
+			/cases_hash changed/,
+		);
+		expect(() => searchImprovement({ ...base, parent: recordsFilter.seed(), resume: checkpoint })).toThrow(
+			/checkpoint is stale/,
+		);
+	});
+
 	it("terminates the worker when cancelled", async () => {
 		const controller = new AbortController();
 		const pending = runIsolated(
@@ -311,6 +374,53 @@ describe("lattice event loop and IPC", () => {
 			await new Promise((resolve) => server.close(resolve));
 		}
 	});
+});
+
+describe("lattice idle scheduler", () => {
+	it("waits for idle time, backs off skills that are not worth improving, and resumes paused campaigns first", async () => {
+		const loop = new KernelLoop();
+		const scheduler = new IdleScheduler(lattice, loop, { idleMs: 60_000 });
+		// Recent interactive work: not idle long enough.
+		await loop.submit(true, async () => undefined);
+		await new Promise((resolve) => setImmediate(resolve)); // let the loop mark itself idle
+		expect((await scheduler.tick()).reason).toBe("not idle long enough");
+		loop.lastInteractiveAt = Number.NEGATIVE_INFINITY;
+		// No episodes: the economic gate declines every skill, and each backs off.
+		const decisions = [];
+		for (let i = 0; i < 3; i++) decisions.push(await scheduler.tick());
+		expect(decisions.map((decision) => [decision.action, decision.skill, decision.outcome])).toEqual([
+			["improve", "inventory.report", "no_candidate"],
+			["improve", "organize.plan", "no_candidate"],
+			["improve", "records.filter", "no_candidate"],
+		]);
+		expect(decisions[0].reason).toMatch(/economic gate/);
+		expect((await scheduler.tick()).reason).toBe("every skill is backing off");
+		const backoff = JSON.parse(lattice.store.getMeta("backoff:records.filter")!) as { ms: number };
+		expect(backoff.ms).toBe(3_600_000);
+		// A paused campaign is resumed regardless of backoff, because its search is already paid for.
+		for (const seed of [1, 2]) {
+			await lattice.submitGoal({
+				contract_id: "inventory.report",
+				input: inventoryReport.fixtures.development()[seed],
+			});
+		}
+		const controller = new AbortController();
+		setTimeout(() => controller.abort(), 1_000);
+		const paused = await lattice.improve("inventory.report", {
+			explore: true,
+			isolate: true,
+			signal: controller.signal,
+		});
+		expect(paused.status).toBe("paused");
+		loop.lastInteractiveAt = Number.NEGATIVE_INFINITY;
+		const resumed = await scheduler.tick();
+		expect(resumed).toMatchObject({
+			action: "resume",
+			skill: "inventory.report",
+			campaign: paused.campaign_id,
+			outcome: "promoted",
+		});
+	}, 60_000);
 });
 
 describe("lattice CLI and self-test", () => {

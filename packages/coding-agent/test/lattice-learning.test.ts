@@ -7,6 +7,7 @@ import { canonical } from "../src/lattice/canonical.ts";
 import {
 	type Contract,
 	inventoryReport,
+	organizePlan,
 	RECORD_TYPE,
 	recordFixture,
 	recordsFilter,
@@ -40,7 +41,7 @@ const info = (program: Program, contract: Contract) => {
 describe("lattice mutation operators", () => {
 	const all = new Set(MUTATION_OPS);
 
-	for (const contract of [inventoryReport, recordsFilter]) {
+	for (const contract of [inventoryReport, recordsFilter, organizePlan]) {
 		it(`preserves ${contract.id} semantics for every operator with a provable precondition`, () => {
 			const program = contract.seed();
 			const inputs = [

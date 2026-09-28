@@ -17,7 +17,7 @@ export interface ExecutionLimits {
 }
 
 export const INSTALLATION_LIMITS: ExecutionLimits = {
-	maxNodes: 256,
+	maxNodes: 512,
 	maxDepth: 24,
 	maxItems: 4096,
 	maxSkillCallDepth: 8,
@@ -53,6 +53,12 @@ export const BUDGETS: { interactive: Budget; background: Budget; research: Budge
 	research: { wallMs: 300_000, cpuMs: 100_000, candidateLimit: 256, evaluationLimit: 256 },
 	maintenance: { wallMs: 3_600_000, cpuMs: 900_000, candidateLimit: 0, evaluationLimit: 0 },
 };
+
+/** Initial local state quota (spec section 42.1); goals and campaigns are refused beyond it. */
+export const STATE_QUOTA_BYTES = 256 * 1024 * 1024;
+
+/** Retention (spec section 7.7): days since last reference before bytes are released. */
+export const RETENTION = { episodeInputDays: 30, reportDays: 90, cacheDays: 7 };
 
 /** CPU milliseconds per local day that improvement campaigns may reserve. */
 export const DAILY_IMPROVEMENT_CPU_MS = 120_000;

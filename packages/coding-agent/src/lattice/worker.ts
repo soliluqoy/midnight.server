@@ -3,7 +3,13 @@ import { getContract } from "./contracts.ts";
 import { interpret, type RunResult } from "./interpreter.ts";
 import type { LibrarySkill, Program, Value } from "./ir.ts";
 import type { ExecutionLimits } from "./limits.ts";
-import { makeVerifier, type SearchPolicy, type SearchReport, searchImprovement } from "./search.ts";
+import {
+	makeVerifier,
+	type SearchCheckpoint,
+	type SearchPolicy,
+	type SearchReport,
+	searchImprovement,
+} from "./search.ts";
 
 /**
  * The isolated replay worker (spec section 4.1). A short-lived worker thread with a heap cap and
@@ -28,6 +34,9 @@ export type WorkerRequest =
 			/** Wall milliseconds the search may use. */
 			wallMs: number;
 			verifierTrials: number;
+			/** Shared stop flag (Int32Array over this buffer); set by the parent to pause the search. */
+			stopBuffer?: SharedArrayBuffer;
+			resume?: SearchCheckpoint;
 	  }
 	| {
 			kind: "execute";
@@ -69,6 +78,8 @@ export function handleRequest(request: WorkerRequest): WorkerResponse {
 			seed: request.seed,
 			deadline,
 			verifier,
+			stopFlag: request.stopBuffer ? new Int32Array(request.stopBuffer) : undefined,
+			resume: request.resume,
 		}),
 	};
 }
@@ -108,7 +119,18 @@ export function runIsolated(
 			() => finish(() => reject(new Error("worker deadline exceeded"))),
 			request.wallMs + options.graceMs,
 		);
-		const cancel = () => finish(() => reject(new Error("cancelled: interactive work has priority")));
+		// A search is asked to stop and reply with a checkpoint; anything else, or a search that does
+		// not answer within the grace period, is terminated.
+		const stopFlag = request.kind === "search" && request.stopBuffer ? new Int32Array(request.stopBuffer) : undefined;
+		const cancel = () => {
+			if (stopFlag) {
+				Atomics.store(stopFlag, 0, 1);
+				setTimeout(
+					() => finish(() => reject(new Error("cancelled: the search did not stop in time"))),
+					options.graceMs,
+				);
+			} else finish(() => reject(new Error("cancelled: interactive work has priority")));
+		};
 		if (signal?.aborted) cancel();
 		signal?.addEventListener("abort", cancel, { once: true });
 		worker.once("message", (message: WorkerResponse) => finish(() => resolve(message)));

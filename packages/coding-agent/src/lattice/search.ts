@@ -1,4 +1,4 @@
-import { canonical } from "./canonical.ts";
+import { canonical, digest } from "./canonical.ts";
 import type { Contract } from "./contracts.ts";
 import { type EvalContext, evaluateCase } from "./evaluator.ts";
 import { type Expr, type LibrarySkill, type Program, programHash, type Value } from "./ir.ts";
@@ -42,6 +42,7 @@ export const DEFAULT_POLICY: SearchPolicy = {
 		swap_independent: 0.3,
 		reorder_exclusive: 0.2,
 		hoist_common: 0.15,
+		hoist_invariant: 0.15,
 		fuse_filters: 0.05,
 		split_filter: 0.05,
 		dedupe_conjunct: 0.1,
@@ -101,6 +102,44 @@ export interface SearchInput {
 	deadline?: number;
 	/** Extra verification for evidence-only proposals: returns a failing input or undefined. */
 	verifier?: (candidate: Program) => { input: Value; failure: string } | undefined;
+	/** Cross-thread stop request: index 0 set to 1 stops the search between candidates, with a checkpoint. */
+	stopFlag?: Int32Array;
+	/** Continue a paused beam search (spec section 42.5). */
+	resume?: SearchCheckpoint;
+}
+
+/**
+ * A structured search checkpoint (spec section 42.5): the beam and generator state at the start
+ * of the interrupted depth, everything evaluated so far and the work already spent. Raw worker
+ * memory is never serialized. A checkpoint is rejected if the parent, primitives, contract,
+ * policy or cases changed.
+ */
+export interface SearchCheckpoint {
+	version: 1;
+	parent_hash: string;
+	primitives: string;
+	contract: string;
+	policy_hash: string;
+	cases_hash: string;
+	depth: number;
+	stale: number;
+	rng: { mt: number[]; index: number };
+	beam: { program: Program; cost: number; lineage: string[] }[];
+	seen: string[];
+	archive: { program: Program; cost: number; lineage: string[]; family: string }[];
+	best: { program: Program; cost: number; lineage: string[] };
+	parentCost: number;
+	cases: { runs: number; rejections: number; units: number }[];
+	counters: {
+		evaluations: number;
+		screened: number;
+		work: number;
+		generated: number;
+		duplicates: number;
+		rejectedStatic: number;
+		rejectedDevelopment: number;
+	};
+	curve: { work: number; best: number }[];
 }
 
 export interface Counterexample {
@@ -132,6 +171,8 @@ export interface SearchReport {
 	curve: { work: number; best: number }[];
 	archive: { hash: string; cost: number; family: string }[];
 	stopReason: string;
+	/** Present when a beam search was stopped on request; pass it back as `resume`. */
+	checkpoint?: SearchCheckpoint;
 }
 
 interface Scored {
@@ -237,18 +278,55 @@ export function searchImprovement(input: SearchInput): SearchReport {
 
 	const parentCheck = checkProgram(input.parent, options);
 	if (!parentCheck.ok) throw new Error(`parent rejected: ${parentCheck.error}`);
-	const parentCost = evaluate(input.parent, report.bestHash);
+	const identity = {
+		parent_hash: programHash(input.parent, PRIMITIVE_LIBRARY_HASH),
+		primitives: PRIMITIVE_LIBRARY_HASH,
+		contract: `${input.contract.id}@${input.contract.revision}`,
+		policy_hash: digest(policy),
+		cases_hash: digest({ cost: input.costCases, check: input.checkCases }),
+	};
+	const resume = input.resume;
+	if (resume) {
+		for (const key of Object.keys(identity) as (keyof typeof identity)[]) {
+			if (resume[key] !== identity[key]) throw new Error(`checkpoint is stale: ${key} changed`);
+		}
+		if (policy.strategy !== "beam") throw new Error("only beam searches can be resumed");
+		Object.assign(report, resume.counters);
+		report.curve = resume.curve.slice();
+		for (const [index, stats] of resume.cases.entries()) Object.assign(cases[index], stats);
+		rng.setState(resume.rng);
+	}
+	const parentCost = resume ? resume.parentCost : evaluate(input.parent, report.bestHash);
 	if (parentCost === undefined) throw new Error("the active parent fails its own development cases");
 	report.parentCost = parentCost;
 	report.bestCost = parentCost;
-	report.curve[report.curve.length - 1] = { work: report.work, best: parentCost };
+	if (!resume) report.curve[report.curve.length - 1] = { work: report.work, best: parentCost };
 
-	const seen = new Set<string>([report.bestHash]);
+	const seen = new Set<string>(resume ? resume.seen : [report.bestHash]);
+	/** Re-admit a stored program: its checker facts are recomputed, never deserialized. */
+	const restore = (entry: { program: Program; cost: number; lineage: string[] }): Scored => {
+		const check = checkProgram(entry.program, options);
+		if (!check.ok) throw new Error(`checkpoint program rejected: ${check.error}`);
+		return { ...entry, hash: programHash(entry.program, PRIMITIVE_LIBRARY_HASH), info: check.info };
+	};
 	const archive = new Map<string, { scored: Scored; family: string }>();
+	if (resume) {
+		for (const entry of resume.archive) {
+			const scored = restore(entry);
+			archive.set(scored.hash, { scored, family: entry.family });
+		}
+		if (resume.best.cost < report.bestCost) {
+			report.best = resume.best.program;
+			report.bestHash = programHash(resume.best.program, PRIMITIVE_LIBRARY_HASH);
+			report.bestCost = resume.best.cost;
+			report.lineage = resume.best.lineage;
+		}
+	}
 	const outOfBudget = () => {
 		if (report.work >= report.budgetWork) return "evaluation budget exhausted";
 		if (report.generated >= SEARCH_DEFAULTS.maxCandidatesPerCampaign * 4) return "candidate budget exhausted";
 		if (input.signal?.aborted) return "cancelled";
+		if (input.stopFlag && Atomics.load(input.stopFlag, 0) === 1) return "cancelled";
 		if (input.deadline !== undefined && performance.now() > input.deadline) return "deadline";
 		return undefined;
 	};
@@ -358,10 +436,42 @@ export function searchImprovement(input: SearchInput): SearchReport {
 			champion = best;
 		}
 	} else {
-		let beam: Scored[] = [root];
-		let stale = 0;
-		for (let depth = 0; depth < policy.max_depth; depth++) {
+		let beam: Scored[] = resume ? resume.beam.map(restore) : [root];
+		let stale = resume ? resume.stale : 0;
+		for (let depth = resume ? resume.depth : 0; depth < policy.max_depth; depth++) {
 			const before = report.bestCost;
+			// State at the start of this depth: a stop inside it resumes by re-expanding this depth.
+			const depthStart = { beam, stale, rng: rng.getState(), seen: [...seen] };
+			const pause = () => {
+				report.checkpoint = {
+					version: 1,
+					...identity,
+					depth,
+					stale: depthStart.stale,
+					rng: depthStart.rng,
+					beam: depthStart.beam.map(({ program, cost, lineage }) => ({ program, cost, lineage })),
+					seen: depthStart.seen,
+					archive: [...archive.values()].map(({ scored, family }) => ({
+						program: scored.program,
+						cost: scored.cost,
+						lineage: scored.lineage,
+						family,
+					})),
+					best: { program: report.best, cost: report.bestCost, lineage: report.lineage },
+					parentCost: report.parentCost,
+					cases: cases.map(({ runs, rejections, units }) => ({ runs, rejections, units })),
+					counters: {
+						evaluations: report.evaluations,
+						screened: report.screened,
+						work: report.work,
+						generated: report.generated,
+						duplicates: report.duplicates,
+						rejectedStatic: report.rejectedStatic,
+						rejectedDevelopment: report.rejectedDevelopment,
+					},
+					curve: report.curve.slice(),
+				};
+			};
 			const successors: { mutation: Mutation; from: Scored; key: number }[] = [];
 			for (const member of beam) {
 				for (const mutation of enumerateMutations(member.program, member.info, allowed)) {
@@ -421,6 +531,10 @@ export function searchImprovement(input: SearchInput): SearchReport {
 			}
 			const pool = [...archive.values()].map((entry) => entry.scored).filter((entry) => !kept.includes(entry));
 			for (let i = 0; i < explorers && pool.length > 0; i++) kept.push(pool.splice(rng.below(pool.length), 1)[0]);
+			if (report.stopReason === "cancelled") {
+				pause();
+				break;
+			}
 			beam = kept;
 			if (report.stopReason !== "exhausted" && report.stopReason !== "no feasible successors") break;
 			stale = report.bestCost < before ? 0 : stale + 1;
