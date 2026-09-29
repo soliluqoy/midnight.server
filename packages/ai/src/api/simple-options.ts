@@ -12,9 +12,20 @@ import { estimateContextTokens } from "../utils/estimate.ts";
 const CONTEXT_SAFETY_TOKENS = 4096;
 const MIN_MAX_TOKENS = 1;
 
+/**
+ * Room held back for token-estimate error. A fixed 4096 would take half of an 8K local
+ * model's window: at 4.3K tokens of context, 8192 - 4272 - 4096 < 1, so every request asked
+ * for one output token and the session stopped mid-sentence. Scale it with the window and
+ * keep 4096 for windows of 64K and more.
+ */
+export function contextSafetyTokens(contextWindow: number): number {
+	return Math.min(CONTEXT_SAFETY_TOKENS, Math.floor(contextWindow / 16));
+}
+
 export function clampMaxTokensToContext(model: Model<Api>, context: TranscriptContext, maxTokens: number): number {
 	if (model.contextWindow <= 0) return Math.max(MIN_MAX_TOKENS, maxTokens);
-	const available = model.contextWindow - estimateContextTokens(context).tokens - CONTEXT_SAFETY_TOKENS;
+	const available =
+		model.contextWindow - estimateContextTokens(context).tokens - contextSafetyTokens(model.contextWindow);
 	return Math.min(maxTokens, Math.max(MIN_MAX_TOKENS, available));
 }
 

@@ -338,7 +338,7 @@ export function getSelfUpdateUnavailableInstruction(
 	const method = detectInstallMethod();
 	const target = normalizeSelfUpdatePackageTarget(updatePackageTarget);
 	if (method === "bun-binary") {
-		return `Download from: https://github.com/earendil-works/pi/releases/latest`;
+		return `Download from: https://github.com/soliluqoy/midnight.server/releases/latest`;
 	}
 	const command = getSelfUpdateCommandForMethod(method, packageName, target, npmCommand);
 	if (command) {
@@ -388,7 +388,7 @@ export function findNodePackageDir(startDir: string): string {
 
 export function getPackageDir(): string {
 	// Allow override via environment variable (useful for Nix/Guix where store paths tokenize poorly)
-	const envDir = process.env.PI_PACKAGE_DIR;
+	const envDir = process.env.MIDNIGHT_SERVER_PACKAGE_DIR;
 	if (envDir) {
 		return normalizePath(envDir);
 	}
@@ -451,29 +451,23 @@ export function getExamplesPath(): string {
 	return resolve(join(getPackageDir(), "examples"));
 }
 
+/**
+ * Get the directory of extension packages that ship with midnight.server and load by default.
+ * - For Bun binary: extensions/ next to executable
+ * - From a source checkout: packaging/extensions/ at the repository root
+ * Returns undefined when it is absent or MIDNIGHT_SERVER_NO_BUNDLED_EXTENSIONS is set.
+ */
+export function getBundledExtensionsDir(): string | undefined {
+	if (process.env.MIDNIGHT_SERVER_NO_BUNDLED_EXTENSIONS) return undefined;
+	const dir = isBunBinary
+		? join(getPackageDir(), "extensions")
+		: resolve(getPackageDir(), "..", "..", "packaging", "extensions");
+	return existsSync(join(dir, "package.json")) ? dir : undefined;
+}
+
 /** Get path to CHANGELOG.md */
 export function getChangelogPath(): string {
 	return resolve(join(getPackageDir(), "CHANGELOG.md"));
-}
-
-/**
- * Get path to built-in interactive assets directory.
- * - For Bun binary: assets/ next to executable
- * - For Node.js (dist/): dist/modes/interactive/assets/
- * - For tsx (src/): src/modes/interactive/assets/
- */
-export function getInteractiveAssetsDir(): string {
-	if (isBunBinary) {
-		return join(getPackageDir(), "assets");
-	}
-	const packageDir = getPackageDir();
-	const srcOrDist = existsSync(join(packageDir, "src")) ? "src" : "dist";
-	return join(packageDir, srcOrDist, "modes", "interactive", "assets");
-}
-
-/** Get path to a bundled interactive asset */
-export function getBundledInteractiveAssetPath(name: string): string {
-	return join(getInteractiveAssetsDir(), name);
 }
 
 // =============================================================================
@@ -500,13 +494,15 @@ try {
 const piConfigName: string | undefined = pkg.piConfig?.name;
 export const PACKAGE_NAME: string = pkg.name || "@earendil-works/pi-coding-agent";
 export const APP_NAME: string = piConfigName || "pi";
-export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
+export const APP_TITLE: string = `☾ ${APP_NAME}`;
 export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".pi";
 export const VERSION: string = pkg.version || "0.0.0";
+/** Where `/bug` tells users to file the exported report. */
+export const BUG_REPORT_URL = "https://github.com/soliluqoy/midnight.server/issues";
 
-// e.g., PI_CODING_AGENT_DIR or TAU_CODING_AGENT_DIR
-export const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`;
-export const ENV_SESSION_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_SESSION_DIR`;
+// Product environment variables must not depend on the dotted display name.
+export const ENV_AGENT_DIR = "MIDNIGHT_SERVER_CODING_AGENT_DIR";
+export const ENV_SESSION_DIR = "MIDNIGHT_SERVER_CODING_AGENT_SESSION_DIR";
 
 export function expandTildePath(path: string): string {
 	return normalizePath(path);
@@ -516,7 +512,7 @@ const DEFAULT_SHARE_VIEWER_URL = "https://pi.dev/session/";
 
 /** Get the share viewer URL for a gist ID. */
 export function getShareViewerUrl(gistId: string): string {
-	const baseUrl = process.env.PI_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
+	const baseUrl = process.env.MIDNIGHT_SERVER_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
 	return `${baseUrl}#${gistId}`;
 }
 

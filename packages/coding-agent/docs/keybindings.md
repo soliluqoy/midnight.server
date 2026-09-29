@@ -1,12 +1,12 @@
 # Keybindings Reference
 
-Pi exposes named actions, such as `app.session.new`, that can be assigned keybindings. You can change default assignments or bind unassigned actions in Pi's [user configuration](configuration.md#agent-directory).
+midnight.server exposes named actions, such as `app.session.new`, that can be assigned keybindings. You can change default assignments or bind unassigned actions in midnight.server's [user configuration](configuration.md#agent-directory).
 
 Run `/hotkeys` to see the active shortcuts for the main editor and application.
 
 ## Assign keybindings
 
-Create `<agent-dir>/keybindings.json`. The agent directory defaults to `~/.pi/agent` and is described in [Agent directory](configuration.md#agent-directory).
+Create `<agent-dir>/keybindings.json`. The agent directory defaults to `~/.midnight.server/agent` and is described in [Agent directory](configuration.md#agent-directory).
 
 Map each action identifier to one key or a list of keys:
 
@@ -125,9 +125,23 @@ In fullscreen mode, these actions control the transcript and take precedence ove
 | `app.exit` | `ctrl+d` | Exit (when editor empty) |
 | `app.suspend` | `ctrl+z` (None on Windows) | Suspend to background |
 | `app.editor.external` | `ctrl+g` | Open in external editor (`externalEditor`, `$VISUAL`, `$EDITOR`, Notepad on Windows, or `nano` elsewhere) |
-| `app.clipboard.pasteImage` | `ctrl+v` (`alt+v` on Windows and WSL) | Paste image or text from clipboard |
+| `app.clipboard.pasteImage` | `ctrl+v` (`ctrl+v`, `alt+v` on Windows and WSL) | Paste image or text from clipboard; an image becomes an `[imageN]` marker and is attached on submit |
+| `app.agentMode.toggle` | `tab` | Switch between plan mode (read-only tools) and build mode. Only when the editor is empty and no autocomplete is open; otherwise Tab completes as usual |
+| `app.commandPalette` | `alt+x` | Open the command palette |
+| `app.sidebar.toggle` | `alt+s` | Show or hide the session sidebar (fullscreen mode) |
+| `app.explorer.toggle` | `alt+e` | Show and focus the file explorer; when it already has focus, hide it (fullscreen mode) |
+| `app.explorer.expand` | `right` | File explorer: expand a folder, or preview a file |
+| `app.explorer.collapse` | `left` | File explorer: collapse a folder, or go to its parent |
+| `app.explorer.preview` | `space` | File explorer: preview the selected file |
+| `app.thread.select` | `alt+t` | Ask a side question about the newest transcript item; again to manage its thread; again to leave. See [Sessions](sessions.md#ask-side-questions) |
+| `app.thread.ask` | `enter` | Side threads: ask about the selected item (while managing threads) |
+| `app.thread.toggle` | `space` | Side threads: open or fold the selected item's thread |
+| `app.thread.sendToMain` | `m` | Side threads: add the selected thread to the main agent's context |
+| `app.thread.delete` | `d` | Side threads: delete the selected thread |
+| `app.thread.stop` | `x` | Side threads: stop the selected thread's running answer |
+| `app.thread.branch` | `b` | Side threads: branch the session from before the selected item, with the thread in the editor. See [Sessions](sessions.md#redo-an-item-from-a-side-thread) |
 
-On native Windows, `app.suspend` has no default because Windows terminals do not support Unix job control. If you assign it manually, Pi shows a status message instead of suspending. WSL uses the normal `ctrl+z` and `fg` behavior.
+On native Windows, `app.suspend` has no default because Windows terminals do not support Unix job control. If you assign it manually, midnight.server shows a status message instead of suspending. WSL uses the normal `ctrl+z` and `fg` behavior.
 
 ### Sessions
 
@@ -164,6 +178,7 @@ On native Windows, `app.suspend` has no default because Windows terminals do not
 | `app.message.copy` | `ctrl+x` | Copy the selected message in `/tree`; in fullscreen mode, copy the active selection when `fullscreenCopyOnSelect` is `false`; otherwise copy the last assistant message |
 | `app.message.followUp` | `alt+enter` (`ctrl+q` on Windows and WSL) | Queue follow-up message |
 | `app.message.dequeue` | `alt+up` (`alt+q` on Windows and WSL) | Restore queued messages to editor |
+| `app.message.sendNow` | `alt+n` | Interrupt the running turn, harness checks or compaction and send the queued messages plus the editor text now |
 
 ### Tree Navigation
 
@@ -173,6 +188,7 @@ On native Windows, `app.suspend` has no default because Windows terminals do not
 | `app.tree.unfoldOrDown` | `ctrl+right`, `alt+right` | Unfold current branch segment, or jump to the next segment start or branch end |
 | `app.tree.editLabel` | `shift+l` | Edit the label on the selected tree node |
 | `app.tree.toggleLabelTimestamp` | `shift+t` | Toggle label timestamps in the tree |
+| `app.tree.newSession` | `shift+n` | Start a new session from the selected tree entry (like `/fork` before a user message, `/clone` at others) |
 | `app.tree.filter.default` | `ctrl+d` | Set tree filter to default view |
 | `app.tree.filter.noTools` | `ctrl+t` | Toggle tree filter that hides tool results |
 | `app.tree.filter.userOnly` | `ctrl+u` | Toggle tree filter that shows only user messages |

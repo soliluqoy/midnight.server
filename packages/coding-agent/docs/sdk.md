@@ -1,6 +1,6 @@
 # SDK
 
-`@earendil-works/pi-coding-agent` embeds Pi in a Node.js or Bun process. It provides direct TypeScript access to the agent, sessions, tools, models, and resources used by the command-line application.
+`@earendil-works/pi-coding-agent` embeds midnight.server in a Node.js or Bun process. It provides direct TypeScript access to the agent, sessions, tools, models, and resources used by the command-line application.
 
 Use the SDK for in-process TypeScript integration. For a language-independent or isolated subprocess, see [CLI Integration](cli-integration.md).
 
@@ -35,7 +35,7 @@ Read current state through `session.messages`, `session.model`, `session.thinkin
 
 ### Session storage
 
-Sessions are persistent by default. `SessionManager` owns the persisted or in-memory entry tree and tracks its active leaf. Branching changes that leaf without deleting abandoned branches. When Pi reconstructs model context, the manager selects the active branch and applies compaction.
+Sessions are persistent by default. `SessionManager` owns the persisted or in-memory entry tree and tracks its active leaf. Branching changes that leaf without deleting abandoned branches. When midnight.server reconstructs model context, the manager selects the active branch and applies compaction.
 
 `SessionManager` is authoritative for finalized model context. Restore external history by constructing the session with a manager containing those entries. Assigning `session.agent.state.messages` does not replace persisted context.
 
@@ -91,7 +91,7 @@ Session events report message updates, tool execution, queues, compaction, retri
 
 `message_end` contains the authoritative completed message. `agent_end` marks the end of one low-level agent run, but automatic recovery or queued work can still follow.
 
-Use `agent_settled` when the host needs to know that Pi will not continue automatically.
+Use `agent_settled` when the host needs to know that midnight.server will not continue automatically.
 
 ## Configuring a session
 

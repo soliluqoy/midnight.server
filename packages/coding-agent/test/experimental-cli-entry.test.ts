@@ -34,9 +34,9 @@ function runEntry(entry: string, experimental: boolean) {
 				...process.env,
 				HOME: directory,
 				USERPROFILE: directory,
-				PI_CODING_AGENT_DIR: join(directory, "agent"),
-				PI_OFFLINE: "1",
-				PI_EXPERIMENTAL: experimental ? "1" : "0",
+				MIDNIGHT_SERVER_CODING_AGENT_DIR: join(directory, "agent"),
+				MIDNIGHT_SERVER_OFFLINE: "1",
+				MIDNIGHT_SERVER_EXPERIMENTAL: experimental ? "1" : "0",
 			},
 		},
 	);

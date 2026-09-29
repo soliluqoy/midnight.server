@@ -822,6 +822,37 @@
       display: block;
     }
 
+    /* Side threads: questions about one item, kept out of the main context */
+    .side-thread {
+      margin: 4px 0 var(--line-height) 2ch;
+      padding: 0 1ch;
+      border-left: 2px solid var(--borderAccent);
+    }
+
+    .side-thread-label {
+      color: var(--accent);
+      cursor: pointer;
+    }
+
+    .side-thread-body {
+      display: none;
+      margin-top: 4px;
+    }
+
+    .side-thread.expanded .side-thread-body {
+      display: block;
+    }
+
+    .side-thread-who {
+      color: var(--accent);
+      font-weight: bold;
+      margin-right: 1ch;
+    }
+
+    .side-thread-note {
+      color: var(--muted);
+    }
+
     .skill-invocation + .user-message {
       margin-top: var(--line-height);
     }

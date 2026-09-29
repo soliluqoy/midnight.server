@@ -25,7 +25,14 @@ import type {
 	PrepareNextTurnContext,
 	ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
-import { contentText, getCurrentSystemMessage, retryDelayMs } from "@earendil-works/pi-ai";
+import {
+	type Api,
+	type Context,
+	contentText,
+	getCurrentSystemMessage,
+	type ModelsSimpleStreamOptions,
+	retryDelayMs,
+} from "@earendil-works/pi-ai";
 import type {
 	AssistantMessage,
 	AuthResult,
@@ -129,9 +136,23 @@ import {
 	normalizeBuildSystemPromptOptions,
 } from "./system-prompt.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
-import { createAllToolDefinitions } from "./tools/index.ts";
+import { createAllToolDefinitions, getDefaultActiveToolNames } from "./tools/index.ts";
+import { createLocalPowerShellOperations } from "./tools/powershell.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { addUsageToTotals, createUsageTotals } from "./usage-totals.ts";
+
+/**
+ * Shell for `!` and `!!` commands. A configured shellPath (Bash) wins; otherwise
+ * Windows uses PowerShell so no Git Bash installation is required.
+ */
+export function createInteractiveShellOperations(
+	shellPath: string | undefined,
+	platform: NodeJS.Platform = process.platform,
+): BashOperations {
+	return platform === "win32" && !shellPath
+		? createLocalPowerShellOperations()
+		: createLocalBashOperations({ shellPath });
+}
 
 // ============================================================================
 // Skill Block Parsing
@@ -169,6 +190,9 @@ export type AgentSessionEvent =
 			willRetry: boolean;
 	  }
 	| { type: "agent_settled" }
+	/** Extensions are running pre-settlement work (checks, reviews) after the model's last turn. */
+	| { type: "settle_start" }
+	| { type: "settle_end" }
 	| {
 			type: "queue_update";
 			steering: readonly string[];
@@ -217,6 +241,13 @@ function withoutDeletedHeaders(headers: ProviderHeaders | undefined): Record<str
 		: undefined;
 }
 
+/** A model request as the session sent it, including the options the SDK added. */
+export interface SessionModelRequest {
+	model: Model<Api>;
+	context: Context;
+	options: ModelsSimpleStreamOptions;
+}
+
 export interface AgentSessionConfig {
 	agent: Agent;
 	sessionManager: SessionManager;
@@ -232,6 +263,8 @@ export interface AgentSessionConfig {
 	modelRuntime: ModelRuntime;
 	/** Keeps the prompt cache entry of the last session request warm. */
 	cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed">;
+	/** The last session request while the transcript and model still extend it. */
+	getLastSessionRequest?: () => SessionModelRequest | undefined;
 	/** Initial active built-in tool names. Default: [read, bash, edit, write] */
 	initialActiveToolNames?: string[];
 	/** Optional allowlist of tool names. When provided, only these tool names are exposed. */
@@ -331,6 +364,9 @@ export class AgentSession {
 	readonly settingsManager: SettingsManager;
 
 	private _scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
+	private _contextUsageCache:
+		| { revision: number; leafId: string | null; contextWindow: number; usage: ContextUsage }
+		| undefined;
 
 	// Event subscription state
 	private _unsubscribeAgent?: () => void;
@@ -375,6 +411,7 @@ export class AgentSession {
 	private _lastActivityOutcome: AgentActivityOutcome = "completed";
 	private _isBeforeSettle = false;
 	private _abortDuringBeforeSettle = false;
+	private _beforeSettleAbort: AbortController | undefined;
 	private _isEmittingAgentSettled = false;
 	private readonly _deferredSettledActions: Array<() => Promise<void>> = [];
 
@@ -398,6 +435,7 @@ export class AgentSession {
 
 	private _modelRuntime: ModelRuntime;
 	private _cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed">;
+	private _getLastSessionRequest?: () => SessionModelRequest | undefined;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -419,6 +457,7 @@ export class AgentSession {
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
 		this._cacheWarmer = config.cacheWarmer;
+		this._getLastSessionRequest = config.getLastSessionRequest;
 		if (this._cacheWarmer) {
 			this._cacheWarmer.onWarmed = (entry) => this._emit({ type: "entry_appended", entry });
 		}
@@ -1204,6 +1243,14 @@ export class AgentSession {
 		return this.agent.state;
 	}
 
+	/**
+	 * The last request sent for this session, while the current model and transcript still
+	 * extend it. Side threads append to it so the provider can reuse its cached prefix.
+	 */
+	getLastSessionRequest(): SessionModelRequest | undefined {
+		return this._getLastSessionRequest?.();
+	}
+
 	/** Current cache-warming state and the policy inputs that produced it. */
 	get cacheWarmingStatus(): CacheWarmingStatus | undefined {
 		return this._cacheWarmer?.status;
@@ -1532,9 +1579,12 @@ export class AgentSession {
 		if (!this._extensionRunner.hasHandlers("agent_before_settle")) return this.agent.hasQueuedMessages();
 		this._isBeforeSettle = true;
 		this._abortDuringBeforeSettle = false;
+		const abortController = new AbortController();
+		this._beforeSettleAbort = abortController;
+		this._emit({ type: "settle_start" });
 		try {
 			const result = await this._extensionRunner.emitBoundary(
-				{ type: "agent_before_settle", outcome: this._lastActivityOutcome },
+				{ type: "agent_before_settle", outcome: this._lastActivityOutcome, signal: abortController.signal },
 				(entries) => this._buildBoundaryContext(entries, "agent_before_settle"),
 			);
 			this._commitBoundaryDrafts(result.entries);
@@ -1549,6 +1599,8 @@ export class AgentSession {
 			return shouldContinue;
 		} finally {
 			this._isBeforeSettle = false;
+			this._beforeSettleAbort = undefined;
+			this._emit({ type: "settle_end" });
 		}
 	}
 
@@ -2079,7 +2131,10 @@ export class AgentSession {
 		this.abortRetry();
 		this.abortCompaction();
 		this.abortBranchSummary();
-		if (this._isBeforeSettle) this._abortDuringBeforeSettle = true;
+		if (this._isBeforeSettle) {
+			this._abortDuringBeforeSettle = true;
+			this._beforeSettleAbort?.abort();
+		}
 		this.agent.abort();
 		await this.waitForIdle();
 	}
@@ -3280,7 +3335,7 @@ export class AgentSession {
 
 		const defaultActiveToolNames = this._baseToolsOverride
 			? Object.keys(this._baseToolsOverride)
-			: ["read", "bash", "edit", "write"];
+			: getDefaultActiveToolNames();
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,
@@ -3472,7 +3527,7 @@ export class AgentSession {
 			const result = await executeBashWithOperations(
 				resolvedCommand,
 				this.sessionManager.getCwd(),
-				options?.operations ?? createLocalBashOperations({ shellPath }),
+				options?.operations ?? createInteractiveShellOperations(shellPath),
 				{
 					onChunk: (delta) => {
 						onChunk?.(delta);
@@ -3862,6 +3917,25 @@ export class AgentSession {
 		const contextWindow = model.contextWindow ?? 0;
 		if (contextWindow <= 0) return undefined;
 
+		// The footer and sidebar call this on every frame, including every scroll frame. Rebuilding
+		// the projection walks the whole session, so reuse the result until the session changes.
+		const revision = this.sessionManager.getRevision();
+		const leafId = this.sessionManager.getLeafId();
+		const cached = this._contextUsageCache;
+		if (
+			cached &&
+			cached.revision === revision &&
+			cached.leafId === leafId &&
+			cached.contextWindow === contextWindow
+		) {
+			return { ...cached.usage };
+		}
+		const usage = this._computeContextUsage(contextWindow);
+		this._contextUsageCache = { revision, leafId, contextWindow, usage };
+		return { ...usage };
+	}
+
+	private _computeContextUsage(contextWindow: number): ContextUsage {
 		// After compaction, the last assistant usage reflects pre-compaction context size.
 		// We can only trust usage from an assistant that responded after the latest compaction.
 		// If no such assistant exists, context token count is unknown until the next LLM response.

@@ -1817,6 +1817,22 @@ describe("Editor component", () => {
 			assert.strictEqual(editor.getText(), "hello| world");
 		});
 
+		it("reports an empty paste instead of inserting text", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			let emptyPastes = 0;
+			editor.onEmptyPaste = () => {
+				emptyPastes += 1;
+			};
+
+			editor.handleInput("\x1b[200~\x1b[201~");
+			assert.strictEqual(emptyPastes, 1);
+			assert.strictEqual(editor.getText(), "");
+
+			editor.handleInput("\x1b[200~text\x1b[201~");
+			assert.strictEqual(emptyPastes, 1);
+			assert.strictEqual(editor.getText(), "text");
+		});
+
 		it("does not trigger autocomplete during single-line paste", () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 			let suggestionCalls = 0;

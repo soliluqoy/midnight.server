@@ -1,8 +1,8 @@
 # Slash commands
 
-Type `/` in Pi's terminal editor to search the commands available in the current session. This page lists the built-in commands in the current Pi release.
+Type `/` in midnight.server's terminal editor to search the commands available in the current session. This page lists the built-in commands in the current midnight.server release.
 
-Extensions, prompt templates, and skills can add commands. The command menu in Pi is therefore the exact reference for the resources loaded in your session.
+Extensions, prompt templates, and skills can add commands. The command menu in midnight.server is therefore the exact reference for the resources loaded in your session.
 
 ## Models and settings
 
@@ -14,7 +14,6 @@ Extensions, prompt templates, and skills can add commands. The command menu in P
 | `/scoped-models` | Configure the models used by interactive cycling |
 | `/login [provider]` | Add provider authentication |
 | `/logout` | Remove provider authentication |
-| `/llama` | Manage models on the configured llama.cpp router |
 
 ## Sessions and context
 
@@ -24,9 +23,10 @@ Extensions, prompt templates, and skills can add commands. The command menu in P
 | `/resume` | Switch to another saved session |
 | `/name [name]` | Set the session display name, or show the current name when omitted |
 | `/session` | Show current session information and statistics |
-| `/tree` | Navigate the session tree |
-| `/fork` | Create a new session from an earlier user message |
-| `/clone` | Duplicate the current session at its current position |
+| `/ask [@model] [question]` | Side question about the newest tool call or reply; the answer stays out of the main context. See [Sessions](sessions.md#ask-side-questions) |
+| `/tree` | Go back: continue from an earlier entry (Enter) or start a new session from it (`shift+n`). Escape twice in an empty editor opens it too |
+| `/fork` | Create a new session from an earlier user message (also `shift+n` in `/tree`) |
+| `/clone` | Duplicate the current session at its current position (also `shift+n` on the newest entry in `/tree`) |
 | `/compact [instructions]` | Compact the current context, optionally with custom instructions |
 | `/import <path>` | Import and resume a JSONL session |
 
@@ -37,7 +37,7 @@ Extensions, prompt templates, and skills can add commands. The command menu in P
 | `/copy` | Copy the last assistant message |
 | `/export [path]` | Export the session as HTML or JSONL |
 | `/share` | Upload the session and return a viewer link |
-| `/bug [description]` | Prepare a private bug report for the Pi developers |
+| `/bug [description]` | Export a bug report as a zip archive to attach to a midnight.server issue |
 
 Review a session before exporting or sharing it. Sessions can contain prompts, tool arguments, command output, file contents, and credentials exposed during the conversation.
 
@@ -45,11 +45,11 @@ Review a session before exporting or sharing it. Sessions can contain prompts, t
 
 | Command | Description |
 |---|---|
-| `/trust` | Save a project trust decision for future Pi processes |
+| `/trust` | Save a project trust decision for future midnight.server processes |
 | `/reload` | Reload keybindings, extensions, skills, templates, themes, and context files |
 | `/hotkeys` | Show active keyboard shortcuts |
 | `/changelog` | Show changelog entries |
-| `/quit` | Quit Pi |
+| `/quit` | Quit midnight.server |
 
 ## Commands added by resources
 

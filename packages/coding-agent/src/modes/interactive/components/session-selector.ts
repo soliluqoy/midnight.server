@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { KeybindingsManager } from "../../../core/keybindings.ts";
 import type { SessionInfo, SessionListProgress } from "../../../core/session-manager.ts";
+import { deleteSideThreadFile } from "../../../core/side-threads.ts";
 import { canonicalizePath as _canonicalizePath } from "../../../utils/paths.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
@@ -843,6 +844,11 @@ export class SessionSelectorComponent extends Container implements Focusable {
 			const result = await deleteSessionFile(sessionPath);
 
 			if (result.ok) {
+				try {
+					deleteSideThreadFile(sessionPath);
+				} catch {
+					// Side threads are derived data; a leftover file is harmless.
+				}
 				if (this.currentSessions) {
 					this.currentSessions = this.currentSessions.filter((s) => s.path !== sessionPath);
 				}

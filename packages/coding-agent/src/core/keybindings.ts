@@ -28,7 +28,22 @@ export interface AppKeybindings {
 	"app.message.copy": true;
 	"app.message.followUp": true;
 	"app.message.dequeue": true;
+	"app.message.sendNow": true;
 	"app.clipboard.pasteImage": true;
+	"app.agentMode.toggle": true;
+	"app.sidebar.toggle": true;
+	"app.explorer.toggle": true;
+	"app.explorer.expand": true;
+	"app.explorer.collapse": true;
+	"app.explorer.preview": true;
+	"app.commandPalette": true;
+	"app.thread.select": true;
+	"app.thread.ask": true;
+	"app.thread.toggle": true;
+	"app.thread.sendToMain": true;
+	"app.thread.delete": true;
+	"app.thread.stop": true;
+	"app.thread.branch": true;
 	"app.session.new": true;
 	"app.session.tree": true;
 	"app.session.fork": true;
@@ -37,6 +52,7 @@ export interface AppKeybindings {
 	"app.tree.unfoldOrDown": true;
 	"app.tree.editLabel": true;
 	"app.tree.toggleLabelTimestamp": true;
+	"app.tree.newSession": true;
 	"app.session.togglePath": true;
 	"app.session.toggleSort": true;
 	"app.session.rename": true;
@@ -139,10 +155,48 @@ export const KEYBINDINGS = {
 		defaultKeys: windowsKeybindings ? "alt+q" : "alt+up",
 		description: "Restore queued messages",
 	},
+	"app.message.sendNow": {
+		defaultKeys: "alt+n",
+		description: "Interrupt and send queued messages now",
+	},
 	"app.clipboard.pasteImage": {
-		defaultKeys: windowsKeybindings ? "alt+v" : "ctrl+v",
+		// Windows Terminal handles Ctrl+V itself; an image-only clipboard reaches the editor as an
+		// empty paste instead (see onEmptyPaste). Alt+V always reaches the app.
+		defaultKeys: windowsKeybindings ? ["ctrl+v", "alt+v"] : "ctrl+v",
 		description: "Paste image from clipboard (text fallback)",
 	},
+	"app.agentMode.toggle": {
+		defaultKeys: "tab",
+		description: "Switch between plan and build mode (empty editor)",
+	},
+	"app.sidebar.toggle": { defaultKeys: "alt+s", description: "Toggle sidebar (fullscreen mode)" },
+	"app.explorer.toggle": {
+		defaultKeys: "alt+e",
+		description: "Show and focus the file explorer, or hide it when focused (fullscreen mode)",
+	},
+	"app.explorer.expand": { defaultKeys: "right", description: "Expand a folder in the file explorer" },
+	"app.explorer.collapse": {
+		defaultKeys: "left",
+		description: "Collapse a folder or go to its parent in the file explorer",
+	},
+	"app.explorer.preview": { defaultKeys: "space", description: "Preview the selected file in the file explorer" },
+	"app.commandPalette": { defaultKeys: "alt+x", description: "Open command palette" },
+	"app.thread.select": {
+		defaultKeys: "alt+t",
+		description: "Ask a side question about the newest transcript item; again to manage its thread; again to leave",
+	},
+	"app.thread.ask": { defaultKeys: "enter", description: "Side threads: ask about the selected item" },
+	"app.thread.toggle": { defaultKeys: "space", description: "Side threads: open or fold the selected item's thread" },
+	"app.thread.sendToMain": {
+		defaultKeys: "m",
+		description: "Side threads: send the selected thread to the main agent's context",
+	},
+	"app.thread.delete": { defaultKeys: "d", description: "Side threads: delete the selected thread" },
+	"app.thread.branch": {
+		defaultKeys: "b",
+		description: "Side threads: branch the session from before the selected item, with the thread in the editor",
+	},
+	"app.thread.stop": { defaultKeys: "x", description: "Side threads: stop the selected thread's running answer" },
 	"app.session.new": { defaultKeys: [], description: "Start a new session" },
 	"app.session.tree": { defaultKeys: [], description: "Open session tree" },
 	"app.session.fork": { defaultKeys: [], description: "Fork current session" },
@@ -162,6 +216,10 @@ export const KEYBINDINGS = {
 	"app.tree.toggleLabelTimestamp": {
 		defaultKeys: "shift+t",
 		description: "Toggle tree label timestamps",
+	},
+	"app.tree.newSession": {
+		defaultKeys: "shift+n",
+		description: "Start a new session from the selected tree entry (fork before a user message, clone at others)",
 	},
 	"app.session.togglePath": {
 		defaultKeys: "ctrl+p",

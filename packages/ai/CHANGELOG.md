@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.87.1-midnight.1] - 2026-09-27
+
+### Fixed
+
+- Fixed GitHub Copilot Claude Opus 5.5 advertising `off` and `minimal` thinking levels once models.dev listed it with incomplete effort metadata; it now uses the same effort map as Anthropic's Opus 5.5.
+
 ## [0.87.1] - 2026-09-22
 
 ### Added
@@ -100,7 +108,6 @@
 - Added an optional timestamp argument to `uuidv7()` for follower IDs.
 - Added narrow `api`, `providers`, and `utils` subpath exports for direct imports without loading the package barrel.
 - Added Anthropic per-turn effort persistence, deterministic historical effort markers, and signed-thinking mismatch recovery for supported Claude models across Anthropic Messages transports, including OpenRouter.
-- Added Meta provider (Model API key and Muse subscription OAuth) with Muse Spark models.
 
 ### Fixed
 

@@ -116,6 +116,7 @@ async function startRpcHarness(extension: (pi: ExtensionAPI) => void): Promise<{
 
 type InteractiveBashContext = {
 	defaultEditor: { onSubmit?: (text: string) => Promise<void> | void };
+	sideThreads: { isComposing(): boolean };
 	editor: { addToHistory?: (text: string) => void };
 	session: Harness["session"];
 	sessionManager: Harness["sessionManager"];
@@ -238,6 +239,7 @@ describe("Interactive user_bash failure handling (#9068)", () => {
 		const executeBash = vi.spyOn(harness.session, "executeBash").mockResolvedValue(localResult);
 		const context: InteractiveBashContext = {
 			defaultEditor: {},
+			sideThreads: { isComposing: () => false },
 			editor: { addToHistory: vi.fn() },
 			session: harness.session,
 			sessionManager: harness.sessionManager,

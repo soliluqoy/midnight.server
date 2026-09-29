@@ -12,7 +12,7 @@
           "path": "quickstart.md"
         },
         {
-          "title": "How Pi Works",
+          "title": "How midnight.server Works",
           "path": "how-pi-works.md"
         }
       ]
@@ -21,10 +21,10 @@
       "title": "Guides",
       "items": [
         {
-          "title": "Run Pi",
+          "title": "Run midnight.server",
           "items": [
             {
-              "title": "Use Pi in the Terminal",
+              "title": "Use midnight.server in the Terminal",
               "path": "usage.md"
             },
             {
@@ -36,16 +36,16 @@
               "path": "sessions.md"
             },
             {
-              "title": "Run Pi Safely",
+              "title": "Run midnight.server Safely",
               "path": "security.md"
             },
             {
-              "title": "Isolate Pi",
+              "title": "Isolate midnight.server",
               "path": "containerization.md"
             },
             {
-              "title": "Run Local Models",
-              "path": "llama-cpp.md"
+              "title": "Use the Harness",
+              "path": "harness.md"
             },
             {
               "title": "Configure Your Terminal",
@@ -56,24 +56,24 @@
               "path": "shell-aliases.md"
             },
             {
-              "title": "Run Pi in tmux",
+              "title": "Run midnight.server in tmux",
               "path": "tmux.md"
             },
             {
-              "title": "Run Pi on Windows",
+              "title": "Run midnight.server on Windows",
               "path": "windows.md"
             },
             {
-              "title": "Run Pi on Android",
+              "title": "Run midnight.server on Android",
               "path": "termux.md"
             }
           ]
         },
         {
-          "title": "Customize Pi",
+          "title": "Customize midnight.server",
           "items": [
             {
-              "title": "Configure Pi",
+              "title": "Configure midnight.server",
               "path": "configuration.md"
             },
             {
@@ -89,13 +89,17 @@
               "path": "themes.md"
             },
             {
-              "title": "Use Pi Packages",
+              "title": "Use midnight.server Packages",
               "path": "packages.md"
+            },
+            {
+              "title": "Use MCP Servers",
+              "path": "mcp.md"
             }
           ]
         },
         {
-          "title": "Build on Pi",
+          "title": "Build on midnight.server",
           "items": [
             {
               "title": "Build Extensions",

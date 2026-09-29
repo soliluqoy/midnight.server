@@ -27,6 +27,19 @@ export function addUsageToTotals(totals: UsageTotals, usage: Usage): void {
 	totals.cost += usage.cost.total;
 }
 
+/** Sum all usage in the session: assistant turns, tool results, and branch/compaction summaries. */
+export function getSessionUsageTotals(entries: readonly SessionEntry[]): UsageTotals {
+	const totals = createUsageTotals();
+	for (const entry of entries) {
+		if (entry.type === "message" && entry.message.role === "assistant") addUsageToTotals(totals, entry.message.usage);
+		else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage)
+			addUsageToTotals(totals, entry.message.usage);
+		else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage)
+			addUsageToTotals(totals, entry.usage);
+	}
+	return totals;
+}
+
 export interface UsageCostBreakdownEntry {
 	key: string;
 	cost: number;

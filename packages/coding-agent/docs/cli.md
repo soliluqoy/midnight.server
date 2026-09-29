@@ -2,17 +2,17 @@
 
 # Command Line
 
-This page documents Pi's built-in command-line commands and options. Run `pi --help` or append `--help` to a command for the exact interface in your installed version. The top-level help also includes options registered by loaded extensions.
+This page documents midnight.server's built-in command-line commands and options. Run `midnight.server --help` or append `--help` to a command for the exact interface in your installed version. The top-level help also includes options registered by loaded extensions.
 
 ```sh
-pi [options] [--] [@files...] [messages...]
-pi install <source> [options]
-pi remove <source> [options]
-pi uninstall <source> [options]
-pi update [target] [options]
-pi list
-pi config [options]
-pi auth <check|print-api-key|print-bearer-token> [options]
+midnight.server [options] [--] [@files...] [messages...]
+midnight.server install <source> [options]
+midnight.server remove <source> [options]
+midnight.server uninstall <source> [options]
+midnight.server update [target] [options]
+midnight.server list
+midnight.server config [options]
+midnight.server auth <check|print-api-key|print-bearer-token> [options]
 ```
 
 <a id="modes"></a>
@@ -20,13 +20,13 @@ pi auth <check|print-api-key|print-bearer-token> [options]
 ## Invocation and output
 
 ```sh
-pi
-pi --print "Summarize this repository"
-git diff | pi --print "Review this change"
-pi --mode json "Inspect this repository" > events.jsonl
+midnight.server
+midnight.server --print "Summarize this repository"
+git diff | midnight.server --print "Review this change"
+midnight.server --mode json "Inspect this repository" > events.jsonl
 ```
 
-With terminal stdin and stdout, Pi opens the terminal UI unless `--print`, `--mode json`, or `--mode rpc` selects another interface. When either stream is redirected and neither JSON nor RPC mode is selected, Pi uses print mode. See [CLI Integration](cli-integration.md) for choosing between interactive, print, JSON, RPC, and SDK integration.
+With terminal stdin and stdout, midnight.server opens the terminal UI unless `--print`, `--mode json`, or `--mode rpc` selects another interface. When either stream is redirected and neither JSON nor RPC mode is selected, midnight.server uses print mode. See [CLI Integration](cli-integration.md) for choosing between interactive, print, JSON, RPC, and SDK integration.
 
 | Input | Behavior |
 |---|---|
@@ -35,9 +35,9 @@ With terminal stdin and stdout, Pi opens the terminal UI unless `--print`, `--mo
 | Piped stdin | Prepend its contents to the first prompt |
 | `--` | Stop option parsing so a prompt can begin with `-` |
 
-Pi resolves `@path` from the current working directory. The working directory also controls project configuration, resource discovery, and session grouping.
+midnight.server resolves `@path` from the current working directory. The working directory also controls project configuration, resource discovery, and session grouping.
 
-`--print` controls whether Pi runs once and exits. `--mode` selects the output interface. `--mode text` does not force one-shot execution when stdin and stdout are terminals; use `--print` for that behavior.
+`--print` controls whether midnight.server runs once and exits. `--mode` selects the output interface. `--mode text` does not force one-shot execution when stdin and stdout are terminals; use `--print` for that behavior.
 
 | Option | Behavior |
 |---|---|
@@ -54,7 +54,7 @@ RPC mode rejects `@file` arguments. JSON and RPC modes reserve stdout for protoc
 ## Models
 
 ```sh
-pi --model sonnet:high
+midnight.server --model sonnet:high
 ```
 
 See [Choose a Model](models.md) for model selection and [Provider Authentication](providers.md) for credentials.
@@ -77,7 +77,7 @@ See [Choose a Model](models.md) for model selection and [Provider Authentication
 ## Sessions
 
 ```sh
-pi --continue
+midnight.server --continue
 ```
 
 See [Sessions and Context](sessions.md) for resuming, forking, naming, and storing sessions.
@@ -87,13 +87,13 @@ See [Sessions and Context](sessions.md) for resuming, forking, naming, and stori
 - `-r`, `--resume`<br>
   Opens the session selector.
 - `--session <path|id>`<br>
-  Opens by file path, exact ID, or partial ID. Pi searches the current project first and offers to fork a cross-project match.
+  Opens by file path, exact ID, or partial ID. midnight.server searches the current project first and offers to fork a cross-project match.
 - `--session-id <id>`<br>
   Opens the exact project session ID or creates it if absent. IDs accept letters, numbers, `.`, `_`, and `-`.
 - `--fork <path|id>`<br>
   Forks an existing session into a new session for the current project.
 - `--session-dir <dir>`<br>
-  Overrides storage and lookup. It takes precedence over `PI_CODING_AGENT_SESSION_DIR` and the `sessionDir` setting.
+  Overrides storage and lookup. It takes precedence over `MIDNIGHT_SERVER_CODING_AGENT_SESSION_DIR` and the `sessionDir` setting.
 - `--no-session`<br>
   Uses an in-memory session that is not persisted.
 - `-n`, `--name <name>`<br>
@@ -110,7 +110,7 @@ Constraints:
 ## Tools
 
 ```sh
-pi --tools read,grep,find,ls --print "Review this project"
+midnight.server --tools read,grep,find,ls --print "Review this project"
 ```
 
 See [Settings](settings.md#tools) for configuring the default tool selection.
@@ -142,10 +142,10 @@ Default enabled tools are `read`, `bash`, `edit`, and `write`, unless `defaultTo
 ## Resources
 
 ```sh
-pi --extension ./review.ts
+midnight.server --extension ./review.ts
 ```
 
-See [Configuration](configuration.md) for conventional directories and project trust, [Settings](settings.md#resources) for configured paths, and [Pi Packages](packages.md) for package sources.
+See [Configuration](configuration.md) for conventional directories and project trust, [Settings](settings.md#resources) for configured paths, and [midnight.server Packages](packages.md) for package sources.
 
 - `-e`, `--extension <path>`<br>
   Loads an extension file or directory and is repeatable.
@@ -175,7 +175,7 @@ Resource paths apply only to the current process. Relative paths resolve from th
 ## Prompts and process
 
 ```sh
-pi --append-system-prompt ./instructions.md
+midnight.server --append-system-prompt ./instructions.md
 ```
 
 See [Configuration](configuration.md) for saved configuration, [Security](security.md#understand-project-trust) for project trust, and [Environment Variables](environment-variables.md) for process controls.
@@ -193,68 +193,68 @@ See [Configuration](configuration.md) for saved configuration, [Security](securi
 - `-na`, `--no-approve`<br>
   Ignores trust-gated project-local configuration and resources for this process.
 - `--offline`<br>
-  Disables automatic network activity, including model catalog refreshes. Equivalent to `PI_OFFLINE=1`.
+  Disables automatic network activity, including model catalog refreshes. Equivalent to `MIDNIGHT_SERVER_OFFLINE=1`.
 - `-h`, `--help`<br>
   Shows help, including flags registered by loaded extensions, then exits.
 - `-v`, `--version`<br>
-  Shows the Pi version, then exits.
+  Shows the midnight.server version, then exits.
 
 Extensions may register additional long-form options. Unknown short options are rejected.
 
 ## Package commands
 
 ```sh
-pi install npm:@scope/package
+midnight.server install npm:@scope/package
 ```
 
-See [Pi Packages](packages.md) for source formats, filtering, installation, and project scope.
+See [midnight.server Packages](packages.md) for source formats, filtering, installation, and project scope.
 
 ### Common tasks
 
 | Task | Command |
 |---|---|
-| Install a package | `pi install <source>` |
-| List configured packages | `pi list` |
-| Remove a package and its settings entry | `pi remove <source>` |
-| Configure which package resources load | `pi config` |
+| Install a package | `midnight.server install <source>` |
+| List configured packages | `midnight.server list` |
+| Remove a package and its settings entry | `midnight.server remove <source>` |
+| Configure which package resources load | `midnight.server config` |
 
 Add `--local` or `-l` to `install`, `remove`, `uninstall`, or `config` to use project settings instead of global settings.
 
-### Update Pi or packages
+### Update midnight.server or packages
 
-Running `pi update` without a target updates Pi itself.
+Running `midnight.server update` without a target updates midnight.server itself.
 
 | Task | Command |
 |---|---|
-| Update Pi | `pi update` |
-| Update all installed packages | `pi update --extensions` |
-| Update one installed package | `pi update <source>` |
-| Refresh model catalogs | `pi update --models` |
-| Update Pi and all installed packages | `pi update --all` |
+| Update midnight.server | `midnight.server update` |
+| Update all installed packages | `midnight.server update --extensions` |
+| Update one installed package | `midnight.server update <source>` |
+| Refresh model catalogs | `midnight.server update --models` |
+| Update midnight.server and all installed packages | `midnight.server update --all` |
 
-Add `--force` to reinstall Pi when the selected update includes Pi.
+Add `--force` to reinstall midnight.server when the selected update includes midnight.server.
 
 ### Aliases and command options
 
-- `pi uninstall <source>` is an alias for `pi remove <source>`.
-- `pi update --self`, `pi update self`, and `pi update pi` are aliases for `pi update`.
-- `pi update --extension <source>` is an alias for `pi update <source>`.
+- `midnight.server uninstall <source>` is an alias for `midnight.server remove <source>`.
+- `midnight.server update --self`, `midnight.server update self`, and `midnight.server update midnight.server` are aliases for `midnight.server update`.
+- `midnight.server update --extension <source>` is an alias for `midnight.server update <source>`.
 - `-a`, `--approve` trusts project-local files for one command. `-na`, `--no-approve` ignores trust-gated project-local files.
 - Append `-h` or `--help` to a command for its exact usage and option constraints.
 
 ## Credential commands
 
 ```sh
-pi auth check --provider openai --json
+midnight.server auth check --provider openai --json
 ```
 
 Authentication commands require `--provider <provider>` or `--model <model>`. See [Provider Authentication](providers.md) for supported methods.
 
 | Command | Description |
 |---|---|
-| `pi auth check` | Print `ready`, `not_ready`, or `invalid`; exit with status `0`, `1`, or `2`, respectively |
-| `pi auth print-api-key` | Print the resolved API key |
-| `pi auth print-bearer-token` | Print a resolved OAuth bearer token |
+| `midnight.server auth check` | Print `ready`, `not_ready`, or `invalid`; exit with status `0`, `1`, or `2`, respectively |
+| `midnight.server auth print-api-key` | Print the resolved API key |
+| `midnight.server auth print-bearer-token` | Print a resolved OAuth bearer token |
 
 | Option | Applies to | Description |
 |---|---|---|

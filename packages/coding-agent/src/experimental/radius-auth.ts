@@ -33,7 +33,7 @@ export class RadiusRelayAuthResolver {
 		readonly signal?: AbortSignal;
 	}): Promise<RadiusRelayAuth | undefined> {
 		options.signal?.throwIfAborted();
-		if (process.env.PI_OFFLINE !== undefined) {
+		if (process.env.MIDNIGHT_SERVER_OFFLINE !== undefined) {
 			if (options.required) throw new Error("Radius relay connections are unavailable in offline mode");
 			return undefined;
 		}

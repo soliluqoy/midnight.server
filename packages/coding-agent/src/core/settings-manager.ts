@@ -20,6 +20,31 @@ const DEFAULT_COMPACTION_TOKEN_SETTINGS: Required<CompactionModelOverride> = {
 	keepRecentTokens: 20000,
 };
 
+/**
+ * Shrink compaction token settings that cannot work in a small context window.
+ *
+ * Problem: the defaults (reserve 16,384, keep 20,000) are sized for 100K+ windows. With an
+ * 8,192-token window the threshold `window - reserve` is negative, so every turn asks for
+ * compaction, and keeping 20,000 recent tokens leaves nothing to summarize, so compaction never
+ * happens and the session overflows. The same happens whenever `keep >= window - reserve`.
+ *
+ * Solution: reserve at most a quarter of the window, and keep at most half of what remains
+ * below the threshold, so a compaction always frees room. Settings that already fit are
+ * returned unchanged (a 128K window keeps the defaults).
+ */
+export function fitCompactionToWindow<T extends { reserveTokens: number; keepRecentTokens: number }>(
+	settings: T,
+	contextWindow: number | undefined,
+): T {
+	if (!contextWindow || contextWindow <= 0) return settings;
+	const fits =
+		settings.reserveTokens <= contextWindow / 2 && settings.keepRecentTokens < contextWindow - settings.reserveTokens;
+	if (fits) return settings;
+	const reserveTokens = Math.min(settings.reserveTokens, Math.floor(contextWindow / 4));
+	const keepRecentTokens = Math.min(settings.keepRecentTokens, Math.floor((contextWindow - reserveTokens) / 2));
+	return { ...settings, reserveTokens, keepRecentTokens };
+}
+
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
 	reserveTokens?: number; // default: 16384
@@ -48,6 +73,7 @@ export interface RetrySettings {
 
 export type TuiMode = RendererTuiMode;
 export type FullscreenExitOutput = "transcript" | "resume-hint";
+export type SidebarMode = "auto" | "always" | "hidden";
 
 export interface TerminalSettings {
 	showImages?: boolean; // default: true (only relevant if terminal supports images)
@@ -156,10 +182,12 @@ export interface Settings {
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
 	cacheWarming?: CacheWarmingMode; // default: "streaming"; global only because each refresh costs money
 	websocketConnectTimeoutMs?: number; // WebSocket connect/open handshake timeout in milliseconds; 0 disables it
-	tuiMode?: TuiMode; // default: "regular"
+	tuiMode?: TuiMode; // default: "fullscreen"
 	fullscreenExitOutput?: FullscreenExitOutput; // default: "transcript"; no effect in regular TUI mode
 	fullscreenScrollbar?: ScrollViewScrollbar; // default: "auto"; no effect in regular TUI mode
 	fullscreenCopyOnSelect?: boolean; // default: true; no effect in regular TUI mode
+	sidebar?: SidebarMode; // default: "auto" (shown when the terminal is wide enough); no effect in regular TUI mode
+	explorer?: SidebarMode; // default: "auto" (shown only on very wide terminals); no effect in regular TUI mode
 }
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {
@@ -892,17 +920,25 @@ export class SettingsManager {
 		return this.getCompactionTokenSetting("keepRecentTokens", model);
 	}
 
-	/** Resolve each token setting through model override, ordinary setting, then built-in default. */
-	getCompactionSettings(model?: Pick<Model<string>, "provider" | "id">): {
+	/**
+	 * Resolve each token setting through model override, ordinary setting, then built-in default,
+	 * then fit the result to the model's context window (see `fitCompactionToWindow`).
+	 */
+	getCompactionSettings(model?: Pick<Model<string>, "provider" | "id"> & { contextWindow?: number }): {
 		enabled: boolean;
 		reserveTokens: number;
 		keepRecentTokens: number;
 	} {
-		return {
+		const settings = {
 			enabled: this.getCompactionEnabled(),
 			reserveTokens: this.getCompactionReserveTokens(model),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(model),
 		};
+		// A per-model override was written for that model's window; respect it as given.
+		const hasModelOverride =
+			model !== undefined &&
+			this.settings.compaction?.modelOverrides?.[`${model.provider}/${model.id}`] !== undefined;
+		return hasModelOverride ? settings : fitCompactionToWindow(settings, model?.contextWindow);
 	}
 
 	getBranchSummarySettings(): { reserveTokens: number; skipPrompt: boolean } {
@@ -1237,7 +1273,7 @@ export class SettingsManager {
 		if (this.settings.terminal?.clearOnShrink !== undefined) {
 			return this.settings.terminal.clearOnShrink;
 		}
-		return process.env.PI_CLEAR_ON_SHRINK === "1";
+		return process.env.MIDNIGHT_SERVER_CLEAR_ON_SHRINK === "1";
 	}
 
 	setClearOnShrink(enabled: boolean): void {
@@ -1263,7 +1299,7 @@ export class SettingsManager {
 	}
 
 	getTuiMode(): TuiMode {
-		return this.settings.tuiMode === "fullscreen" ? "fullscreen" : "regular";
+		return this.settings.tuiMode === "regular" ? "regular" : "fullscreen";
 	}
 
 	setTuiMode(mode: TuiMode): void {
@@ -1300,6 +1336,28 @@ export class SettingsManager {
 	setFullscreenCopyOnSelect(enabled: boolean): void {
 		this.globalSettings.fullscreenCopyOnSelect = enabled;
 		this.markModified("fullscreenCopyOnSelect");
+		this.save();
+	}
+
+	getSidebarMode(): SidebarMode {
+		const mode = this.settings.sidebar;
+		return mode === "always" || mode === "hidden" ? mode : "auto";
+	}
+
+	setSidebarMode(mode: SidebarMode): void {
+		this.globalSettings.sidebar = mode;
+		this.markModified("sidebar");
+		this.save();
+	}
+
+	getExplorerMode(): SidebarMode {
+		const mode = this.settings.explorer;
+		return mode === "always" || mode === "hidden" ? mode : "auto";
+	}
+
+	setExplorerMode(mode: SidebarMode): void {
+		this.globalSettings.explorer = mode;
+		this.markModified("explorer");
 		this.save();
 	}
 
@@ -1367,7 +1425,7 @@ export class SettingsManager {
 	}
 
 	getShowHardwareCursor(): boolean {
-		return this.settings.showHardwareCursor ?? process.env.PI_HARDWARE_CURSOR === "1";
+		return this.settings.showHardwareCursor ?? process.env.MIDNIGHT_SERVER_HARDWARE_CURSOR === "1";
 	}
 
 	setShowHardwareCursor(enabled: boolean): void {

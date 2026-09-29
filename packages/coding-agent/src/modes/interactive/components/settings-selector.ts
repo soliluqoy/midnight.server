@@ -18,6 +18,7 @@ import {
 	type DefaultProjectTrust,
 	type FullscreenExitOutput,
 	type MermaidRenderingMode,
+	type SidebarMode,
 	type TuiMode,
 	type WarningSettings,
 } from "../../../core/settings-manager.ts";
@@ -87,6 +88,8 @@ export interface SettingsConfig {
 	tuiMode: TuiMode;
 	fullscreenExitOutput: FullscreenExitOutput;
 	fullscreenScrollbar: ScrollViewScrollbar;
+	sidebar: SidebarMode;
+	explorer: SidebarMode;
 	fullscreenCopyOnSelect: boolean;
 	warnings: WarningSettings;
 }
@@ -125,6 +128,8 @@ export interface SettingsCallbacks {
 	onTuiModeChange: (mode: TuiMode) => void;
 	onFullscreenExitOutputChange: (output: FullscreenExitOutput) => void;
 	onFullscreenScrollbarChange: (mode: ScrollViewScrollbar) => void;
+	onSidebarChange: (mode: SidebarMode) => void;
+	onExplorerChange: (mode: SidebarMode) => void;
 	onFullscreenCopyOnSelectChange: (enabled: boolean) => void;
 	onWarningsChange: (warnings: WarningSettings) => void;
 	onCancel: () => void;
@@ -689,9 +694,9 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "tui-mode",
 				label: "TUI mode",
-				description: "Interface layout; fullscreen mode is experimental",
+				description: "Interface layout; fullscreen adds the session sidebar, regular stays in terminal scrollback",
 				currentValue: config.tuiMode,
-				values: ["regular", "fullscreen"],
+				values: ["fullscreen", "regular"],
 			},
 			{
 				id: "fullscreen-exit-output",
@@ -705,6 +710,21 @@ export class SettingsSelectorComponent extends Container {
 				label: "Fullscreen scrollbar",
 				description: "Scrollbar behavior in fullscreen mode; has no effect in regular mode",
 				currentValue: config.fullscreenScrollbar,
+				values: ["auto", "always", "hidden"],
+			},
+			{
+				id: "sidebar",
+				label: "Sidebar",
+				description: "Session sidebar in fullscreen mode: auto shows it when the terminal is wide enough",
+				currentValue: config.sidebar,
+				values: ["auto", "always", "hidden"],
+			},
+			{
+				id: "explorer",
+				label: "File explorer",
+				description:
+					"File explorer in fullscreen mode: auto shows it only when the terminal is at least 150 columns wide",
+				currentValue: config.explorer,
 				values: ["auto", "always", "hidden"],
 			},
 			{
@@ -937,6 +957,12 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "fullscreen-scrollbar":
 						callbacks.onFullscreenScrollbarChange(newValue as ScrollViewScrollbar);
+						break;
+					case "sidebar":
+						callbacks.onSidebarChange(newValue as SidebarMode);
+						break;
+					case "explorer":
+						callbacks.onExplorerChange(newValue as SidebarMode);
 						break;
 					case "fullscreen-copy-on-select":
 						callbacks.onFullscreenCopyOnSelectChange(newValue === "true");

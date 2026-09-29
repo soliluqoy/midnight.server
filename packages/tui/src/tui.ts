@@ -412,7 +412,9 @@ export function compositeTuiLine(
 		base.after +
 		" ".repeat(afterPad);
 
-	return visibleWidth(result) <= totalWidth ? result : sliceByColumn(result, 0, totalWidth, true);
+	// Each part's width is already known, so avoid re-measuring the composited row on every frame.
+	const resultWidth = actualBeforeWidth + actualOverlayWidth + base.afterWidth + afterPad;
+	return resultWidth <= totalWidth ? result : sliceByColumn(result, 0, totalWidth, true);
 }
 
 export type TuiMode = "regular" | "fullscreen";
@@ -1016,6 +1018,10 @@ export abstract class TuiBase extends Container implements TUI {
 			for (const listener of this.inputListeners) {
 				const result = listener(current);
 				if (result?.consume) {
+					// Consumed input (mouse wheel, clicks, drags in fullscreen) is as latency-sensitive as
+					// keys. The throttled timer path waits for a Windows timer tick (~16 ms), which makes
+					// wheel scrolling uneven, so draw any render it requested on the next tick instead.
+					if (this.renderRequested) this.requestImmediateRender();
 					return;
 				}
 				if (result?.data !== undefined) {

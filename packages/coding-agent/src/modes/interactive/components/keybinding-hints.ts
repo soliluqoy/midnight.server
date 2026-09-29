@@ -31,6 +31,11 @@ function formatKeys(keys: KeyId[], options: KeyTextFormatOptions = {}): string {
 	return formatKeyText(keys.join("/"), options);
 }
 
+/** Only the first bound key, for one-line hint bars where `escape/ctrl+c` would not fit. */
+export function firstKeyText(keybinding: Keybinding): string {
+	return formatKeys(getKeybindings().getKeys(keybinding).slice(0, 1));
+}
+
 export function keyText(keybinding: Keybinding): string {
 	return formatKeys(getKeybindings().getKeys(keybinding));
 }

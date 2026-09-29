@@ -996,6 +996,8 @@ export class SessionManager {
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
+	/** Bumped whenever entries are appended or replaced; see getRevision(). */
+	private revision = 0;
 
 	private constructor(
 		cwd: string,
@@ -1069,6 +1071,7 @@ export class SessionManager {
 			parentSession: options?.parentSession,
 		};
 		this.fileEntries = [header];
+		this.revision++;
 		this.byId.clear();
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
@@ -1101,6 +1104,7 @@ export class SessionManager {
 	}
 
 	private _buildIndex(): void {
+		this.revision++;
 		this.byId.clear();
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
@@ -1188,6 +1192,7 @@ export class SessionManager {
 
 	private _appendEntry(entry: SessionEntry): void {
 		this.fileEntries.push(entry);
+		this.revision++;
 		this.byId.set(entry.id, entry);
 		this.leafId = entry.id;
 		this._persist(entry);
@@ -1316,7 +1321,7 @@ export class SessionManager {
 	getSessionName(): string | undefined {
 		// Walk entries in reverse to find the latest session_info entry.
 		// Empty names explicitly clear the session title.
-		const entries = this.getEntries();
+		const entries = this.fileEntries;
 		for (let i = entries.length - 1; i >= 0; i--) {
 			const entry = entries[i];
 			if (entry.type === "session_info") {
@@ -1401,6 +1406,14 @@ export class SessionManager {
 
 	getLeafId(): string | null {
 		return this.leafId;
+	}
+
+	/**
+	 * Counter that changes whenever entries are appended or replaced. Together with getLeafId(),
+	 * it tells render-time callers when values derived from the entries must be recomputed.
+	 */
+	getRevision(): number {
+		return this.revision;
 	}
 
 	getLeafEntry(): SessionEntry | undefined {

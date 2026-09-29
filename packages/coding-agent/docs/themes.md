@@ -1,6 +1,6 @@
-# Customize Pi with themes
+# Customize midnight.server with themes
 
-Themes control the colors Pi uses in interactive mode and HTML exports. Pi includes `dark` and `light` themes. You can select one theme, follow your terminal's light or dark appearance, or create your own palette.
+Themes control the colors midnight.server uses in interactive mode and HTML exports. midnight.server includes `dark` and `light` themes. You can select one theme, follow your terminal's light or dark appearance, or create your own palette.
 
 <a id="selecting-a-theme"></a>
 
@@ -24,13 +24,13 @@ Automatic mode stores the light theme first and the dark theme second:
 }
 ```
 
-When automatic mode is active, Pi changes themes when the terminal reports an appearance change. Theme names cannot contain `/` because Pi reserves it for this setting format.
+When automatic mode is active, midnight.server changes themes when the terminal reports an appearance change. Theme names cannot contain `/` because midnight.server reserves it for this setting format.
 
 Use `--use-theme` to choose the initial theme for one invocation without changing the saved setting:
 
 ```bash
-pi --use-theme light
-pi --use-theme light/dark
+midnight.server --use-theme light
+midnight.server --use-theme light/dark
 ```
 
 See [CLI resources](cli.md#resources) for the command-line option.
@@ -39,18 +39,18 @@ See [CLI resources](cli.md#resources) for the command-line option.
 
 Copy one of the [built-in themes](https://github.com/earendil-works/pi/tree/main/packages/coding-agent/src/modes/interactive/theme) or create a new JSON file conforming to the [schema](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json).
 
-1. Save the file as `<agent-dir>/themes/my-theme.json`. The agent directory defaults to `~/.pi/agent`.
+1. Save the file as `<agent-dir>/themes/my-theme.json`. The agent directory defaults to `~/.midnight.server/agent`.
 2. Set its `name` to `my-theme`.
 3. Change values in `vars` and `colors`.
 4. Select `my-theme` through `/settings`.
 
-Use the theme name as the filename. Pi hot-reloads the active user theme only from `<agent-dir>/themes/<name>.json`. Run `/reload` after adding or changing a theme from any other source.
+Use the theme name as the filename. midnight.server hot-reloads the active user theme only from `<agent-dir>/themes/<name>.json`. Run `/reload` after adding or changing a theme from any other source.
 
 ## Understand the theme file
 
 | Property | Required | Responsibility |
 |---|---|---|
-| `$schema` | No | Enables editor validation and completion against Pi's published schema. |
+| `$schema` | No | Enables editor validation and completion against midnight.server's published schema. |
 | `name` | Yes | Identifies the theme in selectors and settings. It must be unique and cannot contain `/`. |
 | `vars` | No | Defines reusable color values. Variables can reference other variables. |
 | `colors` | Yes | Assigns colors to terminal UI roles. The schema identifies required and optional roles. |
@@ -65,11 +65,11 @@ A color can be written in four forms:
 | Variable reference | `"primary"` | The value of an entry in `vars`. |
 | Terminal default | `""` | The terminal's default foreground or background color. |
 
-Pi resolves chained variable references. A missing variable or circular reference makes the theme invalid. Hexadecimal colors use truecolor when supported and are approximated in terminals limited to 256 colors. If colors differ from their hexadecimal values, check your terminal's truecolor detection and contrast settings. See [Configure Your Terminal](terminal-setup.md#override-detected-capabilities).
+midnight.server resolves chained variable references. A missing variable or circular reference makes the theme invalid. Hexadecimal colors use truecolor when supported and are approximated in terminals limited to 256 colors. If colors differ from their hexadecimal values, check your terminal's truecolor detection and contrast settings. See [Configure Your Terminal](terminal-setup.md#override-detected-capabilities).
 
 Use the [theme JSON schema](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json) for the exact properties, required colors, and accepted value types.
 
-Pi reports invalid theme files during startup and `/reload`.
+midnight.server reports invalid theme files during startup and `/reload`.
 
 ## Find the color to change
 
@@ -99,12 +99,12 @@ Five colors are optional and inherit another color when omitted:
 | `searchMatchText` | `text` |
 | `thinkingMax` | `thinkingXhigh` |
 
-If `export` colors are omitted, Pi derives HTML page and panel backgrounds from `userMessageBg`.
+If `export` colors are omitted, midnight.server derives HTML page and panel backgrounds from `userMessageBg`.
 
 ## Load a theme from a project or package
 
-Place a project theme in `.pi/themes/`. Project themes load only after [project trust](security.md#understand-project-trust) is granted.
+Place a project theme in `.midnight.server/themes/`. Project themes load only after [project trust](security.md#understand-project-trust) is granted.
 
-You can also load theme files and directories through the `themes` setting or distribute them in a Pi package. See [Configuration](configuration.md), [Settings](settings.md#resources), and [Pi Packages](packages.md).
+You can also load theme files and directories through the `themes` setting or distribute them in a midnight.server package. See [Configuration](configuration.md), [Settings](settings.md#resources), and [midnight.server Packages](packages.md).
 
-Each loaded theme must have a unique name. Pi reports duplicate names as resource collisions.
+Each loaded theme must have a unique name. midnight.server reports duplicate names as resource collisions.

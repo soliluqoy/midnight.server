@@ -927,22 +927,25 @@ describe("ExtensionRunner", () => {
 			);
 			const runner = new ExtensionRunner([first, second], runtime, tempDir, sessionManager, modelRegistry);
 
-			const result = await runner.emitBoundary({ type: "agent_before_settle", outcome: "completed" }, (entries) => ({
-				contextEntries: entries.map((entry, index) => ({
-					sourceEntry: {
-						type: "custom",
-						id: `draft-${index}`,
-						parentId: null,
-						timestamp: "",
-						customType: entry.type,
-					},
-					messages: [],
-				})),
-				contextMessages: [],
-				llmMessages: [],
-				pendingMessages: [],
-				canContinue: false,
-			}));
+			const result = await runner.emitBoundary(
+				{ type: "agent_before_settle", outcome: "completed", signal: new AbortController().signal },
+				(entries) => ({
+					contextEntries: entries.map((entry, index) => ({
+						sourceEntry: {
+							type: "custom",
+							id: `draft-${index}`,
+							parentId: null,
+							timestamp: "",
+							customType: entry.type,
+						},
+						messages: [],
+					})),
+					contextMessages: [],
+					llmMessages: [],
+					pendingMessages: [],
+					canContinue: false,
+				}),
+			);
 
 			expect(observations).toEqual([
 				{ entries: 0, continuation: false, preview: 0 },
@@ -983,16 +986,19 @@ describe("ExtensionRunner", () => {
 			const errors: string[] = [];
 			runner.onError((error) => errors.push(error.error));
 
-			const result = await runner.emitBoundary({ type: "agent_before_settle", outcome: "completed" }, (entries) => {
-				if (entries.some((entry) => entry.type === "context_edit")) throw new Error("Entry missing not found");
-				return {
-					contextEntries: [],
-					contextMessages: [],
-					llmMessages: [],
-					pendingMessages: [],
-					canContinue: false,
-				};
-			});
+			const result = await runner.emitBoundary(
+				{ type: "agent_before_settle", outcome: "completed", signal: new AbortController().signal },
+				(entries) => {
+					if (entries.some((entry) => entry.type === "context_edit")) throw new Error("Entry missing not found");
+					return {
+						contextEntries: [],
+						contextMessages: [],
+						llmMessages: [],
+						pendingMessages: [],
+						canContinue: false,
+					};
+				},
+			);
 
 			expect(secondRan).toBe(true);
 			expect(errors).toContain("Invalid boundary entries: Entry missing not found");
@@ -1017,13 +1023,16 @@ describe("ExtensionRunner", () => {
 			const errors: string[] = [];
 			runner.onError((error) => errors.push(error.error));
 
-			const result = await runner.emitBoundary({ type: "agent_before_settle", outcome: "completed" }, () => ({
-				contextEntries: [],
-				contextMessages: [],
-				llmMessages: [],
-				pendingMessages: [],
-				canContinue: false,
-			}));
+			const result = await runner.emitBoundary(
+				{ type: "agent_before_settle", outcome: "completed", signal: new AbortController().signal },
+				() => ({
+					contextEntries: [],
+					contextMessages: [],
+					llmMessages: [],
+					pendingMessages: [],
+					canContinue: false,
+				}),
+			);
 
 			expect(result.entries).toMatchObject([{ type: "custom", customType: "kept" }]);
 			expect(errors).toEqual(["boundary failed"]);

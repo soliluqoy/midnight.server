@@ -24,7 +24,7 @@ Some `ExtensionUIContext` methods are not supported or degraded in RPC mode beca
 
 Note: `ctx.mode` is `"rpc"` and `ctx.hasUI` is `true` in RPC mode because the dialog and fire-and-forget methods are functional via the extension UI sub-protocol. Use `ctx.mode === "tui"` to guard TUI-specific features like `custom()` that require a real terminal.
 
-## Requests from Pi
+## Requests from midnight.server
 
 All requests have `type: "extension_ui_request"`, a unique `id`, and a `method` field.
 
@@ -169,7 +169,7 @@ Set the text in the input editor. Fire-and-forget.
 }
 ```
 
-## Responses to Pi
+## Responses to midnight.server
 
 Responses are sent for dialog methods only (`select`, `confirm`, `input`, `editor`). The `id` must match the request.
 

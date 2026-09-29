@@ -12,6 +12,7 @@ import {
 	type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext, ToolRenderResultOptions } from "../../../core/extensions/types.ts";
+import { type ThreadAnchor, toolCallAnchor } from "../../../core/side-threads.ts";
 import type { Theme } from "../theme/theme.ts";
 
 /**
@@ -178,6 +179,16 @@ export class ToolExecutionComponent extends Container {
 			this.setExpanded(!this.expanded);
 			return { handled: true };
 		});
+	}
+
+	getThreadAnchorId(): string | undefined {
+		return this.hideComponent ? undefined : `tool:${this.toolCallId}`;
+	}
+
+	/** Identity and text of this call for side threads. */
+	getThreadAnchor(): ThreadAnchor | undefined {
+		if (this.hideComponent) return undefined;
+		return toolCallAnchor(this.toolName, this.toolCallId, this.args, this.result, this.isPartial);
 	}
 
 	updateArgs(args: any): void {

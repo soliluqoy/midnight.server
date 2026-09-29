@@ -1,5 +1,133 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.87.1-midnight.5] - 2026-09-28
+
+### Fixed
+
+- Fixed pasted and attached images being dropped with "could not be resized below the inline image size limit" when the release binary runs inside a midnight.server source checkout; the binary now loads its embedded image resize worker, which it also missed elsewhere, where resizing fell back to the main thread.
+
+## [0.87.1-midnight.4] - 2026-09-28
+
+### Breaking Changes
+
+- The harness is now lean by default ([docs/harness.md](docs/harness.md)). `harness.json` keys `masking` and `mutation`, and the features `masking`, `inRunChecks`, `checkCache`, `checkpoints`, `adaptiveRepair`, `divergence`, `reasoningBoost`, `mutationProbe`, `contextPack`, `lookup` and `diagnostics`, are rejected as unknown. `MIDNIGHT_SERVER_HARNESS_LEARN` and `MIDNIGHT_SERVER_HARNESS_POLICY` are no longer read.
+
+### Changed
+
+- Changed the harness to do nothing slow while the model works: checks run once when the model finishes, not after each batch of edits; the baseline for pre-existing type and lint failures runs only after a static check fails, on a temporary copy of the tree as the request found it, instead of at the start of every request (where the first edit waited up to 15 s for it); a check the model already ran successfully after its last change is not run again; and a session starts no background work, so a request that only reads or answers runs no git. Detected full test suites are left to the model; configured ones still run.
+- Changed the harness defaults: one repair round instead of two; `escalation` is off by default and opt-in through `harness.json` features. The fast/frontier model classes are gone: every model gets the same defaults.
+- Changed the environment facts (OS, shell, test command, checks) to a system-prompt section, so they stay in the cached prompt prefix instead of a per-request context message.
+- `/harness` and the harness telemetry show the time spent in each harness hook.
+- Changed the harness syntax gate to parse TypeScript, JavaScript and Python in one long-lived worker process per language instead of starting `node` or `python` for every edit. After the first edit of a session a check takes a few milliseconds instead of most of a second on Windows.
+- Changed related-test selection for `{tests}` checks to read only candidate test files instead of indexing every file in the workspace.
+
+### Removed
+
+- Removed observation masking: rewriting old tool results invalidated the provider's prompt cache from that point on. Pi's compaction handles long sessions.
+- Removed mid-run checks, rollback to checkpoints, divergence feedback, the reasoning boost, the verifier probe and escalation on repeated tool calls.
+- Removed the Lattice-1 policy loop from the harness: sessions no longer run live trials of feature changes.
+- Removed Lattice-1 (`npm run lattice`) entirely.
+- Removed the opt-in harness features `contextPack`, `lookup` and `diagnostics`, with the workspace index and the language-server client behind them. None had a measured gain over plain Pi.
+- Removed the `verified-exploration` example skill.
+
+## [0.87.1-midnight.3] - 2026-09-28
+
+### Added
+
+- Added Lattice-1, a local pseudo-RSI harness run with `npm run lattice -- <command>` ([docs/lattice](../../docs/lattice/README.md)). A fixed kernel checks, runs, evaluates, promotes and rolls back typed, bounded programs. Improvement campaigns search in an isolated worker, consume each fresh release set once, pass a conjunctive release gate and shadow runs, then promote through compare-and-swap into a monitored canary. Library learning, synthesis from examples, bytecode compilation with differential tests, and a level-2 search-policy loop are included. File effects (organizing a folder by type) are proposed as plans and applied only on approval, with a journal, undo and crash recovery. Duplicate-file detection reads contents through a streaming SHA-256 host that rejects files changed since the inventory; a campaign learns to compare sizes before hashing. Campaigns pause for interactive work and resume from checkpoints, and `serve --idle-ms` improves skills in idle time. It is not part of the `midnight.server` binary.
+- Added the Lattice-1 policy loop to the harness ([docs/harness.md](docs/harness.md#the-policy-loop)). The harness's feature switches and thresholds are a versioned policy in the Lattice store that improves from normal use without any command: during a trial about half of the sessions run a one-step candidate, each settled request is recorded as evidence (resolved or not, drift, tokens), and a conjunctive gate with a bootstrap lower bound decides. A passing candidate becomes a canary that is rolled back automatically if live outcomes get worse, then the champion. Features that guard against drift and broken edits, and escalation, are never changed by it. `MIDNIGHT_SERVER_HARNESS_LEARN=0` turns it off; `MIDNIGHT_SERVER_HARNESS_POLICY=<file>` pins a policy for experiments, and the eval runner records the policy each run used. The store works in the compiled binary, which has no `node:sqlite`, through `bun:sqlite`.
+- Added divergence to the harness (`divergence`, on by default): when the same checks fail again, or a new attempt is at least 80% the same change as one the checks rejected, the feedback names the repeat with its measured similarity, lists the rejected approaches and asks for causes that differ in kind. Added `reasoningBoost` (on by default): while the model is stuck, the thinking level of reasoning models goes up one step (at most twice per request, never above `high`) and returns to the user's level when the run settles.
+- Added the verifier probe (`mutationProbe`, off by default until measured): after the checks pass, the harness makes a few small mutants of the lines the model changed, reruns the related tests on each and reports the changes no test noticed, asking for a focused test or an explicit statement that the behavior is unverified. Mutants are journaled outside the workspace and restored after a crash. `harness.json` `mutation` sets the mutant count and time budget.
+
+### Fixed
+
+- Fixed the harness running project checks, including a whole-project type check, after every turn that edited files. In-run checks now wait until the model stops editing, so a change spread over several turns is not flagged halfway, and skip the type check for files a language server already checked with each edit. The full ladder still runs before the run settles.
+- Fixed the harness sending the model back to repair type and lint errors the project already had. With `checkBaseline` (on by default), static checks run in the background when a request starts; at settle, a static check that fails only with errors it already reported is shown as known and starts no repair round, and a failure with new errors feeds back only the new error lines instead of the raw log. Test checks are not baselined.
+- Fixed shell test commands (`npm test`, `pytest`, `go test`, `node --test` and others) never counting as verification in the harness: the pattern had lost its escapes, so the drift guard reported "all tests pass" claims as unsupported after the model had run the tests itself.
+- Fixed the image resize worker in compiled binaries: it was looked up under a path the binary does not embed, so resizing always fell back to the main thread.
+
+## [0.87.1-midnight.2] - 2026-09-27
+
+### Added
+
+- Added `app.message.sendNow` (Alt+N): interrupts the running turn, harness checks or compaction and sends the queued messages plus the editor text as the next prompt. The queued-message hint shows it next to the edit key.
+- Added adaptive repair feedback to the harness: repeated check failures now surface diagnostic lines hidden in long output and require a materially different repair strategy or an explicit blocker. The `adaptiveRepair` feature is enabled by default and can be ablated with `MIDNIGHT_SERVER_HARNESS_FEATURES=-adaptiveRepair`.
+
+### Fixed
+
+- Fixed the session looking idle while harness checks ran after the model's last turn: a "Finishing up" indicator now shows during settlement, prompts submitted then are visibly queued, and Esc stops the running checks and escalation instead of waiting for them to finish. `agent_before_settle` handlers receive a `signal` that aborts on interrupt.
+
+## [0.87.1-midnight.1] - 2026-09-27
+
+### Breaking Changes
+
+- Renamed all `PI_*` environment variables to `MIDNIGHT_SERVER_*` (for example `PI_OFFLINE` is now `MIDNIGHT_SERVER_OFFLINE`, and the bash tool exports `MIDNIGHT_SERVER_SESSION_ID`, `MIDNIGHT_SERVER_MODEL`, etc.). The old names are no longer read.
+
+### Added
+
+- Added bundled extensions: packages pinned in `packaging/extensions` ship in `extensions/` beside the executable and load by default, skipped when settings configure the same npm package or `MIDNIGHT_SERVER_NO_BUNDLED_EXTENSIONS` is set. The first is [pi-mcp-adapter](docs/mcp.md), so `/mcp` works on a fresh install and reads `~/.midnight.server/agent/mcp.json`.
+- Added plan and build modes. Tab in an empty editor switches; plan mode limits the model to read-only tools (`read`, `grep`, `find`, `ls`, `delegate_local`), adds a planning instruction to the system prompt, and blocks other tool calls, and build mode restores the previous tool set. The mode shows in the header, footer, sidebar and editor border.
+- Added an opencode-style session sidebar in fullscreen mode with the session title, git branch and working-tree status (changed/staged counts, ahead/behind), context usage and cost, the model, local engine and drift-watch state, and files changed this session with line counts. The `sidebar` setting (`auto`, `always`, `hidden`) and `app.sidebar.toggle` (Alt+S) control it.
+- Added a command palette (`app.commandPalette`, Alt+X) listing actions and slash commands with fuzzy search.
+- Added a file explorer on the left in fullscreen mode. It lists every file and folder, including gitignored ones, `node_modules` and `.git` (shown dimmed but still previewable), loading each folder when it is expanded, with git status marks and a dot on files changed this session. Enter or a double click adds `@path` to the prompt, Space opens a read-only preview, and Escape or any other typing returns to the prompt. The `explorer` setting (`auto` from 150 columns, `always`, `hidden`) and `app.explorer.toggle` (Alt+E) control it.
+- Added automatic session titles: after the first exchange the session model names an unnamed session, then revisits the title as the work moves on (at most every 3 runs and 5 minutes, keeping it unless the focus changed). Titles show in the sidebar and terminal title, no longer in the footer. A name set with `--name` or `/name` is never replaced.
+- Added `--local`: runs the session on the embedded MiniCPM5-2B Q8_0 through a bundled llama.cpp engine, forces offline startup, and blocks model requests to every other provider for the session.
+- Added `--hybrid` and the `delegate_local` tool: the configured parent model can hand bounded, read-only summarize/classify/inspect/plan/patch tasks to the local helper. Inputs are confined to the workspace, output is schema-validated with line evidence, and patches are returned as unapplied diffs.
+- Added the local MiniCPM model to `/model` in default/hybrid sessions, so you can switch from a cloud provider to the local model and back in the same session. The engine starts when the local model is first used.
+- Added an automatic drift watcher to `--hybrid` mode: MiniCPM periodically judges whether the parent model is still on track and injects a corrective reminder only when it isn't. Checks run in the background (never blocking the agent loop) on a turn-count-or-token-growth cadence with a cooldown between nudges, configurable through `MIDNIGHT_SERVER_DRIFTWATCH*` environment variables and disabled entirely with `MIDNIGHT_SERVER_DRIFTWATCH=0`.
+- Added a decision gate to drift watch: each check first reads one grammar-constrained status token with its logprobs, and writes the reason and reminder only when the probability of not being on track reaches `MIDNIGHT_SERVER_DRIFTWATCH_CONFIDENCE` (default 0.5). The explain call reuses the cached transcript prefix, and nudges carry the gate probabilities in `details.confidence`. Engines that return no logprobs fall back to the previous single check.
+- Added whitelisted, read-only git access to `delegate_local` and `helper`: `status`, `diff`, `log`, `show`, and `blame` run with a fixed argv (never a shell), confined to the workspace, with byte-capped output. The helper still has no shell access; it can only run these five read-only operations, never anything that mutates the repository.
+- Added `model status|verify|fetch`, `engine status|fetch`, `doctor [--smoke]` and `helper <kind>` commands. Model and engine downloads resume, are pinned by SHA-256, and are never used unverified.
+- Added automatic first-run download: `--local`, the no-provider-configured fallback, and the first `delegate_local`/drift-watch call now download the missing model and engine instead of erroring, so a fresh install needs no separate `model fetch`/`engine fetch` step. An explicit `MIDNIGHT_SERVER_MODEL`/`MIDNIGHT_SERVER_ENGINE_DIR` override that points at nothing is still a hard error, never routed around.
+- Added GPU support through every official llama.cpp build for Windows, Linux and macOS (x64 and ARM64): CPU, Vulkan, CUDA 12/13, ROCm, SYCL, OpenVINO, Metal, OpenCL (Adreno) and Hexagon, each pinned by SHA-256 and downloaded on first use. The default `auto` backend measures the Vulkan (or Metal) build against the CPU with the real model on first start and keeps whichever finishes a typical helper task sooner, falling back to the CPU if that GPU later fails to start. `MIDNIGHT_SERVER_BACKEND` and `engine use <backend|auto>` choose a backend explicitly; `engine probe` measures again; `engine fetch [backend]` downloads one.
+- Added a Windows Job Object host (`midnight-host.exe`) so the engine and its descendants exit with the CLI, including after a crash; the engine binds to loopback and requires a per-session key.
+- Added a pinned MiniCPM5-2B Q8_0 model lock and streaming size/SHA-256 verification for local GGUF files.
+- Added `ModelRegistry.restrictRequestProviders()` to limit a session's model requests to specific providers.
+- Added `/local-stop` and `/local-start`. `/local-stop` stops the local model engine for the rest of the session and frees its memory. It also cancels a start or download that is in progress. Until `/local-start`, nothing starts the engine again: the local model, `delegate_local`, drift watch and side threads all refuse. Both commands are listed in the command palette (Alt+X).
+- Added `b` in side-thread selection (`app.thread.branch`): it opens `/tree` on the entry before the selected item and, after navigating, adds the thread's answers to the editor, so a side question that finds a wrong turn becomes a redo on a new branch.
+- Added Linux x64 (`.deb` and tarball) and macOS (Apple Silicon and Intel) releases, a `get.sh` installer for them, and a release workflow that builds and verifies every platform from a `v*-midnight.*` tag. macOS builds are ad-hoc signed only, not notarized.
+- On Linux and macOS the engine now runs under a wrapper that stops it when the CLI exits or is killed, like the Windows Job Object host, so a crashed CLI no longer leaves `llama-server` running. On Linux the engine directory is added to `LD_LIBRARY_PATH` so its bundled libraries load.
+- Added Ctrl+V image paste on Windows: a screenshot on the clipboard becomes an `[image1]` marker in the prompt and is sent to the model as an image on submit. Windows Terminal answers Ctrl+V on an image-only clipboard with an empty paste, which now reads the image. Alt+V still works, and all platforms use the markers instead of inserting a temporary file path.
+
+### Changed
+
+- Drift watch findings are now side threads on the newest transcript item instead of reminders injected into the agent's next turn. The agent sees a finding only when you send it (`m`) or branch from before its item (`b`); the finding shows the gate's confidence, e.g. `[check: drifting] (82% not on track)`. Side threads have one shared store per session, so background findings and your own questions never overwrite each other.
+- Side threads take fewer steps: Alt+T opens the question box on the newest item right away (Up/Down in the empty box picks another item, alt+click works too), Alt+T again manages threads on that item (a half-typed question is kept), and Alt+T or Escape leaves. The question and thread bars are one line each.
+- In the side-question box the model keys act on the question's model: Tab/Shift+Tab and Ctrl+P/Alt+P cycle it and Ctrl+L searches all models, and the bar shows them (`tab/shift+tab model · ctrl+l search`), dropping whole hints on narrow terminals. Previously Ctrl+L opened the main model picker and Shift+Tab changed the main thinking level while the box was open.
+- Startup is one line: the logo, plan/build and session mode, and the palette and `more` keys. Ctrl+O (`app.tools.expand`) shows the key list and the loaded context files, skills, prompts, extensions and themes; the collapsed resource summary is gone. Resource warnings still always show.
+- `/tree` is the one place to go back: Enter continues from the selected entry as before, and the new `shift+n` (`app.tree.newSession`) starts a new session from it, covering `/fork` (on a user message) and `/clone` (on the newest entry). Its help line shows only the everyday keys. The command palette drops `/fork`, `/clone` and the duplicate "Select model" action (`/model` shows its key); `/fork` and `/clone` still work when typed.
+- `delegate_local` and `helper` tasks now decode at temperature 0, and `inspect` thinks by default (summarize/classify still do not). An `inspect` task takes about 50 s instead of 10 s on a laptop CPU, but answers correctly. The helper prompt also states that finding a bug or answering "no" is a completed task, not a reason to escalate.
+- The startup header credits pi: "Built on pi (pi.dev). Ask midnight.server how to use or extend it; it reads its own docs to answer."
+- `MIDNIGHT_SERVER_GPU_LAYERS` now defaults to the selected backend (0 on the CPU, every layer on a GPU), and the engine inherits `PATH` after its own directory so system-wide vendor runtimes load. An engine that exits during startup reports the end of its log in the error.
+- Rebranded user-facing text from Pi to midnight.server: startup header, system prompt, help text, messages, temporary file names, the `AI_AGENT` marker, and the bundled documentation.
+- Replaced the first-time setup logo with a crescent moon and prefixed the terminal title with `☾`.
+- Restyled the built-in dark and light themes with a midnight palette, and the footer to show the plan/build badge, git branch with changed-file count and ahead/behind, and local-model state.
+- Bare `midnight.server` (no `--local`/`--hybrid`) is now equivalent to `--hybrid`: `delegate_local` and the drift watcher are always available unless `--local` is given. If no provider is configured at all and no `--provider`/`--model`/`--models`/`--api-key` was passed, the session silently starts on the local MiniCPM model instead of showing the "no provider configured" screen; unlike `--local`, this fallback is not offline-locked, so `/login` still works afterward.
+- On Windows, the default shell tool is now `powershell` instead of `bash`, and `!` / `!!` run through PowerShell unless `shellPath` is set, so Git Bash is no longer required.
+- Fullscreen is now the default TUI mode, so the session sidebar shows on terminals at least 110 columns wide. Set `tuiMode` to `"regular"` (or pass `--tui-mode regular`) for the inline layout. While the sidebar is visible the footer shrinks to one line with the mode badge, path, branch and model.
+- Updated the Pi base to 0.87.1. Everything in the inherited 0.86.0 through 0.87.1 sections below applies, including the breaking extension and SDK changes in 0.87.0. New environment variables use the `MIDNIGHT_SERVER_` prefix (`MIDNIGHT_SERVER_CACHE_RETENTION` for cache warming, `MIDNIGHT_SERVER_RADIUS_GATEWAY`).
+- `/bug` exports the report as a zip archive in the current directory and never uploads it, because the inherited upload goes to the Pi developers. Attach the archive to an issue at https://github.com/soliluqoy/midnight.server/issues.
+
+### Fixed
+
+- Fixed the process crashing with "This extension ctx is stale" when a session ended while a drift-watch check was running, for example at the end of a `-p` run.
+- Fixed the `bash` and `powershell` tool guidelines telling the model to inspect `PI_*` environment variables; the tools export `MIDNIGHT_SERVER_*`.
+- Fixed a duplicated footer line (and a stray "Starting local engine..." line) when the local engine started during an interactive session: engine progress was written straight to stderr underneath the TUI. It now shows in the footer and sidebar.
+- Fixed `--version`, `--help`, `--export`, `--list-models` and package/auth subcommands starting (and on a fresh install downloading) the local model when no provider is configured.
+- Fixed the startup update notice comparing against upstream Pi releases; it now checks midnight.server GitHub releases and links to the release page.
+- Fixed dotted environment variable names for the midnight.server config and session directories, and directed binary update instructions to the product repository.
+- Fixed slow, uneven scrolling in fullscreen mode on long sessions. The file explorer rescanned the whole session once per visible file on every frame (about half a second per frame at 4,500 entries), and the sidebar and footer rescanned it once per frame; they now reuse the result until the session changes. `getContextUsage()` is cached the same way.
+- Fixed local-engine progress and drift-watch updates re-wrapping the whole transcript; only the startup header is refreshed now, and its plan/build badge updates when the mode changes.
+- Fixed the model refusing to commit, push or delete branches: the `delegate_local` guideline "git is read-only" appeared as a global rule in the system prompt. It now says only the helper's git option is read-only.
+- Fixed the TUI freezing while the harness worked: git snapshots, syntax checks and the Python probe ran as synchronous child processes. At the end of each response the drift inventory spawned four git processes per changed file (2.4 s frozen for 10 files; up to the 200-file cap), and each TypeScript edit froze it for about a second while `node` loaded `typescript`. They now run asynchronously, and the drift inventory reads all file contents with two `git cat-file` processes (0.4 s for 10 files).
+- Fixed the prompt looking frozen after Enter: the message appeared only after the harness finished its git snapshot, git status and index refresh, which ran one after another. The message and working indicator now show at once, and those steps run concurrently.
+
+### Removed
+
+- Removed the upstream Pi easter eggs and announcement (`/arminsayshi`, `/dementedelves`, the model-selection animation, and the bundled mascot image).
+
 ## [0.87.1] - 2026-09-22
 
 ### New Features
@@ -203,7 +331,6 @@
 - Added inherited OpenAI-compatible `vllmPriority` and `supportsMaxOutputTokens` model settings for vLLM scheduler priority and OpenAI Responses output-token limits ([#9004](https://github.com/earendil-works/pi/pull/9004) by [@AppleDannyClegg](https://github.com/AppleDannyClegg), [#8941](https://github.com/earendil-works/pi/pull/8941) by [@scturtle](https://github.com/scturtle)).
 - Added inherited LaTeX rendering for relational algebra join symbols ([#9050](https://github.com/earendil-works/pi/pull/9050) by [@haoqixu](https://github.com/haoqixu)).
 - Added a clickable "Jump to latest message" label with the `tui.altScreen.bottom` shortcut to the fullscreen transcript while it is scrolled up ([#9080](https://github.com/earendil-works/pi/pull/9080) by [@rwachtler](https://github.com/rwachtler)).
-- Added Meta (Muse subscription) login via `/login meta` with automatic Model API key refresh, plus `META_API_KEY` support.
 
 ### Changed
 

@@ -1,0 +1,53 @@
+name: midnight.server Windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Bootstrap (pinned Bun, npm ci --ignore-scripts)
+        shell: pwsh
+        run: .\scripts\bootstrap.ps1 -Install
+
+      - name: Check
+        run: npm run check
+
+      - name: midnight and harness tests
+        working-directory: packages/coding-agent
+        run: >-
+          node ../../node_modules/vitest/dist/cli.js --run
+          test/midnight-config.test.ts test/midnight-ui.test.ts test/harness-units.test.ts
+          test/harness-v2.test.ts test/harness-drift.test.ts test/harness-baseline.test.ts
+          test/suite/harness.test.ts test/suite/harness-v2.test.ts test/suite/harness-drift.test.ts
+
+      - name: Build and package
+        shell: pwsh
+        run: |
+          .\scripts\build.ps1
+          .\scripts\package.ps1
+          .\scripts\verify-release.ps1 -Package dist\midnight.server-windows-x64.zip
+
+      - name: Upload app archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: midnight.server-windows-x64
+          path: |
+            dist/midnight.server-windows-x64.zip
+            dist/SHA256SUMS

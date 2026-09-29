@@ -104,6 +104,11 @@ export const allToolNames: Set<ToolName> = new Set([
 	"ls",
 ]);
 
+/** Initial tools when `defaultTools` is not configured. Windows uses PowerShell instead of Bash. */
+export function getDefaultActiveToolNames(platform: NodeJS.Platform = process.platform): ToolName[] {
+	return ["read", platform === "win32" ? "powershell" : "bash", "edit", "write"];
+}
+
 export interface ToolsOptions {
 	read?: ReadToolOptions;
 	bash?: BashToolOptions;

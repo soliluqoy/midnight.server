@@ -155,6 +155,11 @@ export class ModelRegistry {
 		this.runtime.registerNativeProvider(providerOrName);
 	}
 
+	/** Allow model requests only to these providers (undefined lifts the restriction). */
+	restrictRequestProviders(providerIds: readonly string[] | undefined): void {
+		this.runtime.restrictRequestProviders(providerIds);
+	}
+
 	unregisterProvider(providerName: string): void {
 		this.runtime.unregisterProvider(providerName);
 	}

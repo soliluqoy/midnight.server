@@ -1,10 +1,20 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	type TuiMouseEvent,
+	type TuiMouseEventResult,
+	truncateToWidth,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import type { AgentSession } from "../../../core/agent-session.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
-import { addUsageToTotals, createUsageTotals } from "../../../core/usage-totals.ts";
+import type { GitStatusSummary } from "../../../core/git-status.ts";
+import type { SessionManager } from "../../../core/session-manager.ts";
+import { addUsageToTotals, createUsageTotals, type UsageTotals } from "../../../core/usage-totals.ts";
+import { getMidnightStatus } from "../../../midnight/status.ts";
 import { theme } from "../theme/theme.ts";
+import { modeChip, modeChipWidth } from "./mode-chip.ts";
 
 /**
  * Sanitize text for display in a single-line status.
@@ -44,17 +54,37 @@ export function formatCwdForFooter(cwd: string, home: string | undefined): strin
 }
 
 /**
- * Footer component that shows pwd, token stats, and context usage.
+ * Footer component that shows plan/build mode, pwd, git state, token stats, context usage, and local-model state.
  * Computes token/context stats from session, gets git branch and extension statuses from provider.
  */
 export class FooterComponent implements Component {
 	private autoCompactEnabled = true;
 	private session: AgentSession;
 	private footerData: ReadonlyFooterDataProvider;
+	private gitStatus: { getStatus(): GitStatusSummary | undefined } | undefined;
+	/** True while the sidebar shows usage and local-model state; the footer then drops to one line. */
+	private compact: () => boolean;
+	/** Click on the mode chip at the start of the first line. */
+	onToggleAgentMode: (() => void) | undefined;
+	private usageStats:
+		| {
+				sessionManager: SessionManager;
+				revision: number;
+				usageTotals: UsageTotals;
+				latestCacheHitRate: number | undefined;
+		  }
+		| undefined;
 
-	constructor(session: AgentSession, footerData: ReadonlyFooterDataProvider) {
+	constructor(
+		session: AgentSession,
+		footerData: ReadonlyFooterDataProvider,
+		gitStatus?: { getStatus(): GitStatusSummary | undefined },
+		compact: () => boolean = () => false,
+	) {
 		this.session = session;
 		this.footerData = footerData;
+		this.gitStatus = gitStatus;
+		this.compact = compact;
 	}
 
 	setSession(session: AgentSession): void {
@@ -81,14 +111,20 @@ export class FooterComponent implements Component {
 		// Git watcher cleanup handled by provider
 	}
 
-	render(width: number): string[] {
-		const state = this.session.state;
+	/**
+	 * Cumulative usage from ALL session entries (not just post-compaction messages). The footer
+	 * renders on every frame, including each scroll step, so rescan only when the session changes.
+	 */
+	private getUsageStats(): NonNullable<FooterComponent["usageStats"]> {
+		const sessionManager = this.session.sessionManager;
+		const revision = sessionManager.getRevision();
+		const cached = this.usageStats;
+		if (cached && cached.sessionManager === sessionManager && cached.revision === revision) return cached;
 
-		// Calculate cumulative usage from ALL session entries (not just post-compaction messages)
 		const usageTotals = createUsageTotals();
 		let latestCacheHitRate: number | undefined;
 
-		for (const entry of this.session.sessionManager.getEntries()) {
+		for (const entry of sessionManager.getEntries()) {
 			if (entry.type === "usage") {
 				addUsageToTotals(usageTotals, entry.usage);
 			} else if (entry.type === "message" && entry.message.role === "assistant") {
@@ -104,6 +140,25 @@ export class FooterComponent implements Component {
 				addUsageToTotals(usageTotals, entry.usage);
 			}
 		}
+		this.usageStats = {
+			sessionManager,
+			revision,
+			usageTotals,
+			latestCacheHitRate,
+		};
+		return this.usageStats;
+	}
+
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (!this.onToggleAgentMode || event.button !== "left" || event.y !== 0) return undefined;
+		if (event.x >= modeChipWidth(getMidnightStatus().agentMode)) return undefined;
+		if (event.type === "click") this.onToggleAgentMode();
+		return event.type === "press" || event.type === "click" ? { handled: true } : undefined;
+	}
+
+	render(width: number): string[] {
+		const state = this.session.state;
+		const { usageTotals, latestCacheHitRate } = this.getUsageStats();
 
 		// Calculate context usage from session (handles compaction correctly).
 		// After compaction, tokens are unknown until the next LLM response.
@@ -115,16 +170,16 @@ export class FooterComponent implements Component {
 		// Replace home directory with ~
 		let pwd = formatCwdForFooter(this.session.sessionManager.getCwd(), process.env.HOME || process.env.USERPROFILE);
 
-		// Add git branch if available
-		const branch = this.footerData.getGitBranch();
+		// Add git branch and working-tree summary if available; the sidebar already shows them when visible
+		const branch = this.compact() ? null : this.footerData.getGitBranch();
 		if (branch) {
-			pwd = `${pwd} (${branch})`;
-		}
-
-		// Add session name if set
-		const sessionName = this.session.sessionManager.getSessionName();
-		if (sessionName) {
-			pwd = `${pwd} • ${sessionName}`;
+			pwd = `${pwd}  ⎇ ${branch}`;
+			const status = this.gitStatus?.getStatus();
+			if (status) {
+				if (status.changedFiles > 0) pwd = `${pwd} ●${status.changedFiles}`;
+				if (status.ahead) pwd = `${pwd} ↑${status.ahead}`;
+				if (status.behind) pwd = `${pwd} ↓${status.behind}`;
+			}
 		}
 
 		// Build stats line
@@ -228,8 +283,15 @@ export class FooterComponent implements Component {
 		const remainder = statsLine.slice(statsLeft.length); // padding + rightSide
 		const dimRemainder = theme.fg("dim", remainder);
 
-		const pwdLine = truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "..."));
-		const lines = [pwdLine, dimStatsLeft + dimRemainder];
+		const pwdLeft = `${modeChip(getMidnightStatus().agentMode)} ${theme.fg("dim", pwd)}`;
+		const compact = this.compact();
+		const pwdRight = compact ? theme.fg("dim", rightSideWithoutProvider) : "";
+		const pwdRoom = width - visibleWidth(pwdLeft) - visibleWidth(pwdRight);
+		const pwdLine =
+			pwdRight && pwdRoom >= 2
+				? pwdLeft + " ".repeat(pwdRoom) + pwdRight
+				: truncateToWidth(pwdLeft, width, theme.fg("dim", "..."));
+		const lines = compact ? [pwdLine] : [pwdLine, dimStatsLeft + dimRemainder];
 
 		// Add extension statuses on a single line, sorted by key alphabetically
 		const extensionStatuses = this.footerData.getExtensionStatuses();

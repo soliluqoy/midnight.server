@@ -52,7 +52,7 @@ const MANAGED_INSTALL_MARKER = "managed-install.json";
 const MANAGED_RELEASE_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 function getActiveManagedInstallRoot(): string | undefined {
-	const configuredRoot = process.env.PI_MANAGED_INSTALL_ROOT?.trim();
+	const configuredRoot = process.env.MIDNIGHT_SERVER_MANAGED_INSTALL_ROOT?.trim();
 	if (!configuredRoot) return undefined;
 
 	const managedRoot = resolve(configuredRoot);
@@ -115,11 +115,13 @@ function verifyManagedRelease(releaseDir: string, expectedVersion: string): void
 	});
 	if (result.error || result.status !== 0) {
 		const reason = result.error?.message || result.stderr.trim() || `exit code ${result.status ?? "unknown"}`;
-		throw new Error(`Could not verify managed Pi ${expectedVersion}: ${reason}`);
+		throw new Error(`Could not verify managed ${APP_NAME} ${expectedVersion}: ${reason}`);
 	}
 	const installedVersion = result.stdout.trim();
 	if (installedVersion !== expectedVersion) {
-		throw new Error(`Managed Pi smoke test returned version ${installedVersion}; expected ${expectedVersion}.`);
+		throw new Error(
+			`Managed ${APP_NAME} smoke test returned version ${installedVersion}; expected ${expectedVersion}.`,
+		);
 	}
 }
 
@@ -178,7 +180,7 @@ async function runManagedSelfUpdate(managedRoot: string, version: string): Promi
 		releaseLock = await lockfile.lock(join(managedRoot, "update"), { realpath: false });
 	} catch (error: unknown) {
 		if (error instanceof Error && "code" in error && error.code === "ELOCKED") {
-			throw new Error("Another managed Pi update is already running.");
+			throw new Error(`Another managed ${APP_NAME} update is already running.`);
 		}
 		throw error;
 	}
@@ -186,10 +188,9 @@ async function runManagedSelfUpdate(managedRoot: string, version: string): Promi
 	let stageDir: string | undefined;
 	try {
 		cleanupManagedStaging(managedRoot);
-		const installerApiBase = (process.env.PI_INSTALLER_API_BASE?.trim() || DEFAULT_INSTALLER_API_BASE).replace(
-			/\/+$/,
-			"",
-		);
+		const installerApiBase = (
+			process.env.MIDNIGHT_SERVER_INSTALLER_API_BASE?.trim() || DEFAULT_INSTALLER_API_BASE
+		).replace(/\/+$/, "");
 		const releaseUrl = `${installerApiBase}/${encodeURIComponent(version)}`;
 		const stagingRoot = join(managedRoot, "staging");
 		const releasesRoot = join(managedRoot, "releases");
@@ -269,7 +270,7 @@ function getPackageCommandUsage(command: PackageCommand): string {
 		case "remove":
 			return `${APP_NAME} remove <source> [-l] [--approve|--no-approve]`;
 		case "update":
-			return `${APP_NAME} update [source|self|pi] [--self|--extensions|--models|--all] [--extension <source>] [--approve|--no-approve] [--force]`;
+			return `${APP_NAME} update [source|self] [--self|--extensions|--models|--all] [--extension <source>] [--approve|--no-approve] [--force]`;
 		case "list":
 			return `${APP_NAME} list [--approve|--no-approve]`;
 	}

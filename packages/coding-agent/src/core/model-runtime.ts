@@ -151,6 +151,7 @@ export class ModelRuntime implements Models {
 	private readonly providerAvailabilitySeq = new Map<string, number>();
 	private availabilityError: string | undefined;
 	private readonly credentialOperations = new Map<string, Promise<unknown>>();
+	private requestProviderAllowlist: ReadonlySet<string> | undefined;
 
 	private constructor(
 		credentials: RuntimeCredentials,
@@ -194,7 +195,7 @@ export class ModelRuntime implements Models {
 			modelsPath,
 			modelsStore,
 			providers,
-			process.env.PI_OFFLINE === undefined,
+			process.env.MIDNIGHT_SERVER_OFFLINE === undefined,
 		);
 		runtime.configureRadiusProviders();
 		runtime.rebuildProviders();
@@ -579,6 +580,12 @@ export class ModelRuntime implements Models {
 		model: Model<Api>;
 		options: Omit<TOptions, "transformHeaders"> & ProviderRequestOptions;
 	}> {
+		if (this.requestProviderAllowlist && !this.requestProviderAllowlist.has(model.provider)) {
+			throw new ModelsError(
+				"provider",
+				`Requests to provider "${model.provider}" are blocked: this session only allows ${[...this.requestProviderAllowlist].join(", ")}`,
+			);
+		}
 		const provider = this.models.getProvider(model.provider);
 		if (!provider) throw new ModelsError("provider", `Unknown provider: ${model.provider}`);
 		const resolution = await this.getAuth(model, {
@@ -606,6 +613,15 @@ export class ModelRuntime implements Models {
 				env,
 			} as Omit<TOptions, "transformHeaders"> & ProviderRequestOptions,
 		};
+	}
+
+	/**
+	 * Restrict every model request made through this runtime to the given
+	 * providers, or pass undefined to lift the restriction. Used by local-only
+	 * mode so no request can reach a remote provider, whichever model is selected.
+	 */
+	restrictRequestProviders(providerIds: readonly string[] | undefined): void {
+		this.requestProviderAllowlist = providerIds ? new Set(providerIds) : undefined;
 	}
 
 	stream<TApi extends Api>(

@@ -7,6 +7,7 @@ import { normalizePath, resolvePath } from "../../utils/paths.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
 import type { SessionEntry } from "../session-manager.ts";
 import { SessionManager } from "../session-manager.ts";
+import { type SideThread, SideThreadStore, sideThreadFileFor } from "../side-threads.ts";
 
 /**
  * Interface for rendering custom tools to HTML.
@@ -135,6 +136,8 @@ interface SessionData {
 	tools?: Array<Pick<ToolDefinition, "name" | "description" | "parameters">>;
 	/** Pre-rendered HTML for custom tool calls/results, keyed by tool call ID */
 	renderedTools?: Record<string, RenderedToolHtml>;
+	/** Side threads from the session's `.threads.json` file */
+	sideThreads?: SideThread[];
 }
 
 /**
@@ -267,6 +270,7 @@ export async function exportSessionToHtml(
 		systemPrompt: state?.systemPrompt,
 		tools: state?.tools?.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })),
 		renderedTools,
+		sideThreads: new SideThreadStore(sideThreadFileFor(sessionFile)).all(),
 	};
 
 	const html = generateHtml(sessionData, opts.themeName);
@@ -301,6 +305,7 @@ export async function exportFromFile(inputPath: string, options?: ExportOptions 
 		leafId: sm.getLeafId(),
 		systemPrompt: undefined,
 		tools: undefined,
+		sideThreads: new SideThreadStore(sideThreadFileFor(resolvedInputPath)).all(),
 	};
 
 	const html = generateHtml(sessionData, opts.themeName);
