@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.99.1-midnight.1] - 2026-09-30
+
 ### Breaking Changes
 
 - Moved the Pi base from 0.87.1 to 0.99.1. Pi's 0.99.0 and 0.99.1 sections of this changelog apply, including the new default `system` theme, which takes its colors from the terminal; `/settings` or `"theme": "dark"` brings back the midnight palette.
