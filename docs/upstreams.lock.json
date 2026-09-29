@@ -1,10 +1,9 @@
 {
   "pi": {
-    "repository": "https://github.com/soliluqoy/pi",
-    "parent": "https://github.com/earendil-works/pi",
-    "commit": "f07218c4d4bbc12bef056a7058c3dd49dfe41abe",
-    "release": "v0.87.1",
-    "import": "Source snapshot in packages/ (not a subtree); midnight changes are listed in docs/IMPLEMENTATION_STATUS.md",
+    "repository": "https://github.com/earendil-works/pi",
+    "commit": "d86654abb8862e201933517d6f1fce9f88dd117f",
+    "release": "v0.99.1",
+    "import": "Merged in git history (remote \"upstream\"); midnight changes are listed in docs/IMPLEMENTATION_STATUS.md",
     "license": "MIT"
   },
   "bun": {

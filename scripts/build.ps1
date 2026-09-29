@@ -5,8 +5,7 @@ Build the midnight.server Windows distribution layout.
 .DESCRIPTION
 1. Compiles the CLI from TypeScript sources with the pinned Bun into one executable.
 2. Copies runtime assets beside it, as Pi's release layout expects.
-3. Installs the bundled extensions.
-4. Writes licenses and release-manifest.json (per-file SHA-256).
+3. Writes licenses and release-manifest.json (per-file SHA-256).
 
 Output: build\dist\midnight.server-windows-<arch>\
 Run scripts\bootstrap.ps1 first.
@@ -33,6 +32,7 @@ try {
 	Invoke-Checked $bun @(
 		"build", "--compile", "--no-compile-autoload-bunfig", "--target=bun-windows-$Architecture-baseline",
 		"packages/coding-agent/src/bun/cli.ts", "packages/coding-agent/src/utils/image-resize-worker.ts",
+		"packages/coding-agent/src/extensions/codemode/worker.ts",
 		"--outfile", (Join-Path $OutDir "midnight.server.exe")
 	)
 } finally { Pop-Location }
@@ -54,21 +54,6 @@ foreach ($copy in $copies) {
 	Copy-Item -Recurse -Force -Path $copy.From -Destination $target
 }
 Copy-Item -Recurse -Force "$agent\docs" (Join-Path $OutDir "docs")
-
-Write-Step "Installing bundled extensions"
-# Pinned by packaging\extensions\package-lock.json; loaded by default from extensions\ beside the exe.
-$bundled = Join-Path $RepoRoot "packaging\extensions"
-Invoke-Checked "npm" @("ci", "--ignore-scripts", "--omit=peer", "--prefix", $bundled)
-$bundledOut = Join-Path $OutDir "extensions"
-New-Item -ItemType Directory -Force $bundledOut | Out-Null
-Copy-Item -Force -LiteralPath (Join-Path $bundled "package.json") -Destination $bundledOut
-Copy-Item -Recurse -Force -LiteralPath (Join-Path $bundled "node_modules") -Destination $bundledOut
-# pi-mcp-adapter only calls recheck's checkSync, which runs in JS; the native and Java
-# agents (~50 MiB) back the async check() and are never loaded.
-foreach ($unused in @("recheck-jar", "recheck-windows-x64", ".bin")) {
-	$unusedPath = Join-Path $bundledOut "node_modules\$unused"
-	if (Test-Path -LiteralPath $unusedPath) { Remove-Item -Recurse -Force -LiteralPath $unusedPath }
-}
 
 Write-Step "Writing licenses and notices"
 $licenses = Join-Path $OutDir "licenses"

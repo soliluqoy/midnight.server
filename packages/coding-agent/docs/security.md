@@ -37,6 +37,7 @@ Project trust does not limit what tool calls can access or affect. After midnigh
 midnight.server requires a project-trust decision when it finds any of these resources from the current working directory:
 
 - `.midnight.server/settings.json`
+- `.midnight.server/mcp.json`
 - `.midnight.server/extensions`, `.midnight.server/skills`, `.midnight.server/prompts`, or `.midnight.server/themes`
 - `.midnight.server/SYSTEM.md` or `.midnight.server/APPEND_SYSTEM.md`
 - project `.agents/skills` in the current directory or an ancestor directory
@@ -46,6 +47,7 @@ A bare `.midnight.server` directory does not require project trust.
 Granting project trust allows midnight.server to load:
 
 - project settings
+- project MCP servers from `.midnight.server/mcp.json`
 - extensions, skills, prompt templates, themes, and system-prompt files under `.midnight.server`
 - missing packages configured through project settings
 - project-local and project-package extensions

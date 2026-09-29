@@ -154,8 +154,7 @@ export function getShellEnv(): NodeJS.ProcessEnv {
  * Removes characters that crash string-width or cause display issues:
  * - Control characters (except tab, newline, carriage return)
  * - Lone surrogates
- * - Unicode Format characters (crash string-width due to a bug)
- * - Characters with undefined code points
+ * - Unicode interlinear annotation characters U+FFF9..U+FFFB (crash string-width due to a bug)
  */
 export function sanitizeBinaryOutput(str: string): string {
 	// One pass without per-character allocation: this runs on every streamed bash chunk and on
@@ -166,7 +165,7 @@ export function sanitizeBinaryOutput(str: string): string {
 }
 
 /** Control characters except tab, newline and carriage return; lone surrogates; U+FFF9-U+FFFB. */
-const UNSAFE_OUTPUT_CHARS = /[\x00-\x08\x0B\x0C\x0E-\x1F\uD800-\uDFFF￹-￻]/gu;
+const UNSAFE_OUTPUT_CHARS = /[\x00-\x08\x0B\x0C\x0E-\x1F\uD800-\uDFFF\uFFF9-\uFFFB]/gu;
 
 /**
  * Detached child processes must be tracked so they can be killed on parent

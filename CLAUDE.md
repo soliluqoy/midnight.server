@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Read `AGENTS.md` first.** It holds the binding development rules (style, code quality, commands, git and PR workflow, no AI attribution, dependency security, changelog and versions). This file adds orientation and does not repeat those rules. Task playbooks live in `.midnight.server/`: `skills/release.md`, `skills/interactive-testing.md`, `skills/add-llm-provider.md`, and the prompts `cl` (changelog audit), `wr` (wrap up: changelog, commit, push, PR), `is` (issue analysis), `pr` (PR review), `deslop` (simplify). Read the matching file when doing that task.
+**Read `AGENTS.md` first.** It holds the binding development rules (style, code quality, commands, git and PR workflow, no AI attribution, dependency security, changelog and versions). This file adds orientation and does not repeat those rules. Task playbooks live in `.midnight.server/`: `skills/release.md`, `skills/upstream-sync.md` (merging a new Pi release), `skills/interactive-testing.md`, `skills/add-llm-provider.md`, and the prompts `cl` (changelog audit), `wr` (wrap up: changelog, commit, push, PR), `is` (issue analysis), `pr` (PR review), `deslop` (simplify). Read the matching file when doing that task.
 
 ## What this repo is
 
@@ -10,7 +10,7 @@ midnight.server is a coding CLI/TUI (Windows first, also Linux and macOS) built 
 
 ## Commands
 
-- `npm run check`: biome (with `--write`), dependency/lockfile/shrinkwrap/import checks, `tsgo --noEmit`, browser smoke. Run after code changes.
+- `npm run check`: biome (with `--write`), dependency/lockfile/shrinkwrap/import checks, `tsc --noEmit` (TypeScript 7), browser smoke. Run after code changes.
 - `./test.sh`: all non-e2e tests in an isolated HOME with no API keys.
 - Single test, from the package root (e.g. `packages/coding-agent`):
   `node "$(git rev-parse --show-toplevel)/node_modules/vitest/dist/cli.js" --run test/harness-units.test.ts`
@@ -23,14 +23,14 @@ Known baseline: on Windows, `./test.sh` has pre-existing non-midnight failures (
 
 ## Architecture
 
-Workspace packages build in dependency order: `chord` → `tui` → `telemetry` → `ai` → `durable` → `agent` → `session-backends/sqlite-node` → `protocol` → `client` → `server` → `coding-agent`. Cross-package imports resolve through package exports that point at `dist/`, so some tests fail until packages are built.
+Workspace packages build in dependency order: `chord` → `tui` → `telemetry` → `codemode` → `mcp` → `ai` → `durable` → `agent` → `session-backends/sqlite-node` → `protocol` → `client` → `server` → `coding-agent`. Cross-package imports resolve through package exports that point at `dist/`, so some tests fail until packages are built.
 
 - `packages/ai`: provider APIs, model registry (`models.generated.ts` is generated), faux provider for tests.
 - `packages/agent`: agent loop and session core.
 - `packages/tui`: terminal UI library.
 - `packages/coding-agent`: the product CLI. Almost all midnight-specific code lives here.
 
-`packages/coding-agent/src/cli.ts` calls Pi's `main()`. Built-in extensions are registered in `src/extensions/index.ts`: `agent-mode` (plan/build tool swap), `harness`, and the session title extension (`src/midnight/session-title.ts`, names the session with the session model after the first exchange). `src/midnight/status.ts` is the shared plan/build mode store read by the sidebar, footer and `agent-mode`.
+`packages/coding-agent/src/cli.ts` calls Pi's `main()`. Built-in extensions are registered in `src/extensions/index.ts`: `agent-mode` (plan/build tool swap), `harness`, and the session title extension (`src/midnight/session-title.ts`, names the session with the session model after the first exchange), plus Pi's `codemode`, `tool-search` and `mcp` (`builtin:<name>`, inactive until configured). `src/midnight/status.ts` is the shared plan/build mode store read by the sidebar, footer and `agent-mode`.
 
 ### `packages/coding-agent/src/harness/`
 

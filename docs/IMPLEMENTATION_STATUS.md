@@ -26,13 +26,21 @@ The local MiniCPM5-2B model and everything built for it: `--local` and `--hybrid
 
 ## Upstream base
 
-The Pi source snapshot is `earendil-works/pi` v0.87.1 (`f07218c4d`, recorded in `docs/upstreams.lock.json`), ported on 2026-09-26 from 0.85.1+147 (`36b60d2e`). How the port was done, so the next one can repeat it:
+The Pi base is `earendil-works/pi` v0.99.1 (`d86654abb`, recorded in `docs/upstreams.lock.json`), merged on 2026-09-30. Pi is now an ancestor in git history: the midnight tree as of `v0.87.1-midnight.5` was committed on top of upstream `v0.87.1` (a graft commit with the same tree as `main`), and `v0.99.1` was merged into it. Later Pi releases are ordinary merges; the steps are in `.midnight.server/skills/upstream-sync.md`.
 
-1. `git diff -M 36b60d2e v0.87.1 | git apply -3` with the upstream objects fetched locally. Source conflicts were limited to imports and the `ENV_RADIUS_GATEWAY` move.
-2. Documentation was merged three ways against rebranded inputs (ours, `rebrand(base)`, `rebrand(upstream)`), so only real edits conflict. The rebrand is mechanical: `PI_*` becomes `MIDNIGHT_SERVER_*`, `~/.pi` and `.pi/` become `.midnight.server`, and prose `Pi`/`pi` becomes `midnight.server`; TypeScript, JavaScript, Python and JSON code blocks keep `pi` identifiers and the `"pi"` package manifest key. The package README stays ours; upstream reduced its copy to a pointer page.
-3. New upstream source was checked for `PI_*` variables and user-facing "Pi" strings. `PI_CACHE_RETENTION` and `PI_RADIUS_GATEWAY` became `MIDNIGHT_SERVER_*`.
-4. `/bug` is export-only: upstream uploads reports to the Pi developers' Radius service.
-5. Changelogs keep our Unreleased entries, drop upstream entries that were released since the base, and insert upstream's released sections.
+What the 0.99.1 merge changed beyond taking upstream:
+
+1. MCP is Pi's built-in extension (`builtin:mcp`, `docs/mcp.md`). The bundled `pi-mcp-adapter` and `packaging/extensions` were removed; the loader for extensions beside the executable stays and loads nothing when that directory is absent.
+2. Codemode and `tool_search` are built in and inactive until named (`defaultTools: ["+codemode"]` or `--tools`). In the Bun binary the codemode worker is an extra entrypoint in `scripts/build.ps1` and `build-unix.sh`, resolved by path because Bun does not resolve embedded workers by file URL; `pi-codemode`'s `workerUrl` accepts a string for that.
+3. `DEFAULT_TOOL_NAMES` uses `powershell` instead of `bash` on Windows, so `defaultTools` modifiers such as `+codemode` keep the Windows default.
+4. Compaction is fitted to the window of the model a virtual model routes to, not the virtual model's own window.
+5. The `dark` and `light` themes keep the midnight palette; upstream's new `system` theme (terminal colors) is the default.
+6. TypeScript is 7.0.2 (`tsc` is the native compiler that `tsgo` previewed). The harness parse gate falls back to Node's parser for JavaScript when the project's TypeScript has no compiler API (TypeScript 7), and leaves TypeScript files unchecked there.
+7. Model data in `packages/ai/src/providers/data` was regenerated for schema 6 with `npm run hydrate:model-data`.
+8. New upstream code and tests were renamed like the rest: `PI_OAUTH_CALLBACK_HOST` became `MIDNIGHT_SERVER_OAUTH_CALLBACK_HOST`, `.pi/mcp.json` became `.midnight.server/mcp.json`.
+9. The built-in llama.cpp extension stays removed (see Removed, 2026-09-27); upstream's llama.cpp classifier API in `pi-ai` is kept.
+
+The earlier 0.85.1 to 0.87.1 port applied `git diff 36b60d2e v0.87.1` as a patch; that history is squashed into `bb1ec164b`.
 
 ## Not done
 
@@ -48,5 +56,7 @@ Package tests under `test.sh`'s isolated environment on Windows have failures th
 
 - `coding-agent`: causes seen are the config-directory rename (tests write project settings to `.pi/` while the product reads `.midnight.server/`), tests that pass raw `C:\` paths to `node --import` (Node rejects them on Windows), `pi` vs `midnight.server` strings in expected help text, Windows EPERM vs EACCES, and Git Bash path translation.
 - `agent-core`, `durable`, `session-backends/sqlite-node`, `client`, `server`: many files fail to load because package exports point at `dist/`, which is not built (the repository rules forbid `npm run build` without a request).
+
+After the 0.99.1 merge, `./test.sh` on Windows fails 143 tests against 171 on `v0.87.1-midnight.5`: 36 fixed by the regenerated model data and other upstream fixes, none newly broken in existing tests. New upstream tests that fail only on Windows: `durable` `env-node.test.ts` (symlinks need elevation, Git Bash rewrites paths to `/tmp`) and `mcp-command.test.ts` listing a server whose command is missing (Windows reports a closed connection instead of `ENOENT`). `chord` `state-fuzz.test.ts` can exceed its 5 s timeout under the full run and passes alone.
 
 Fixing these is part of finishing the rename and Windows test portability.

@@ -79,6 +79,26 @@ describe("defaultTools setting", () => {
 		session.dispose();
 	});
 
+	it("activates an inactive extension tool with +name", async () => {
+		const session = await createSession(["+inactive_tool", "-write"], {}, [
+			(pi) => {
+				pi.registerTool({
+					name: "inactive_tool",
+					label: "Inactive Tool",
+					description: "Extension tool registered inactive",
+					parameters: Type.Object({}),
+					execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+					defaultActive: false,
+				});
+			},
+		]);
+
+		// The default shell tool is PowerShell on Windows.
+		const shell = process.platform === "win32" ? "powershell" : "bash";
+		expect(session.getActiveToolNames().sort()).toEqual([shell, "edit", "inactive_tool", "read"].sort());
+		session.dispose();
+	});
+
 	it("keeps extension and SDK custom tools enabled", async () => {
 		const session = await createSession(
 			["grep"],

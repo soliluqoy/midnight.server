@@ -180,13 +180,10 @@ function finalizeTruncatedResult(
  * check to avoid running the RGI_Emoji regex unnecessarily.
  */
 function graphemeWidth(segment: string): number {
-	// Printable ASCII is the bulk of most lines that also contain box drawing or other non-ASCII text.
 	if (segment.length === 1) {
 		const code = segment.charCodeAt(0);
 		if (code >= 0x20 && code <= 0x7e) return 1;
-	}
-	if (segment === "\t") {
-		return 3;
+		if (code === 0x09) return 3;
 	}
 
 	// Some marks occupy cells even without a base character.
@@ -255,9 +252,11 @@ export function visibleWidth(str: string): number {
 		return 0;
 	}
 
-	// Fast path: pure ASCII printable
-	if (isPrintableAscii(str)) {
-		return str.length;
+	// Fast path: printable ASCII, tabs, and ANSI escape sequences. Styled lines take this path, so
+	// re-rendering after a theme change does not run grapheme segmentation on every line.
+	const asciiWidth = asciiVisibleWidth(str);
+	if (asciiWidth !== -1) {
+		return asciiWidth;
 	}
 
 	// Check cache
@@ -271,33 +270,31 @@ export function visibleWidth(str: string): number {
 	if (str.includes("\t")) {
 		clean = clean.replace(/\t/g, "   ");
 	}
-	if (clean.includes("\x1b")) {
+	let escapeIndex = clean.indexOf("\x1b");
+	if (escapeIndex !== -1) {
 		// Strip supported ANSI/OSC/APC escape sequences in one pass.
 		// This covers CSI styling/cursor codes, OSC hyperlinks and prompt markers,
 		// and APC sequences like CURSOR_MARKER.
 		let stripped = "";
-		let i = 0;
-		while (i < clean.length) {
-			const ansi = extractAnsiCode(clean, i);
-			if (ansi) {
-				i += ansi.length;
-				continue;
+		let copyFrom = 0;
+		while (escapeIndex !== -1) {
+			const length = ansiCodeLength(clean, escapeIndex);
+			if (length > 0) {
+				stripped += clean.slice(copyFrom, escapeIndex);
+				escapeIndex += length;
+				copyFrom = escapeIndex;
+			} else {
+				escapeIndex++;
 			}
-			const textEnd = findAnsiCode(clean, i + 1);
-			stripped += clean.slice(i, textEnd);
-			i = textEnd;
+			escapeIndex = clean.indexOf("\x1b", escapeIndex);
 		}
-		clean = stripped;
+		clean = stripped + clean.slice(copyFrom);
 	}
 
-	// Calculate width. Styled ASCII text is the common case and needs no grapheme segmentation.
+	// Calculate width
 	let width = 0;
-	if (isPrintableAscii(clean)) {
-		width = clean.length;
-	} else {
-		for (const { segment } of graphemeSegmenter.segment(clean)) {
-			width += graphemeWidth(segment);
-		}
+	for (const { segment } of graphemeSegmenter.segment(clean)) {
+		width += graphemeWidth(segment);
 	}
 
 	// Cache result
@@ -418,62 +415,70 @@ export function normalizeTerminalOutput(str: string): string {
 	return result;
 }
 
-/** `m`, `G`, `K`, `H`, or `J`: the CSI final bytes recognized by extractAnsiCode. */
-function isCsiTerminator(code: number): boolean {
-	return code === 0x6d || code === 0x47 || code === 0x4b || code === 0x48 || code === 0x4a;
-}
-
-/** Index of the next escape sequence extractAnsiCode recognizes at or after `from`, or `str.length`. */
-function findAnsiCode(str: string, from: number): number {
-	let index = str.indexOf("\x1b", from);
-	while (index !== -1) {
-		if (extractAnsiCode(str, index)) return index;
-		index = str.indexOf("\x1b", index + 1);
-	}
-	return str.length;
-}
-
 /**
  * Extract ANSI escape sequences from a string at the given position.
  */
 export function extractAnsiCode(str: string, pos: number): { code: string; length: number } | null {
-	if (pos >= str.length || str[pos] !== "\x1b") return null;
+	const length = ansiCodeLength(str, pos);
+	return length > 0 ? { code: str.substring(pos, pos + length), length } : null;
+}
+
+/**
+ * Width of a string made of printable ASCII, tabs, and ANSI escape sequences, or -1 if it contains
+ * anything else. Matches `visibleWidth` for those strings without allocating.
+ */
+function asciiVisibleWidth(str: string): number {
+	let width = 0;
+	let i = 0;
+	while (i < str.length) {
+		const code = str.charCodeAt(i);
+		if (code >= 0x20 && code <= 0x7e) {
+			width++;
+			i++;
+		} else if (code === 0x09) {
+			width += 3;
+			i++;
+		} else if (code === 0x1b) {
+			const length = ansiCodeLength(str, i);
+			if (length === 0) return -1;
+			i += length;
+		} else {
+			return -1;
+		}
+	}
+	return width;
+}
+
+/** Length of the ANSI/OSC/APC escape sequence starting at `pos`, or 0 if there is none. */
+function ansiCodeLength(str: string, pos: number): number {
+	if (pos >= str.length || str.charCodeAt(pos) !== 0x1b) return 0;
 
 	const next = str[pos + 1];
 
 	// CSI sequence: ESC [ ... m/G/K/H/J
 	if (next === "[") {
-		let j = pos + 2;
-		while (j < str.length && !isCsiTerminator(str.charCodeAt(j))) j++;
-		if (j < str.length) return { code: str.substring(pos, j + 1), length: j + 1 - pos };
-		return null;
+		for (let j = pos + 2; j < str.length; j++) {
+			const c = str.charCodeAt(j);
+			// m, G, K, H, J
+			if (c === 0x6d || c === 0x47 || c === 0x4b || c === 0x48 || c === 0x4a) return j + 1 - pos;
+		}
+		return 0;
 	}
 
 	// OSC sequence: ESC ] ... BEL or ESC ] ... ST (ESC \)
 	// Used for hyperlinks (OSC 8), window titles, etc.
-	if (next === "]") {
-		let j = pos + 2;
-		while (j < str.length) {
-			if (str[j] === "\x07") return { code: str.substring(pos, j + 1), length: j + 1 - pos };
-			if (str[j] === "\x1b" && str[j + 1] === "\\") return { code: str.substring(pos, j + 2), length: j + 2 - pos };
-			j++;
-		}
-		return null;
-	}
-
 	// APC sequence: ESC _ ... BEL or ESC _ ... ST (ESC \)
 	// Used for cursor marker and application-specific commands
-	if (next === "_") {
-		let j = pos + 2;
-		while (j < str.length) {
-			if (str[j] === "\x07") return { code: str.substring(pos, j + 1), length: j + 1 - pos };
-			if (str[j] === "\x1b" && str[j + 1] === "\\") return { code: str.substring(pos, j + 2), length: j + 2 - pos };
-			j++;
+	if (next === "]" || next === "_") {
+		for (let j = pos + 2; j < str.length; j++) {
+			const c = str.charCodeAt(j);
+			if (c === 0x07) return j + 1 - pos;
+			if (c === 0x1b && str[j + 1] === "\\") return j + 2 - pos;
 		}
-		return null;
+		return 0;
 	}
 
-	return null;
+	return 0;
 }
 
 type Osc8Terminator = "\x07" | "\x1b\\";
@@ -764,11 +769,16 @@ class AnsiCodeTracker {
 }
 
 function updateTrackerFromText(text: string, tracker: AnsiCodeTracker): void {
-	let i = findAnsiCode(text, 0);
-	while (i < text.length) {
-		const ansiResult = extractAnsiCode(text, i)!;
-		tracker.process(ansiResult.code);
-		i = findAnsiCode(text, i + ansiResult.length);
+	let i = text.indexOf("\x1b");
+	while (i !== -1) {
+		const length = ansiCodeLength(text, i);
+		if (length > 0) {
+			tracker.process(text.substring(i, i + length));
+			i += length;
+		} else {
+			i++;
+		}
+		i = text.indexOf("\x1b", i);
 	}
 }
 
@@ -777,6 +787,10 @@ export function getActiveBackgroundAnsi(text: string): string {
 	const tracker = new AnsiCodeTracker();
 	updateTrackerFromText(text, tracker);
 	return tracker.getActiveBackgroundCode();
+}
+
+function* graphemeSegments(text: string): Generator<string> {
+	for (const { segment } of graphemeSegmenter.segment(text)) yield segment;
 }
 
 /**
@@ -807,35 +821,19 @@ function splitIntoTokensWithAnsi(text: string): string[] {
 			continue;
 		}
 
-		const end = findAnsiCode(text, i);
-		const chunk = text.slice(i, end);
-		if (isPrintableAscii(chunk)) {
-			// ASCII has no CJK break points and no multi-character graphemes: split into runs of
-			// spaces and non-spaces directly.
-			let start = 0;
-			while (start < chunk.length) {
-				const isSpace = chunk.charCodeAt(start) === 0x20;
-				let stop = start + 1;
-				while (stop < chunk.length && (chunk.charCodeAt(stop) === 0x20) === isSpace) stop++;
-				const segmentKind = isSpace ? "space" : "word";
-				if (current && currentKind !== segmentKind) {
-					flushCurrent();
-				}
-				if (pendingAnsi) {
-					current += pendingAnsi;
-					pendingAnsi = "";
-				}
-				currentKind = segmentKind;
-				current += chunk.slice(start, stop);
-				start = stop;
-			}
-			i = end;
-			continue;
+		// Visible text runs up to the next escape sequence.
+		let end = text.indexOf("\x1b", i + 1);
+		while (end !== -1 && ansiCodeLength(text, end) === 0) {
+			end = text.indexOf("\x1b", end + 1);
 		}
+		if (end === -1) end = text.length;
 
-		for (const { segment } of graphemeSegmenter.segment(chunk)) {
+		const chunk = text.slice(i, end);
+		// Printable ASCII characters are single graphemes, so skip the segmenter for them.
+		const ascii = isPrintableAscii(chunk);
+		for (const segment of ascii ? chunk : graphemeSegments(chunk)) {
 			const segmentIsSpace = segment === " ";
-			if (!segmentIsSpace && cjkBreakRegex.test(segment)) {
+			if (!ascii && !segmentIsSpace && cjkBreakRegex.test(segment)) {
 				flushCurrent();
 				const token = pendingAnsi + segment;
 				pendingAnsi = "";
@@ -1214,32 +1212,7 @@ export function truncateToWidth(
 				end++;
 			}
 
-			const chunk = text.slice(i, end);
-			if (isPrintableAscii(chunk)) {
-				// One column per character: keep the prefix that fits, then count the rest.
-				const keep = keepContiguousPrefix ? Math.max(0, Math.min(chunk.length, targetWidth - keptWidth)) : 0;
-				if (keep > 0) {
-					if (pendingAnsi) {
-						result += pendingAnsi;
-						pendingAnsi = "";
-					}
-					result += keep === chunk.length ? chunk : chunk.slice(0, keep);
-					keptWidth += keep;
-				}
-				if (keep < chunk.length) {
-					keepContiguousPrefix = false;
-					pendingAnsi = "";
-				}
-				visibleSoFar += chunk.length;
-				if (visibleSoFar > maxWidth) {
-					overflowed = true;
-					break;
-				}
-				i = end;
-				continue;
-			}
-
-			for (const { segment } of graphemeSegmenter.segment(chunk)) {
+			for (const { segment } of graphemeSegmenter.segment(text.slice(i, end))) {
 				const width = graphemeWidth(segment);
 				if (keepContiguousPrefix && keptWidth + width <= targetWidth) {
 					if (pendingAnsi) {
@@ -1306,27 +1279,10 @@ export function sliceWithWidth(
 			continue;
 		}
 
-		const textEnd = findAnsiCode(line, i);
-		const chunk = line.slice(i, textEnd);
-		if (isPrintableAscii(chunk)) {
-			// One column per character, so the in-range part is a plain substring.
-			const from = Math.max(0, startCol - currentCol);
-			const to = Math.min(chunk.length, endCol - currentCol);
-			if (to > from) {
-				if (pendingAnsi) {
-					result += pendingAnsi;
-					pendingAnsi = "";
-				}
-				result += from === 0 && to === chunk.length ? chunk : chunk.slice(from, to);
-				resultWidth += to - from;
-			}
-			currentCol += Math.min(chunk.length, Math.max(1, endCol - currentCol));
-			i = textEnd;
-			if (currentCol >= endCol) break;
-			continue;
-		}
+		let textEnd = i;
+		while (textEnd < line.length && !extractAnsiCode(line, textEnd)) textEnd++;
 
-		for (const { segment } of graphemeSegmenter.segment(chunk)) {
+		for (const { segment } of graphemeSegmenter.segment(line.slice(i, textEnd))) {
 			const w = graphemeWidth(segment);
 			const inRange = currentCol >= startCol && currentCol < endCol;
 			const fits = !strict || currentCol + w <= endCol;
@@ -1391,37 +1347,10 @@ export function extractSegments(
 			continue;
 		}
 
-		const textEnd = findAnsiCode(line, i);
-		const chunk = line.slice(i, textEnd);
-		const stopCol = afterLen <= 0 ? beforeEnd : afterEnd;
-		if (isPrintableAscii(chunk)) {
-			// One column per character: "before" and "after" are plain substrings of the chunk.
-			const beforeTo = Math.max(0, Math.min(chunk.length, beforeEnd - currentCol));
-			if (beforeTo > 0) {
-				if (pendingAnsiBefore) {
-					before += pendingAnsiBefore;
-					pendingAnsiBefore = "";
-				}
-				before += beforeTo === chunk.length ? chunk : chunk.slice(0, beforeTo);
-				beforeWidth += beforeTo;
-			}
-			const afterFrom = Math.max(beforeTo, afterStart - currentCol);
-			const afterTo = Math.min(chunk.length, afterEnd - currentCol);
-			if (afterTo > afterFrom) {
-				if (!afterStarted) {
-					after += pooledStyleTracker.getActiveCodes();
-					afterStarted = true;
-				}
-				after += chunk.slice(afterFrom, afterTo);
-				afterWidth += afterTo - afterFrom;
-			}
-			currentCol += Math.min(chunk.length, Math.max(1, stopCol - currentCol));
-			i = textEnd;
-			if (currentCol >= stopCol) break;
-			continue;
-		}
+		let textEnd = i;
+		while (textEnd < line.length && !extractAnsiCode(line, textEnd)) textEnd++;
 
-		for (const { segment } of graphemeSegmenter.segment(chunk)) {
+		for (const { segment } of graphemeSegmenter.segment(line.slice(i, textEnd))) {
 			const w = graphemeWidth(segment);
 
 			if (currentCol < beforeEnd && currentCol + w <= beforeEnd) {
