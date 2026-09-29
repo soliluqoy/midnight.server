@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.99.1-midnight.1] - 2026-09-30
+
 ### Added
 
 - `workerUrl` accepts a path string, which Bun compiled executables need to load an embedded worker entrypoint.
