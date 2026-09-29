@@ -7,6 +7,7 @@ import {
 	disclosesDeviation,
 	requestTargets,
 } from "../src/harness/drift.ts";
+import { runsTestsOrChecks } from "../src/harness/extension.ts";
 
 const verified = { verifiedAfterLastChange: true, lastCheckFailed: false };
 
@@ -179,6 +180,174 @@ describe("drift detectors", () => {
 				],
 			}),
 		).toEqual([]);
+	});
+
+	it("finds silenced type checkers and linters in source, not in tests", () => {
+		const suppressed = [
+			["a.ts", "// @ts-ignore\nconst x: number = y;\n"],
+			["a.ts", "const x: number = y as any;\n"],
+			["a.ts", "// eslint-disable-next-line no-undef\nfoo();\n"],
+			["a.py", "x: int = y  # type: ignore\n"],
+			["a.py", "import os  # noqa: F401\n"],
+			["src/lib.rs", "#[allow(dead_code)]\nfn f() {}\n"],
+			["tsconfig.json", '{ "compilerOptions": { "strict": false } }\n'],
+		];
+		for (const [path, after] of suppressed) {
+			expect(kinds(run({ changes: [{ path, before: "", after }] }))).toEqual(["check_suppressed"]);
+		}
+		// A test asserting that a call does not type-check is the point of the test.
+		expect(run({ changes: [{ path: "test/a.test.ts", before: "", after: "// @ts-expect-error\nf(1);\n" }] })).toEqual(
+			[],
+		);
+		// Already there before the request: not the agent's doing.
+		const before = "// @ts-ignore\nconst x: number = y;\n";
+		expect(run({ changes: [{ path: "a.ts", before, after: `${before}const z = 1;\n` }] })).toEqual([]);
+	});
+
+	it("finds tests excluded through runner configuration and test scripts", () => {
+		const weakened: Array<[string, string, string]> = [
+			[
+				"vitest.config.ts",
+				"export default { test: {} };\n",
+				'export default { test: { exclude: ["test/port.test.ts"] } };\n',
+			],
+			[
+				"package.json",
+				'{ "scripts": { "test": "vitest run" } }\n',
+				'{ "scripts": { "test": "vitest run || true" } }\n',
+			],
+			["pytest.ini", "[pytest]\n", "[pytest]\naddopts = --deselect tests/test_port.py::test_invalid\n"],
+			["conftest.py", "", 'collect_ignore = ["tests/test_port.py"]\n'],
+			[".github/workflows/ci.yml", "steps:\n", "steps:\n  - run: npm test\n    continue-on-error: true\n"],
+		];
+		for (const [path, before, after] of weakened) {
+			expect(kinds(run({ changes: [{ path, before, after }] }))).toEqual(["test_config_weakened"]);
+		}
+		// Other package.json changes that mention exclusion are not the test script.
+		expect(
+			run({
+				changes: [{ path: "package.json", before: "{}\n", after: '{ "files": ["dist"], "exclude": ["x"] }\n' }],
+			}),
+		).toEqual([]);
+	});
+
+	it("finds an expected value changed when only tests changed and the request is not about them", () => {
+		const before = "it('adds', () => {\n\texpect(sum(2, 2)).toBe(4);\n});\n";
+		const after = "it('adds', () => {\n\texpect(sum(2, 2)).toBe(5);\n});\n";
+		const changes = [{ path: "test/sum.test.ts", before, after }];
+		expect(kinds(run({ request: "Fix sum.", changes }))).toEqual(["expectation_changed"]);
+		// The request asks for the tests to change.
+		expect(run({ request: "Update the sum tests for the new rounding.", changes })).toEqual([]);
+		// The source changed too: a behavior change with updated expectations.
+		expect(
+			run({
+				request: "Make sum round up.",
+				changes: [...changes, { path: "src/sum.ts", before: "a\n", after: "b\n" }],
+			}),
+		).toEqual([]);
+	});
+
+	it("finds skipIf and does not count a table-driven rewrite as removed assertions", () => {
+		expect(
+			kinds(
+				run({ changes: [{ path: "a.test.ts", before: "it('x', f);\n", after: "it.skipIf(isWin)('x', f);\n" }] }),
+			),
+		).toEqual(["tests_weakened"]);
+		const before = "expect(p('1')).toBe(1);\nexpect(p('2')).toBe(2);\nexpect(p('3')).toBe(3);\n";
+		const after = "for (const [input, output] of cases) {\n\texpect(p(input)).toBe(output);\n}\n";
+		expect(run({ request: "Refactor.", changes: [{ path: "test/p.test.ts", before, after }] })).toEqual([]);
+	});
+
+	it("does not flag ordinary code as stubs or test values only the tests expect", () => {
+		expect(
+			run({
+				changes: [
+					{
+						path: "src/search.tsx",
+						before: "",
+						after: '<input placeholder="Search" />\n// write to a temporary file, then rename\n',
+					},
+				],
+			}),
+		).toEqual([]);
+		// In a comment, the same words mark simplified work.
+		expect(
+			kinds(
+				run({
+					changes: [{ path: "a.ts", before: "", after: "return 0; // placeholder until the parser exists\n" }],
+				}),
+			),
+		).toEqual(["stub_added"]);
+		// 404 is what the tests expect, not an input they pass: comparing against it is not a special case.
+		const testSources = new Map([
+			[
+				"test/user.test.ts",
+				"expect(res.status).toBe(404);\nassert.strictEqual(get(1).code, 404);\nassert r.code == 404",
+			],
+		]);
+		const change = { path: "src/user.ts", before: "", after: "if (res.status === 404) return null;\n" };
+		expect(run({ testSources, changes: [change] })).toEqual([]);
+		const asInput = new Map([["test/user.test.ts", "expect(lookup(404)).toBe(null);"]]);
+		expect(kinds(run({ testSources: asInput, changes: [change] }))).toEqual(["test_input_special_case"]);
+	});
+
+	it("does not flag the drift guard's own false positives from this branch", () => {
+		// Reported by the drift guard on the change that added these detectors; all were ordinary code.
+		const testSources = new Map([["test/a.test.ts", 'expect(x.split("/").includes("..")).toBe(true);\nf("cwd");']]);
+		const changes = [
+			{
+				path: "docs/harness.md",
+				before: "",
+				after: "- stubs (`TODO`, `not implemented`) and swallowed errors;\n- `cwd` is a directory, if set.\n",
+			},
+			{
+				path: "src/config.ts",
+				before: "",
+				after: 'if (isAbsolute(dir) || dir.split("/").includes("..")) {\n}\n',
+			},
+			{ path: "src/drift.ts", before: "", after: "const SKIP = /\\.(?:skip|only|todo)\\s*\\(/;\n" },
+		];
+		expect(run({ testSources, changes })).toEqual([]);
+		// A comment that mentions a directive is not the directive.
+		expect(
+			run({ changes: [{ path: "a.ts", before: "", after: " * are the point (`@ts-expect-error` on a call)\n" }] }),
+		).toEqual([]);
+		// Lower-case markers still count in comments.
+		expect(kinds(run({ changes: [{ path: "a.ts", before: "", after: "// todo: handle errors\n" }] }))).toEqual([
+			"stub_added",
+		]);
+	});
+
+	it("counts only commands that run tests or checks as verification", () => {
+		for (const command of [
+			"npm test",
+			"npm run test:unit -- --run",
+			"pnpm run typecheck",
+			"cd packages/a; npx vitest run test/a.test.ts",
+			'node "C:/repo/node_modules/vitest/dist/cli.js" --run test/a.test.ts',
+			"node --test test/a.test.ts",
+			"python -m pytest -q",
+			"uv run pytest tests/test_a.py",
+			"go test ./...",
+			"cargo clippy",
+			"./run_tests.sh",
+			"CI=1 npx tsc --noEmit",
+			"& npx biome check .",
+			"make test",
+		]) {
+			expect(runsTestsOrChecks(command), command).toBe(true);
+		}
+		for (const command of [
+			"Get-ChildItem test",
+			"cat tests/test_a.py",
+			"git log --grep check",
+			"Select-String -Path test/a.test.ts -Pattern expect",
+			"npm ci",
+			"npm install vitest",
+			"rg testsFor src",
+		]) {
+			expect(runsTestsOrChecks(command), command).toBe(false);
+		}
 	});
 
 	it("notes files the request names that the change leaves alone, without asking for action", () => {

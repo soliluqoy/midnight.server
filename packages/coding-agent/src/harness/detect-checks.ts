@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_CHECK_TIMEOUT_MS, type HarnessCheck } from "./config.ts";
 
@@ -135,16 +135,111 @@ function detectNode(root: string, facts: ProjectFacts): void {
 		level: 3,
 		source: "package.json scripts.test",
 	};
-	let related: DetectedCheck | undefined;
-	if (/\bvitest\b/.test(test) && hasBin("vitest")) {
-		related = { ...full, name: "related tests", command: ["npx", "--no-install", "vitest", "run", "{tests}"] };
-	} else if (/\bjest\b/.test(test) && hasBin("jest")) {
-		related = { ...full, name: "related tests", command: ["npx", "--no-install", "jest", "{tests}"] };
-	} else if (/\bnode\s+--test\b/.test(test)) {
-		related = { ...full, name: "related tests", command: ["node", "--test", "{tests}"] };
-	}
-	if (related) facts.checks.push({ ...related, level: 2, needsTests: true, timeoutMs: 120_000 });
+	const related = relatedTestsCheck(test, hasBin, "package.json scripts.test");
+	if (related) facts.checks.push(related);
+	else facts.checks.push(...workspaceTestChecks(root, manifest, hasBin));
 	facts.checks.push(full);
+}
+
+/** The related-tests check (level 2) for a `test` script run by vitest, jest or `node --test`. */
+function relatedTestsCheck(
+	test: string,
+	hasBin: (name: string) => boolean,
+	source: string,
+	cwd?: string,
+): DetectedCheck | undefined {
+	// A custom runner config (`vitest run --config vitest.test.config.ts`) decides which tests exist.
+	const config = /(?:^|\s)--config[=\s](\S+)/.exec(test)?.[1];
+	const withConfig = config ? ["--config", config] : [];
+	let command: string[] | undefined;
+	if (/\bvitest\b/.test(test) && hasBin("vitest"))
+		command = ["npx", "--no-install", "vitest", "run", ...withConfig, "{tests}"];
+	else if (/\bjest\b/.test(test) && hasBin("jest"))
+		command = ["npx", "--no-install", "jest", ...withConfig, "{tests}"];
+	else if (/\bnode\s+--test\b/.test(test)) command = ["node", "--test", "{tests}"];
+	if (!command) return undefined;
+	return {
+		name: "related tests",
+		command,
+		...(cwd ? { cwd, when: [`${cwd}/**`] } : {}),
+		timeoutMs: 120_000,
+		level: 2,
+		needsTests: true,
+		source,
+	};
+}
+
+/** Workspace packages looked at, at most: detection runs at session start. */
+const MAX_WORKSPACES = 100;
+
+/** Workspace package globs from `workspaces` in package.json or `pnpm-workspace.yaml`. */
+function workspacePatterns(root: string, manifest: Record<string, unknown>): string[] {
+	const workspaces = manifest.workspaces;
+	const list = Array.isArray(workspaces)
+		? workspaces
+		: typeof workspaces === "object" &&
+				workspaces !== null &&
+				Array.isArray((workspaces as { packages?: unknown }).packages)
+			? (workspaces as { packages: unknown[] }).packages
+			: [];
+	const patterns = list.filter((item): item is string => typeof item === "string");
+	try {
+		const yaml = readFileSync(join(root, "pnpm-workspace.yaml"), "utf8");
+		const block = /^packages:\s*\n((?:[ \t]+-.*\n?|[ \t]*#.*\n?|[ \t]*\n)*)/m.exec(yaml)?.[1] ?? "";
+		for (const match of block.matchAll(/^[ \t]+-[ \t]*["']?([^"'#\n]+?)["']?[ \t]*(?:#.*)?$/gm))
+			patterns.push(match[1]);
+	} catch {
+		// No pnpm workspace file.
+	}
+	return patterns;
+}
+
+/** Package directories (workspace-relative) matched by `dir/*` and literal workspace patterns. */
+function workspaceDirs(root: string, patterns: readonly string[]): string[] {
+	const dirs = new Set<string>();
+	for (const raw of patterns) {
+		const pattern = raw.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+		if (!pattern || pattern.startsWith("!") || pattern.split("/").includes("..")) continue;
+		if (pattern.endsWith("/*") && !/[*?{[]/.test(pattern.slice(0, -2))) {
+			const parent = pattern.slice(0, -2);
+			try {
+				for (const entry of readdirSync(join(root, parent), { withFileTypes: true })) {
+					if (entry.isDirectory() && entry.name !== "node_modules") dirs.add(`${parent}/${entry.name}`);
+				}
+			} catch {
+				// Missing directory.
+			}
+		} else if (!/[*?{[]/.test(pattern)) dirs.add(pattern);
+		if (dirs.size >= MAX_WORKSPACES) break;
+	}
+	return [...dirs].sort().slice(0, MAX_WORKSPACES);
+}
+
+/**
+ * Related-tests checks for the packages of a monorepo whose root `test` script only delegates
+ * (`npm run test --workspaces`). Each runs the package's own runner in the package directory, on
+ * the tests of the files changed inside it.
+ */
+function workspaceTestChecks(
+	root: string,
+	manifest: Record<string, unknown>,
+	rootHasBin: (name: string) => boolean,
+): DetectedCheck[] {
+	const checks: DetectedCheck[] = [];
+	for (const dir of workspaceDirs(root, workspacePatterns(root, manifest))) {
+		const pkg = readJson(join(root, dir, "package.json"));
+		const scripts =
+			typeof pkg?.scripts === "object" && pkg.scripts !== null ? (pkg.scripts as Record<string, unknown>) : {};
+		const test = typeof scripts.test === "string" ? scripts.test : undefined;
+		if (!test || PLACEHOLDER_TEST.test(test)) continue;
+		const hasBin = (name: string) =>
+			rootHasBin(name) ||
+			existsSync(join(root, dir, "node_modules", ".bin", name)) ||
+			existsSync(join(root, dir, "node_modules", ".bin", `${name}.cmd`));
+		const check = relatedTestsCheck(test, hasBin, `${dir}/package.json scripts.test`, dir);
+		if (check) checks.push(check);
+	}
+	return checks;
 }
 
 function fileContains(path: string, pattern: RegExp): boolean {
@@ -296,8 +391,9 @@ export function describeEnvironment(input: EnvironmentInput): string {
 	if (input.facts.testCommand) project.push(`tests: \`${input.facts.testCommand}\``);
 	if (project.length > 0) lines.push(`Project: ${project.join("; ")}.`);
 	if (input.checks.length > 0) {
+		const names = [...new Set(input.checks.map((check) => check.name))];
 		lines.push(
-			`When you finish, the harness runs these checks on the files you changed and shows you any failure: ${input.checks.map((check) => check.name).join(", ")}.`,
+			`When you finish, the harness runs these checks on the files you changed and shows you any failure: ${names.join(", ")}.`,
 		);
 	}
 	return lines.join("\n");

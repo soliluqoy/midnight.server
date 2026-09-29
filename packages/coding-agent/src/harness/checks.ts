@@ -39,9 +39,23 @@ export function expandCommand(command: readonly string[], files: readonly string
 	return command.flatMap((arg) => (arg === "{files}" ? [...files] : [arg]));
 }
 
+/** Workspace-relative `files` as a check sees them: relative to its `cwd`, and only those inside it. */
+export function filesForCheck(check: HarnessCheck, files: readonly string[]): string[] {
+	if (!check.cwd) return [...files];
+	const prefix = `${check.cwd}/`;
+	return files.flatMap((file) => (file.startsWith(prefix) ? [file.slice(prefix.length)] : []));
+}
+
+/** The argv a selected check runs: its expanded argv, or its command with `{files}` expanded. */
+export function checkArgv(selected: SelectedCheck): string[] {
+	return selected.argv ?? expandCommand(selected.check.command, filesForCheck(selected.check, selected.files));
+}
+
 export interface CheckOutcome {
 	name: string;
 	argv: string[];
+	/** The check's directory when it is not the workspace root. */
+	cwd?: string;
 	passed: boolean;
 	exitCode: number | null;
 	timedOut: boolean;
@@ -65,7 +79,7 @@ const CHECK_MAX_OUTPUT_BYTES = 64_000;
  * On Windows `spawnProcess` resolves `.cmd` shims such as `npm` and `npx`.
  */
 export async function runCheck(selected: SelectedCheck, cwd: string, signal: AbortSignal): Promise<CheckOutcome> {
-	const argv = selected.argv ?? expandCommand(selected.check.command, selected.files);
+	const argv = checkArgv(selected);
 	const started = Date.now();
 	const chunks: Buffer[] = [];
 	let bytes = 0;
@@ -75,7 +89,7 @@ export async function runCheck(selected: SelectedCheck, cwd: string, signal: Abo
 	let spawnError: string | undefined;
 	try {
 		const child = spawnProcess(argv[0], argv.slice(1), {
-			cwd,
+			cwd: selected.check.cwd ? resolve(cwd, selected.check.cwd) : cwd,
 			stdio: ["ignore", "pipe", "pipe"],
 			windowsHide: true,
 			env: selected.check.env ? { ...process.env, ...selected.check.env } : undefined,
@@ -119,6 +133,7 @@ export async function runCheck(selected: SelectedCheck, cwd: string, signal: Abo
 	return {
 		name: selected.check.name,
 		argv,
+		...(selected.check.cwd ? { cwd: selected.check.cwd } : {}),
 		passed: !spawnError && !timedOut && exitCode === 0,
 		exitCode,
 		timedOut,
@@ -166,7 +181,8 @@ export function diagnosticExcerpt(text: string, maxBytes = DIAGNOSTIC_MAX_BYTES)
 function describeOutcome(outcome: CheckOutcome): string {
 	const status = outcome.timedOut ? "timed out" : `exit ${outcome.exitCode ?? "?"}`;
 	const mark = outcome.passed ? "[pass]" : outcome.baseline?.preexisting ? "[known]" : "[FAIL]";
-	const line = `${mark} ${outcome.name}: ${outcome.argv.join(" ")} (${status}, ${(outcome.elapsedMs / 1000).toFixed(1)} s)`;
+	const where = outcome.cwd ? ` in ${outcome.cwd}` : "";
+	const line = `${mark} ${outcome.name}: ${outcome.argv.join(" ")}${where} (${status}, ${(outcome.elapsedMs / 1000).toFixed(1)} s)`;
 	return outcome.baseline?.preexisting
 		? `${line}: fails only with errors it already reported before this request; leave them unless the user asked`
 		: line;

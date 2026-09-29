@@ -31,6 +31,9 @@ export interface FileChange {
 export type DriftKind =
 	| "tests_weakened"
 	| "test_deleted"
+	| "expectation_changed"
+	| "test_config_weakened"
+	| "check_suppressed"
 	| "test_input_special_case"
 	| "stub_added"
 	| "error_swallowed"
@@ -78,7 +81,10 @@ export interface DriftInput {
 const SEVERITY: Record<DriftKind, DriftSeverity> = {
 	tests_weakened: "high",
 	test_deleted: "high",
+	expectation_changed: "high",
+	test_config_weakened: "high",
 	test_input_special_case: "high",
+	check_suppressed: "medium",
 	unsupported_claim: "high",
 	stub_added: "medium",
 	error_swallowed: "medium",
@@ -134,13 +140,43 @@ const STRICT_ASSERTION =
 const WEAK_ASSERTION =
 	/assert(?:\.ok)?\s*\(\s*(?:true|1|[^,]+?\s*!==?\s*(?:undefined|null))\s*\)|toBeDefined\(\)|toBeTruthy\(\)|assert\s+True\b|assert\s+.+\s+is\s+not\s+None\b|expect\s*\(\s*true\s*\)/;
 const SKIP_MARKER =
-	/\.(?:skip|only|todo)\s*\(|\bx(?:it|describe|test)\s*\(|@pytest\.mark\.(?:skip|xfail)|@unittest\.skip|\bt\.Skip(?:Now|f)?\s*\(|#\[ignore\]/;
+	/\.(?:skip|only|todo|skipIf)\s*\(|\.runIf\s*\(\s*false\b|\bx(?:it|describe|test)\s*\(|@pytest\.mark\.(?:skip|xfail)|@unittest\.skip|\bt\.Skip(?:Now|f)?\s*\(|#\[ignore\]/;
 
-function testSignals(change: FileChange, diff: LineDiff): DriftSignal[] {
+/** A loop or parametrization: several assertions folded into one table-driven assertion. */
+const TABLE_DRIVEN =
+	/^\s*(?:for\s*\(|for\b.*\b(?:in|of|range)\b)|\.each\s*[(`]|\.forEach\s*\(|@pytest\.mark\.parametrize\b/;
+/** Every literal in a line, for comparing assertions by shape. */
+const ANY_LITERAL =
+	/"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`|\b\d+(?:\.\d+)?\b|\b(?:true|false|null|undefined|None|True|False|nil)\b/g;
+/** The request is about the tests themselves: changing what they expect is then the work. */
+const REQUEST_ABOUT_TESTS = /\b(?:tests?|specs?|assert\w*|expect\w*|snapshots?|fixtures?)\b/i;
+
+/**
+ * An assertion whose expected value changed while its subject stayed the same, e.g.
+ * `expect(sum(2, 2)).toBe(4)` -> `toBe(5)`: the test now expects what the code does.
+ */
+function changedExpectation(
+	removed: readonly { line: number; text: string }[],
+	added: readonly { line: number; text: string }[],
+): { line: number; before: string; after: string } | undefined {
+	const shape = (text: string) => text.replace(ANY_LITERAL, "<>").replace(/\s+/g, "");
+	const byShape = new Map<string, string>();
+	for (const item of removed) byShape.set(shape(item.text), item.text);
+	for (const item of added) {
+		const before = byShape.get(shape(item.text));
+		if (before !== undefined && before.trim() !== item.text.trim()) {
+			return { line: item.line, before, after: item.text };
+		}
+	}
+	return undefined;
+}
+
+function testSignals(change: FileChange, diff: LineDiff, input: DriftInput, sourceChanged: boolean): DriftSignal[] {
 	const signals: DriftSignal[] = [];
 	const removedAsserts = diff.removed.filter((item) => ASSERTION.test(item.text));
 	const addedAsserts = diff.added.filter((item) => ASSERTION.test(item.text));
-	if (removedAsserts.length > addedAsserts.length) {
+	const tableDriven = addedAsserts.length > 0 && diff.added.some((item) => TABLE_DRIVEN.test(item.text));
+	if (removedAsserts.length > addedAsserts.length && !tableDriven) {
 		const lost = removedAsserts.length - addedAsserts.length;
 		const example = removedAsserts[0];
 		signals.push({
@@ -176,17 +212,84 @@ function testSignals(change: FileChange, diff: LineDiff): DriftSignal[] {
 			evidence: `a test was skipped or narrowed, line ${skip.line}: \`${short(skip.text)}\``,
 		});
 	}
+	// Only tests changed and the request is not about them: a new expected value fits the test to
+	// the code instead of the code to the request.
+	if (!sourceChanged && !REQUEST_ABOUT_TESTS.test(input.request)) {
+		const changed = changedExpectation(removedAsserts, addedAsserts);
+		if (changed) {
+			signals.push({
+				kind: "expectation_changed",
+				severity: SEVERITY.expectation_changed,
+				path: change.path,
+				line: changed.line,
+				evidence: `an assertion now expects a different value, line ${changed.line}: \`${short(changed.before)}\` -> \`${short(changed.after)}\`, and no source file changed`,
+			});
+		}
+	}
 	return signals;
+}
+
+/** Test runner configuration and CI workflows: where tests can be excluded without touching them. */
+const TEST_CONFIG_PATH =
+	/(?:^|\/)(?:(?:vitest|vite|jest|playwright|karma|cypress|ava)\.config\.[cm]?[jt]s|vitest\.workspace\.[cm]?[jt]s|jest\.config\.json|\.mocharc\.\w+|pytest\.ini|tox\.ini|setup\.cfg|pyproject\.toml|conftest\.py|package\.json|\.github\/workflows\/[^/]+\.ya?ml)$/;
+/** An added line that excludes tests from the run or makes a failing run pass. */
+const TEST_EXCLUSION =
+	/\b(?:exclude|testPathIgnorePatterns|modulePathIgnorePatterns|testIgnore|collect_ignore(?:_glob)?|norecursedirs|passWithNoTests)\b|--(?:ignore|deselect|exclude)\b|\|\|\s*(?:true|exit\s+0|echo)\b|;\s*exit\s+0\b|\s-k\s+["']?not\b|continue-on-error\s*:\s*true/;
+
+function testConfigSignals(change: FileChange, diff: LineDiff): DriftSignal[] {
+	if (!TEST_CONFIG_PATH.test(change.path)) return [];
+	const packageJson = change.path.endsWith("package.json");
+	const weakened = diff.added.find(
+		(item) =>
+			TEST_EXCLUSION.test(item.text) &&
+			(!packageJson || /"test[\w:-]*"\s*:/.test(item.text)) &&
+			!(change.before ?? "").includes(item.text.trim()),
+	);
+	if (!weakened) return [];
+	return [
+		{
+			kind: "test_config_weakened",
+			severity: SEVERITY.test_config_weakened,
+			path: change.path,
+			line: weakened.line,
+			evidence: `line ${weakened.line} excludes tests from the run or lets a failing run pass: \`${short(weakened.text)}\``,
+		},
+	];
 }
 
 // ---------------------------------------------------------------------------
 // Source.
 
+/** Upper-case markers are conventions; lower-case `todo` is also a test API (`it.todo(`). */
 const STUB_MARKER =
-	/\b(?:TODO|FIXME|XXX|HACK)\b|not (?:yet )?implemented|NotImplementedError|\bunimplemented!\s*\(|\btodo!\s*\(|\b(?:placeholder|stub(?:bed)?|simplified|for now|temporar(?:y|ily))\b/i;
+	/\b(?:TODO|FIXME|XXX|HACK)\b|\b[Nn]ot (?:yet )?implemented\b|NotImplementedError|\bunimplemented!\s*\(|\btodo!\s*\(/;
+/** Words that mark simplified work in a comment; in code they are ordinary (`placeholder="Search"`). */
+const STUB_COMMENT = /\b(?:todo|fixme|placeholder|stub(?:bed)?|simplified|for now|temporarily|hard-?coded)\b/i;
+/** Prose: documentation describes stubs and values, it does not contain code that compares them. */
+const PROSE_PATH = /\.(?:md|mdx|markdown|rst|txt|adoc)$/i;
+/** The comment part of a line: after `//`, `/*` or `#` (not `#[` or `#!`), or a `*` continuation line. */
+const COMMENT_TEXT = /(?:\/\/|\/\*|^\s*\*|(?:^|\s)#(?![[!]))(.*)$/;
+
+function marksStub(text: string): boolean {
+	if (STUB_MARKER.test(text)) return true;
+	const comment = COMMENT_TEXT.exec(text)?.[1];
+	return comment !== undefined && STUB_COMMENT.test(comment);
+}
+
+/**
+ * Directives that silence a type checker or linter instead of fixing what it reports. In tests they
+ * are sometimes the point (`@ts-expect-error` on a call that must not type-check), so only source
+ * is read.
+ */
+const SUPPRESSION =
+	/(?:\/\/|\/\*)\s*(?:@ts-(?:ignore|nocheck|expect-error)|eslint-disable|biome-ignore)\b|#\s*type:\s*ignore\b|#\s*noqa\b|#\s*pyright:\s*ignore\b|#\s*pylint:\s*disable\b|#!?\[allow\(|\/\/\s*nolint\b|@SuppressWarnings\b|\bas\s+any\b|"(?:strict|noImplicitAny|strictNullChecks)"\s*:\s*false/;
 const COMPARISON = /===?|!==?|\bcase\b|\bin\s*\(|\bis\b|\bswitch\b|\bif\b|\?\s*[^:]+:/;
+/**
+ * String and number literals. Strings of any length are matched so that a short one (`"/"`) is
+ * consumed whole: otherwise its closing quote would open a false literal (`").includes("`).
+ */
 const LITERAL =
-	/"([^"\\\n]{3,80})"|'([^'\\\n]{3,80})'|`([^`\\\n$]{3,80})`|(?<![\w.])(-?\d{3,}(?:\.\d+)?|\d+\.\d+)(?![\w.])/g;
+	/"([^"\\\n]{0,80})"|'([^'\\\n]{0,80})'|`([^`\\\n$]{0,80})`|(?<![\w.])(-?\d{3,}(?:\.\d+)?|\d+\.\d+)(?![\w.])/g;
 
 function swallowedError(lines: readonly { line: number; text: string }[]): { line: number; text: string } | undefined {
 	for (let index = 0; index < lines.length; index++) {
@@ -209,11 +312,36 @@ function swallowedError(lines: readonly { line: number; text: string }[]): { lin
 	return undefined;
 }
 
+/**
+ * Matcher calls and comparisons whose argument is the value a test expects (`toBe(404)`,
+ * `strictEqual(f(x), 404)`, `== 404`), as the text right before the literal.
+ */
+const EXPECTED_POSITION =
+	/(?:\b(?:toBe|toEqual|toStrictEqual|toMatch\w*|toContain\w*|toHaveLength|toHaveProperty|toThrow\w*|toBeCloseTo|toBeGreaterThan\w*|toBeLessThan\w*|assertEquals?|assertIn|assert_eq!|assert_ne!)\s*\(\s*|\b(?:equal|strictEqual|deepEqual|deepStrictEqual|Equal)\s*\((?:[^()]|\([^()]*\))*,\s*|[=!]=\s*)["'`]?$/;
+
+/**
+ * Whether `value` appears in the tests somewhere other than as an expected value. A literal the
+ * tests only expect (a status code, a message) is output the code legitimately produces or
+ * compares; a special case copies an input the tests pass in.
+ */
+function usedAsTestInput(testText: string, value: string): boolean {
+	let from = 0;
+	for (;;) {
+		const index = testText.indexOf(value, from);
+		if (index < 0) return false;
+		from = index + value.length;
+		const lineStart = testText.lastIndexOf("\n", index) + 1;
+		if (!EXPECTED_POSITION.test(testText.slice(Math.max(lineStart, index - 120), index))) return true;
+	}
+}
+
 function literalsOf(text: string): string[] {
 	const found: string[] = [];
 	for (const match of text.matchAll(LITERAL)) {
-		const value = match[1] ?? match[2] ?? match[3] ?? match[4];
-		if (value !== undefined) found.push(value);
+		const text = match[1] ?? match[2] ?? match[3];
+		if (text !== undefined) {
+			if (text.length >= 3) found.push(text);
+		} else if (match[4] !== undefined) found.push(match[4]);
 	}
 	return found;
 }
@@ -221,7 +349,7 @@ function literalsOf(text: string): string[] {
 function sourceSignals(change: FileChange, diff: LineDiff, input: DriftInput): DriftSignal[] {
 	const signals: DriftSignal[] = [];
 	const before = change.before ?? "";
-	const stub = diff.added.find((item) => STUB_MARKER.test(item.text) && !before.includes(item.text.trim()));
+	const stub = diff.added.find((item) => marksStub(item.text) && !before.includes(item.text.trim()));
 	if (stub) {
 		signals.push({
 			kind: "stub_added",
@@ -229,6 +357,16 @@ function sourceSignals(change: FileChange, diff: LineDiff, input: DriftInput): D
 			path: change.path,
 			line: stub.line,
 			evidence: `line ${stub.line} marks unfinished or simplified work: \`${short(stub.text)}\``,
+		});
+	}
+	const suppression = diff.added.find((item) => SUPPRESSION.test(item.text) && !before.includes(item.text.trim()));
+	if (suppression) {
+		signals.push({
+			kind: "check_suppressed",
+			severity: SEVERITY.check_suppressed,
+			path: change.path,
+			line: suppression.line,
+			evidence: `line ${suppression.line} silences the type checker or linter instead of fixing what it reports: \`${short(suppression.text)}\``,
 		});
 	}
 	const swallowed = swallowedError(diff.added);
@@ -248,7 +386,7 @@ function sourceSignals(change: FileChange, diff: LineDiff, input: DriftInput): D
 		for (const item of diff.added) {
 			if (!COMPARISON.test(item.text)) continue;
 			const literal = literalsOf(item.text).find(
-				(value) => testText.includes(value) && !input.request.includes(value) && !before.includes(value),
+				(value) => !input.request.includes(value) && !before.includes(value) && usedAsTestInput(testText, value),
 			);
 			if (literal !== undefined) {
 				signals.push({
@@ -367,6 +505,9 @@ export function detectDrift(input: DriftInput): DriftSignal[] {
 	// Installed dependencies and build output are not the agent's code: a TODO inside
 	// node_modules/dayjs is not a stub the agent wrote.
 	const changes = input.changes.filter((change) => !isGeneratedPath(change.path));
+	const sourceChanged = changes.some(
+		(change) => !isTestPath(change.path) && !TEST_CONFIG_PATH.test(change.path) && change.after !== undefined,
+	);
 	for (const change of changes) {
 		const test = isTestPath(change.path);
 		if (change.after === undefined) {
@@ -381,7 +522,9 @@ export function detectDrift(input: DriftInput): DriftSignal[] {
 			continue;
 		}
 		const diff = lineDiff(change.before ?? "", change.after);
-		signals.push(...(test ? testSignals(change, diff) : sourceSignals(change, diff, input)));
+		if (test) signals.push(...testSignals(change, diff, input, sourceChanged));
+		else if (!PROSE_PATH.test(change.path)) signals.push(...sourceSignals(change, diff, input));
+		signals.push(...testConfigSignals(change, diff));
 	}
 	signals.push(...environmentSignals(input.shellCommands ?? []));
 	if (changes.length > 0) {

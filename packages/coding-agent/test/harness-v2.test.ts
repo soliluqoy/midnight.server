@@ -5,6 +5,7 @@ import { join, parse } from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fitCompactionToWindow } from "../src/core/settings-manager.ts";
+import { filesForCheck, formatCheckSummary, runCheck } from "../src/harness/checks.ts";
 import { parseHarnessConfig } from "../src/harness/config.ts";
 import { describeEnvironment, detectProjectChecks, expandTests, isTypeCheck } from "../src/harness/detect-checks.ts";
 import {
@@ -100,6 +101,18 @@ describe("features", () => {
 		expect(() => parseHarnessConfig({ features: { typo: true } })).toThrow(/Unknown feature/);
 		expect(() => parseHarnessConfig({ escalation: { model: "opus" } })).toThrow(/provider\/model-id/);
 		expect(() => parseHarnessConfig({ checks: [{ name: "t", command: ["x"], level: 4 }] })).toThrow(/1, 2 or 3/);
+	});
+
+	it("accepts a check directory inside the workspace and rejects unknown check keys", () => {
+		const config = parseHarnessConfig({ checks: [{ name: "t", command: ["npm", "test"], cwd: "./packages\\ai/" }] });
+		expect(config.checks[0].cwd).toBe("packages/ai");
+		for (const cwd of ["../elsewhere", "/abs", "C:/abs", ""]) {
+			expect(() => parseHarnessConfig({ checks: [{ name: "t", command: ["x"], cwd }] })).toThrow(/cwd/);
+		}
+		// A typo such as "comand" or "level " must not silently drop the setting.
+		expect(() => parseHarnessConfig({ checks: [{ name: "t", command: ["x"], levels: 2 }] })).toThrow(
+			/Unknown key "checks\[0\]\.levels"/,
+		);
 	});
 });
 
@@ -253,6 +266,75 @@ describe("check detection", () => {
 			JSON.stringify({ scripts: { test: 'echo "Error: no test specified" && exit 1' } }),
 		);
 		expect(detectProjectChecks(root).checks).toEqual([]);
+	});
+
+	it("finds related tests per package in a monorepo whose root test script delegates", () => {
+		writeTree(root, {
+			"package.json": JSON.stringify({
+				workspaces: ["packages/*", "tools/cli", "!packages/ignored"],
+				scripts: { test: "npm run test --workspaces --if-present" },
+			}),
+			"node_modules/.bin/vitest": "",
+			"packages/a/package.json": JSON.stringify({ scripts: { test: "vitest --run" } }),
+			"packages/b/package.json": JSON.stringify({ scripts: { test: "node --test test/*.test.ts" } }),
+			"packages/c/package.json": JSON.stringify({ scripts: { test: 'echo "Error: no test specified" && exit 1' } }),
+			"packages/d/package.json": JSON.stringify({ scripts: { test: "vitest run --config vitest.unit.ts" } }),
+			"tools/cli/package.json": JSON.stringify({ scripts: { test: "jest" } }),
+		});
+		const related = detectProjectChecks(root).checks.filter((check) => check.level === 2);
+		expect(related.map((check) => [check.cwd, check.command, check.when])).toEqual([
+			["packages/a", ["npx", "--no-install", "vitest", "run", "{tests}"], ["packages/a/**"]],
+			["packages/b", ["node", "--test", "{tests}"], ["packages/b/**"]],
+			[
+				"packages/d",
+				["npx", "--no-install", "vitest", "run", "--config", "vitest.unit.ts", "{tests}"],
+				["packages/d/**"],
+			],
+		]);
+		// jest is not installed anywhere: no check for tools/cli.
+		writeTree(root, { "tools/cli/node_modules/.bin/jest": "" });
+		expect(detectProjectChecks(root).checks.some((check) => check.cwd === "tools/cli")).toBe(true);
+		// The environment line names the check once, not once per package.
+		expect(
+			describeEnvironment({ facts: detectProjectChecks(root), checks: related, platform: "linux", shell: "bash" }),
+		).toContain("shows you any failure: related tests.");
+	});
+
+	it("finds pnpm workspace packages", () => {
+		writeTree(root, {
+			"package.json": JSON.stringify({ scripts: { test: "pnpm -r test" } }),
+			"pnpm-workspace.yaml": "packages:\n  - 'apps/*'\n  # comment\n  - \"libs/core\"\n",
+			"node_modules/.bin/vitest": "",
+			"apps/web/package.json": JSON.stringify({ scripts: { test: "vitest" } }),
+			"libs/core/package.json": JSON.stringify({ scripts: { test: "vitest" } }),
+		});
+		expect(
+			detectProjectChecks(root)
+				.checks.filter((check) => check.level === 2)
+				.map((check) => check.cwd),
+		).toEqual(["apps/web", "libs/core"]);
+	});
+
+	it("runs a check in its directory with paths relative to it", async () => {
+		writeTree(root, { "packages/a/marker.txt": "x" });
+		const check = {
+			name: "ls",
+			command: [
+				process.execPath,
+				"-e",
+				"process.exit(require('fs').existsSync(process.argv[1]) ? 0 : 3)",
+				"{files}",
+			],
+			cwd: "packages/a",
+			timeoutMs: 10_000,
+		};
+		expect(filesForCheck(check, ["packages/a/marker.txt", "packages/b/x.ts", "packages/ab/y.ts"])).toEqual([
+			"marker.txt",
+		]);
+		const outcome = await runCheck({ check, files: ["packages/a/marker.txt"] }, root, new AbortController().signal);
+		expect(outcome.passed).toBe(true);
+		expect(outcome.argv.at(-1)).toBe("marker.txt");
+		expect(formatCheckSummary([outcome])).toContain("marker.txt in packages/a (");
 	});
 
 	it("finds pytest, go and cargo checks", () => {
