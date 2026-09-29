@@ -53,7 +53,6 @@ if ($Install) {
 	Push-Location $RepoRoot
 	try {
 		Invoke-Checked "npm" @("ci", "--ignore-scripts")
-		Invoke-Checked "npm" @("ci", "--ignore-scripts", "--prefix", "packaging\extensions")
 	} finally { Pop-Location }
 }
 
