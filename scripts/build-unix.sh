@@ -3,8 +3,7 @@
 #
 # 1. Compiles the CLI from TypeScript sources with the pinned Bun into one executable.
 # 2. Copies runtime assets beside it, as Pi's release layout expects.
-# 3. Installs the bundled extensions.
-# 4. Writes licenses and release-manifest.json (per-file SHA-256).
+# 3. Writes licenses and release-manifest.json (per-file SHA-256).
 #
 # Output: build/dist/midnight.server-<platform>/
 # Requires: bun (the version in scripts/toolchain.lock.json), node, npm, git,
@@ -47,6 +46,7 @@ bun_target="bun-$platform"
 	# --no-compile-autoload-bunfig keeps a project's bunfig.toml from preloading into the binary.
 	bun build --compile --no-compile-autoload-bunfig --target="$bun_target" \
 		packages/coding-agent/src/bun/cli.ts packages/coding-agent/src/utils/image-resize-worker.ts \
+		packages/coding-agent/src/extensions/codemode/worker.ts \
 		--outfile "$out/midnight.server"
 )
 if [[ "$os" == darwin ]]; then
@@ -63,17 +63,6 @@ cp "$agent"/src/core/export-html/template.* "$out/export-html/"
 cp "$agent"/src/core/export-html/vendor/*.js "$out/export-html/vendor/"
 cp -R "$repo_root/packages/tui/native/$os/prebuilds/$platform" "$out/native/$os/prebuilds/"
 cp -R "$agent/docs" "$out/docs"
-
-step "Installing bundled extensions"
-# Pinned by packaging/extensions/package-lock.json; loaded by default from extensions/ beside the executable.
-bundled="$repo_root/packaging/extensions"
-npm ci --ignore-scripts --omit=peer --prefix "$bundled"
-mkdir -p "$out/extensions"
-cp "$bundled/package.json" "$out/extensions/"
-cp -R "$bundled/node_modules" "$out/extensions/"
-# pi-mcp-adapter only calls recheck's checkSync, which runs in JS; the native and Java
-# agents back the async check() and are never loaded.
-rm -rf "$out/extensions/node_modules/.bin" "$out/extensions/node_modules"/recheck-*
 
 step "Writing licenses and notices"
 mkdir -p "$out/licenses"

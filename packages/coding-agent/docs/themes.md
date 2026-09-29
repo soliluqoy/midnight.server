@@ -1,6 +1,25 @@
 # Customize midnight.server with themes
 
-Themes control the colors midnight.server uses in interactive mode and HTML exports. midnight.server includes `dark` and `light` themes. You can select one theme, follow your terminal's light or dark appearance, or create your own palette.
+Themes control the colors midnight.server uses in interactive mode and HTML exports. midnight.server includes the `system`, `dark`, and `light` themes. You can select one theme, follow your terminal's light or dark appearance, or create your own palette.
+
+## Use your terminal's colors
+
+The `system` theme is the default. It builds midnight.server's colors from your terminal's theme, so midnight.server matches the terminal instead of bringing its own palette:
+
+- midnight.server queries the terminal's default foreground and background colors and its 16 ANSI colors.
+- Each midnight.server color takes its hue from one ANSI color, for example errors from red and links from blue.
+- midnight.server sets each color's lightness so that it stands out from the background by a minimum contrast. Body text keeps at least a 4.5:1 WCAG contrast ratio on the background and every panel.
+- When the terminal switches between light and dark, midnight.server queries the colors again and rebuilds the theme.
+
+The theme adapts to what the terminal reports:
+
+| Terminal reports | Result |
+|---|---|
+| Background and ANSI colors | Colors from the terminal palette, placed for the actual background. |
+| Background only | midnight.server's own hues, placed for the actual background. |
+| Nothing | ANSI color indices and the terminal's default colors, which the terminal renders itself. Secondary text is faint, and panels have no background color. |
+
+midnight.server asks the terminal for its colors when it starts. Terminals usually answer within a few milliseconds, and midnight.server waits at most 100 ms before showing the startup header. If the terminal does not answer in time, midnight.server uses the ANSI color fallback, and it still applies the colors if they arrive later, for example over a slow SSH connection. `system` is a reserved name: a custom theme with that name is ignored.
 
 <a id="selecting-a-theme"></a>
 
@@ -16,6 +35,8 @@ The selection is saved as the `theme` [setting](settings.md#terminal-and-display
 }
 ```
 
+Without a `theme` setting, midnight.server uses `system`.
+
 Automatic mode stores the light theme first and the dark theme second:
 
 ```json
@@ -24,7 +45,7 @@ Automatic mode stores the light theme first and the dark theme second:
 }
 ```
 
-When automatic mode is active, midnight.server changes themes when the terminal reports an appearance change. Theme names cannot contain `/` because midnight.server reserves it for this setting format.
+midnight.server decides whether the terminal is light or dark from its reported background and foreground colors. If the terminal does not report its background, midnight.server uses the terminal's light/dark notification, then the `COLORFGBG` environment variable, then dark. The same decision picks the theme of a light/dark pair and the appearance of `system`. When automatic mode is active, midnight.server changes themes when the terminal reports an appearance change. Theme names cannot contain `/` because midnight.server reserves it for this setting format.
 
 Use `--use-theme` to choose the initial theme for one invocation without changing the saved setting:
 
@@ -37,7 +58,7 @@ See [CLI resources](cli.md#resources) for the command-line option.
 
 ## Create a custom theme
 
-Copy one of the [built-in themes](https://github.com/earendil-works/pi/tree/main/packages/coding-agent/src/modes/interactive/theme) or create a new JSON file conforming to the [schema](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json).
+Copy one of the [built-in themes](https://github.com/earendil-works/pi/tree/main/packages/coding-agent/src/modes/interactive/theme) or create a new JSON file conforming to the [schema](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json). The built-in themes use OKHSL colors, with variables for colors that several roles share, so you can adjust a hue, saturation, or lightness directly.
 
 1. Save the file as `<agent-dir>/themes/my-theme.json`. The agent directory defaults to `~/.midnight.server/agent`.
 2. Set its `name` to `my-theme`.
@@ -51,21 +72,26 @@ Use the theme name as the filename. midnight.server hot-reloads the active user 
 | Property | Required | Responsibility |
 |---|---|---|
 | `$schema` | No | Enables editor validation and completion against midnight.server's published schema. |
-| `name` | Yes | Identifies the theme in selectors and settings. It must be unique and cannot contain `/`. |
+| `name` | Yes | Identifies the theme in selectors and settings. It must be unique, cannot contain `/`, and cannot be `system`. |
+| `appearance` | No | `"dark"` or `"light"`: the background the theme is designed for. midnight.server detects it from the theme colors when omitted. |
 | `vars` | No | Defines reusable color values. Variables can reference other variables. |
 | `colors` | Yes | Assigns colors to terminal UI roles. The schema identifies required and optional roles. |
 | `export` | No | Overrides page and panel backgrounds in HTML exports. |
 
-A color can be written in four forms:
+A color can be written in six forms:
 
 | Form | Example | Meaning |
 |---|---|---|
-| RGB hexadecimal | `"#00aaff"` | A six-digit RGB color. |
+| RGB hexadecimal | `"#0af"` or `"#00aaff"` | A three- or six-digit sRGB color. |
+| OKLCH | `"oklch(62% 0.1 200)"` | Perceptual lightness, chroma, and hue. |
+| OKHSL | `"okhsl(250 60% 55%)"` | Hue, saturation, and lightness. Saturation is relative to the most the sRGB gamut allows at that hue and lightness, so every value is in gamut and equal saturation looks equally colorful. |
 | 256-color index | `39` | An ANSI palette index from `0` through `255`. |
 | Variable reference | `"primary"` | The value of an entry in `vars`. |
 | Terminal default | `""` | The terminal's default foreground or background color. |
 
-midnight.server resolves chained variable references. A missing variable or circular reference makes the theme invalid. Hexadecimal colors use truecolor when supported and are approximated in terminals limited to 256 colors. If colors differ from their hexadecimal values, check your terminal's truecolor detection and contrast settings. See [Configure Your Terminal](terminal-setup.md#override-detected-capabilities).
+Terminal default colors render as the terminal's own colors. Where midnight.server needs a concrete value, such as HTML export or extension color math, it uses the default colors the terminal reports, or a black or white guess based on the theme's appearance.
+
+midnight.server resolves chained variable references. A missing variable or circular reference makes the theme invalid. midnight.server uses truecolor when available, gamut-maps OKLCH to sRGB, and approximates colors for 256-color terminals. HTML exports convert OKHSL values to hexadecimal because CSS does not support them. If colors differ from their source values, check your terminal's truecolor detection and contrast settings. See [Configure Your Terminal](terminal-setup.md#override-detected-capabilities).
 
 Use the [theme JSON schema](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json) for the exact properties, required colors, and accepted value types.
 

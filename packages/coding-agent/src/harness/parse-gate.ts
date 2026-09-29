@@ -52,6 +52,8 @@ function location(error) {
 function parseTs(module, text, file) {
   let ts = modules.get(module);
   if (!ts) { ts = require(module); modules.set(module, ts); }
+  // TypeScript 7 (the native compiler) has no parser API in its main export: parse JS with Node.
+  if (typeof ts.createSourceFile !== "function") return /\\.(js|mjs|cjs)$/i.test(file) ? parseJs(text, file) : null;
   const kind = /\\.tsx$/i.test(file) ? ts.ScriptKind.TSX : /\\.jsx$/i.test(file) ? ts.ScriptKind.JSX
     : /\\.(js|mjs|cjs)$/i.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS;
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, kind);

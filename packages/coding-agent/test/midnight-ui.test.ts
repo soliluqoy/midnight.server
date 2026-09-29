@@ -244,6 +244,9 @@ function createSession(): AgentSession {
 		sessionManager: {
 			getEntries: () => entries,
 			getRevision: () => 0,
+			getEntryCount: () => entries.length,
+			getSessionId: () => "test-session",
+			getLeafId: () => null,
 			getSessionName: () => "Fix date parsing",
 			getCwd: () => process.cwd(),
 		},

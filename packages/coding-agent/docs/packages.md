@@ -85,7 +85,9 @@ midnight.server supplies these packages to extensions and skills:
 - `@earendil-works/pi-tui`
 - `typebox`
 
-Declare imported midnight.server packages in `peerDependencies` with a `"*"` range and do not bundle them. Other midnight.server packages used as dependencies must be included in the published tarball and referenced through their `node_modules` resource paths.
+Declare the host-provided packages listed above in `peerDependencies` with a `"*"` range and do not bundle them. midnight.server suppresses automatic peer installation for managed npm packages and git packages installed with npm, pnpm, or Bun. Local packages are not installed or modified, so their dependency tree remains the package author's responsibility.
+
+Do not list host-provided packages in `dependencies`. A physical copy can bypass midnight.server's extension module mapping in compiled ESM and create duplicate classes, registries, and initialization work. midnight.server reports an extension warning when it detects this manifest configuration. Other midnight.server packages used as dependencies must be included in the published tarball and referenced through their `node_modules` resource paths.
 
 Installed packages load with separate module roots. Do not rely on two packages sharing one dependency instance or one package resolving another package’s undeclared dependency.
 
@@ -116,7 +118,7 @@ For each resource type:
 
 Filters narrow the package manifest. They do not expose resources that the package itself did not declare.
 
-Run `midnight.server config` to enable or disable discovered resources. It starts with personal configuration; press Tab to switch scope, or run `midnight.server config --local` to start with project overrides.
+Run `midnight.server config` to enable or disable discovered resources and midnight.server's built-in extensions. It starts with personal configuration; press Tab to switch scope, or run `midnight.server config --local` to start with project overrides.
 
 ## Understand scope and identity
 

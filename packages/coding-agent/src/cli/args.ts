@@ -282,7 +282,8 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} list                      List installed extensions from settings
   ${APP_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
   ${APP_NAME} auth <command>            Print credentials or check provider readiness
-  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config/auth
+  ${APP_NAME} mcp <command>             Check MCP servers, sign in to or out of OAuth servers
+  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config/auth/mcp
 
 ${chalk.bold("Options:")}
   --provider <name>              Provider name (default: google)
@@ -309,8 +310,8 @@ ${chalk.bold("Options:")}
   --exclude-tools, -xt <tools>   Comma-separated denylist of tool names to disable
                                  Applies to built-in, extension, and custom tools
   --thinking <level>             Set thinking level: off, minimal, low, medium, high, xhigh, max
-  --extension, -e <path>         Load an extension file (can be used multiple times)
-  --no-extensions, -ne           Disable extension discovery (explicit -e paths still work)
+  --extension, -e <path>         Load an extension file or builtin:<name> (can be used multiple times)
+  --no-extensions, -ne           Disable extension discovery and built-in extensions (explicit -e paths still work)
   --skill <path>                 Load a skill file or directory (can be used multiple times)
   --no-skills, -ns               Disable skills discovery and loading
   --prompt-template <path>       Load a prompt template file or directory (can be used multiple times)
@@ -441,7 +442,7 @@ ${chalk.bold("Environment Variables:")}
   ${ENV_AGENT_DIR.padEnd(32)} - Config directory (default: ~/${CONFIG_DIR_NAME}/agent)
   ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
   MIDNIGHT_SERVER_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
-  MIDNIGHT_SERVER_NO_BUNDLED_EXTENSIONS         - Skip extensions shipped with midnight.server (e.g. MCP) when set
+  MIDNIGHT_SERVER_NO_BUNDLED_EXTENSIONS         - Skip extensions shipped beside the midnight.server executable when set
   MIDNIGHT_SERVER_OFFLINE                       - Disable startup network operations when set to 1/true/yes
   MIDNIGHT_SERVER_TELEMETRY                     - Override install telemetry when set to 1/true/yes or 0/false/no
   MIDNIGHT_SERVER_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)

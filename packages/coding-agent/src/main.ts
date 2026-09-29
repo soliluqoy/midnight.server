@@ -70,6 +70,7 @@ import { SettingsManager } from "./core/settings-manager.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { builtInExtensions } from "./extensions/index.ts";
+import { loadMcpCommand } from "./extensions/mcp/cli.lazy.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
 import { initTheme, setThemeJsonValidator, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
@@ -579,7 +580,7 @@ export async function main(args: string[], options?: MainOptions) {
 		process.env.MIDNIGHT_SERVER_OFFLINE = "1";
 		process.env.MIDNIGHT_SERVER_SKIP_VERSION_CHECK = "1";
 	}
-	// Pi extensions (e.g. the bundled pi-mcp-adapter) read piConfig through PI_PACKAGE_DIR and the
+	// Pi extensions installed as packages read piConfig through PI_PACKAGE_DIR and the
 	// agent dir from <APP_NAME>_CODING_AGENT_DIR, so they use ~/.midnight.server instead of ~/.pi.
 	process.env.PI_PACKAGE_DIR ??= getPackageDir();
 	if (process.env[ENV_AGENT_DIR]) {
@@ -615,6 +616,12 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	if (await handleConfigCommand(args, { extensionFactories })) {
+		return;
+	}
+
+	if (args[0] === "mcp") {
+		const { runMcpCommand } = await loadMcpCommand();
+		process.exitCode = await runMcpCommand(args.slice(1), { cwd, agentDir });
 		return;
 	}
 
@@ -800,6 +807,10 @@ export async function main(args: string[], options?: MainOptions) {
 			...resourceLoader.getExtensions().errors.map(({ path, error }) => ({
 				type: "error" as const,
 				message: `Failed to load extension "${path}": ${error}`,
+			})),
+			...(resourceLoader.getExtensions().warnings ?? []).map(({ path, warning }) => ({
+				type: "warning" as const,
+				message: `Extension package "${path}": ${warning}`,
 			})),
 		];
 
