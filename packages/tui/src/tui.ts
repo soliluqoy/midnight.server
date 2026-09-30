@@ -505,6 +505,7 @@ export abstract class TuiBase extends Container implements TUI {
 	private renderRequested = false;
 	private immediateRenderScheduled = false;
 	private renderTimer: NodeJS.Timeout | undefined;
+	private renderImmediate: NodeJS.Immediate | undefined;
 	private lastRenderAt = 0;
 	private static readonly MIN_RENDER_INTERVAL_MS = 16;
 	private showHardwareCursor = false;
@@ -1018,17 +1019,35 @@ export abstract class TuiBase extends Container implements TUI {
 	}
 
 	private cancelRenderTimer(): void {
-		if (!this.renderTimer) return;
-		clearTimeout(this.renderTimer);
-		this.renderTimer = undefined;
+		if (this.renderTimer) {
+			clearTimeout(this.renderTimer);
+			this.renderTimer = undefined;
+		}
+		if (this.renderImmediate) {
+			clearImmediate(this.renderImmediate);
+			this.renderImmediate = undefined;
+		}
 	}
 
 	private scheduleRender(): void {
-		if (this.stopped || this.renderTimer || !this.renderRequested) {
+		if (this.stopped || this.renderTimer || this.renderImmediate || !this.renderRequested) {
 			return;
 		}
 		const elapsed = performance.now() - this.lastRenderAt;
 		const delay = Math.max(0, TuiBase.MIN_RENDER_INTERVAL_MS - elapsed);
+		if (delay === 0) {
+			// setTimeout(0) is quantized to a Windows timer tick. Once the frame budget is
+			// available, setImmediate avoids adding another ~16 ms to streamed output latency.
+			this.renderImmediate = setImmediate(() => {
+				this.renderImmediate = undefined;
+				if (this.stopped || !this.renderRequested) return;
+				this.renderRequested = false;
+				this.lastRenderAt = performance.now();
+				this.doRender();
+				if (this.renderRequested) this.scheduleRender();
+			});
+			return;
+		}
 		this.renderTimer = setTimeout(() => {
 			this.renderTimer = undefined;
 			if (this.stopped || !this.renderRequested) {

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import { FEATURE_NAMES, type FeatureName } from "./features.ts";
 
@@ -22,6 +22,11 @@ export interface HarnessCheck {
 	 * Configured checks without a level are level 1.
 	 */
 	level?: 1 | 2 | 3;
+	/**
+	 * Workspace-relative directory the check runs in (a package of a monorepo). `{files}` and
+	 * `{tests}` then expand to paths relative to it, and only to files inside it.
+	 */
+	cwd?: string;
 }
 
 export interface HarnessConfig {
@@ -107,9 +112,23 @@ function ladderLevel(value: unknown, field: string): 1 | 2 | 3 {
 	return value;
 }
 
+function checkDirectory(value: unknown, field: string): string {
+	if (typeof value !== "string" || !value.trim()) throw new HarnessConfigError(`${field} must be a non-empty string`);
+	const dir = value.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+	if (isAbsolute(dir) || /^[A-Za-z]:/.test(dir) || dir.split("/").includes("..")) {
+		throw new HarnessConfigError(`${field} must be a directory inside the workspace`);
+	}
+	return dir;
+}
+
 function parseCheck(value: unknown, index: number): HarnessCheck {
 	const field = `checks[${index}]`;
 	if (!isRecord(value)) throw new HarnessConfigError(`${field} must be an object`);
+	for (const key of Object.keys(value)) {
+		if (!["name", "command", "when", "timeoutMs", "level", "cwd"].includes(key)) {
+			throw new HarnessConfigError(`Unknown key "${field}.${key}"`);
+		}
+	}
 	if (typeof value.name !== "string" || !value.name.trim()) throw new HarnessConfigError(`${field}.name is required`);
 	const command = stringArray(value.command, `${field}.command`);
 	if (command.length === 0) throw new HarnessConfigError(`${field}.command must not be empty`);
@@ -122,6 +141,7 @@ function parseCheck(value: unknown, index: number): HarnessCheck {
 				? DEFAULT_CHECK_TIMEOUT_MS
 				: nonNegativeInteger(value.timeoutMs, `${field}.timeoutMs`),
 		level: value.level === undefined ? undefined : ladderLevel(value.level, `${field}.level`),
+		...(value.cwd === undefined ? {} : { cwd: checkDirectory(value.cwd, `${field}.cwd`) }),
 	};
 }
 

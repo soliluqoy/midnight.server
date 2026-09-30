@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- Harness: in a monorepo whose root `test` script only delegates to workspaces (npm/yarn `workspaces`, `pnpm-workspace.yaml`), the settle pass runs each changed package's related tests with the package's own runner in the package directory. Checks in `harness.json` accept `cwd`.
+- Harness drift guard: flags type-checker and linter suppressions added to source (`@ts-ignore`, `as any`, `eslint-disable`, `# type: ignore`, `# noqa`, `#[allow]`, `"strict": false`), tests excluded through runner config, test scripts or CI (`exclude`, `--deselect`, `collect_ignore`, `|| true`, `continue-on-error`), expected values changed when only tests changed and the request is not about tests, and `skipIf`.
+
+### Changed
+
+- Harness drift guard: `placeholder`, `stub`, `simplified` and `for now` count as stub markers only in comments, and `temporary` no longer does; a literal the tests only expect (`toBe(404)`) is no longer reported as a hard-coded test input; assertions folded into a table-driven loop are not counted as removed; documentation files (`.md`, `.rst`, `.txt`) are not read as source; `TODO`/`FIXME` outside comments must be upper case (`it.todo(` is not a stub); a short string such as `"/"` no longer makes the text between two strings (`").includes("`) count as a literal.
+- Harness: only a shell command that runs tests or checks counts as verifying a success claim; a command that merely mentions `test` (`Get-ChildItem test`, `git log --grep check`) no longer does.
+- Harness: unknown keys in a `harness.json` check are rejected instead of ignored.
+
+### Fixed
+
+- The `powershell` tool reports a native command's exit code (`node -e "process.exit(3)"` is 3, not 1).
+- Harness: related tests no longer include helpers and scripts in a test directory whose tests are named as tests (`test/key-tester.ts` beside `test/*.test.ts`); `node --test` ran the interactive key tester and the check timed out. A changed helper selects the tests that import it.
+- Fullscreen: scrolling and redraws no longer lag while the file explorer or sidebar is open; each frame spent 15-20 ms compositing the side columns and now takes a few milliseconds.
+
 ## [0.99.1-midnight.1] - 2026-09-30
 
 ### Breaking Changes

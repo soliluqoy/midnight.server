@@ -53,6 +53,28 @@ export function isTestPath(path: string): boolean {
 	);
 }
 
+/** A test named as one (`a.test.ts`, `test_a.py`, `a_test.go`), not only placed in a test directory. */
+function isNamedTestPath(path: string): boolean {
+	return (
+		/\.(test|spec)\.[a-z]+$/.test(path) ||
+		/(^|\/)test_[^/]+\.py$/.test(path) ||
+		/_test\.(py|go)$/.test(path) ||
+		/(^|\/)test\.[a-z]+$/.test(path)
+	);
+}
+
+/**
+ * Test files a runner can be given. In a directory whose tests are named as tests, the other files
+ * are helpers and scripts, such as a fixture module or an interactive key tester that waits for
+ * input forever; only directories without named tests (`test/a.js`) count every file as a test.
+ */
+function runnableTests(files: readonly string[]): Set<string> {
+	const namedDirs = new Set(files.filter(isNamedTestPath).map((path) => posix.dirname(path)));
+	return new Set(
+		files.filter((path) => isTestPath(path) && (isNamedTestPath(path) || !namedDirs.has(posix.dirname(path)))),
+	);
+}
+
 /**
  * A directory that is not a project: the home directory or a filesystem root. Listing one walks
  * thousands of unrelated files (AppData, caches, downloads).
@@ -160,18 +182,20 @@ async function readTest(root: string, path: string): Promise<string | undefined>
 }
 
 /**
- * Test files related to `changed`: changed tests themselves, and for each changed source file the
- * tests with the same stem or that import it. Only test files in the same language are read.
+ * Test files related to `changed`: changed tests themselves, and for each changed source file (or
+ * test helper) the tests with the same stem or that import it. Only test files in the same language
+ * are read.
  */
 export async function testsFor(root: string, files: readonly string[], changed: readonly string[]): Promise<string[]> {
 	const all = new Set(files);
+	const runnable = runnableTests(files);
 	const tests = new Set<string>();
 	const sources = changed.filter((path) => all.has(path) && languageOf(path) !== "other");
-	for (const path of sources) if (isTestPath(path)) tests.add(path);
-	const pending = sources.filter((path) => !isTestPath(path));
+	for (const path of sources) if (runnable.has(path)) tests.add(path);
+	const pending = sources.filter((path) => !runnable.has(path));
 	if (pending.length === 0) return [...tests].sort();
 	const languages = new Set(pending.map(languageOf));
-	const candidates = files.filter((path) => isTestPath(path) && languages.has(languageOf(path)));
+	const candidates = files.filter((path) => runnable.has(path) && languages.has(languageOf(path)));
 	const imports = new Map<string, string[]>();
 	for (const source of pending) {
 		const found: string[] = [];

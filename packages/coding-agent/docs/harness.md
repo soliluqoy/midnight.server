@@ -31,7 +31,7 @@ Checks are the project's own commands. They come from `.midnight.server/harness.
 
 | Found | Level 1 (types, lint) | Level 2 (related tests) | Level 3 (all tests) |
 | --- | --- | --- | --- |
-| `package.json` | `typecheck`/`check-types`/`tsc` script, or `tsc --noEmit` with a `tsconfig.json`; a `lint` script that does not write files | `vitest run`, `jest` or `node --test` on the tests related to changed files | the `test` script |
+| `package.json` | `typecheck`/`check-types`/`tsc` script, or `tsc --noEmit` with a `tsconfig.json`; a `lint` script that does not write files | `vitest run`, `jest` or `node --test` on the tests related to changed files; in a monorepo whose root `test` script only delegates, each workspace package's runner, in the package directory | the `test` script |
 | pytest configuration | `mypy` when configured | `pytest` on related tests | `pytest` |
 | `go.mod` | `go vet ./...` | | `go test ./...` |
 | `Cargo.toml` | `cargo check` | | `cargo test` |
@@ -58,11 +58,13 @@ Results are cached per tree, so an unchanged tree never runs the baseline twice.
 Implementation drift is a change that moves away from the request toward something simpler, without saying so. Example: asked to make `parsePort` reject invalid ports, a model comments out a failing assertion and reports "Done. All tests pass."
 
 - **Drift guard (`driftGuard`).** Once the checks pass (or there are none), the harness compares every file that differs from the start of the request (shell edits included) with the request. It skips runs that neither edited files nor ran a shell command, and it reads only the workspace's file list (`git ls-files`) and its test files, never a full index. It looks for:
-  - weakened tests;
-  - test inputs hard-coded into source;
-  - stubs and swallowed errors;
+  - weakened tests: removed, commented, loosened or skipped assertions, and expected values changed when only tests changed and the request is not about tests;
+  - tests excluded through runner configuration, the `test` script or CI (`exclude`, `--deselect`, `collect_ignore`, `|| true`, `continue-on-error`);
+  - test inputs hard-coded into source (a literal the tests pass in, not one they only expect);
+  - type-checker and linter suppressions added to source (`@ts-ignore`, `as any`, `eslint-disable`, `# type: ignore`, `# noqa`);
+  - stubs (`TODO`, `not implemented`, and words such as `placeholder` or `for now` in comments) and swallowed errors;
   - removed declarations the request does not name;
-  - success claims that no check or test run after the last change supports;
+  - success claims that no check or test run after the last change supports (only a command that runs tests or checks counts, not one that mentions them);
   - processes left running in the background or ended.
 
   If any appear, the model gets one turn to fix them or to say plainly what differs from the request.
@@ -97,6 +99,7 @@ Implementation drift is a change that moves away from the request toward somethi
 ```
 
 - `command` is an argument list, run without a shell. `{files}` expands to the changed files that matched `when`.
+- `cwd` (optional) is a workspace-relative directory to run the check in, such as a monorepo package. `{files}` and `{tests}` then expand to paths relative to it, and only to files inside it.
 - `level` (1-3) places a check on the ladder; configured checks without one are level 1.
 - Unknown keys and unknown feature names are rejected, so a typo does not silently disable anything.
 

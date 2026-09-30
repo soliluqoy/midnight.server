@@ -82,6 +82,41 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).not.toContain("converted-partial");
 	});
 
+	test("defers partial renderer rebuilding until the next frame", () => {
+		let callRenders = 0;
+		let resultRenders = 0;
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderCall: () => {
+				callRenders++;
+				return new Text("custom call", 0, 0);
+			},
+			renderResult: () => {
+				resultRenders++;
+				return new Text("custom result", 0, 0);
+			},
+		};
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-lazy-render",
+			{ value: 1 },
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+
+		expect(callRenders).toBe(1);
+		component.updateArgs({ value: 2 });
+		component.updateResult({ content: [{ type: "text", text: "partial" }], details: {}, isError: false }, true);
+		expect(callRenders).toBe(1);
+		expect(resultRenders).toBe(0);
+
+		component.render(120);
+		expect(callRenders).toBe(2);
+		expect(resultRenders).toBe(1);
+	});
+
 	test("stacks custom call and result renderers like the old implementation", () => {
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition(),

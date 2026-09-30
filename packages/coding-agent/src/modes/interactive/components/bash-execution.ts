@@ -28,6 +28,7 @@ export class BashExecutionComponent extends Container {
 	private fullOutputPath?: string;
 	private expanded = false;
 	private contentContainer: Container;
+	private displayDirty = false;
 
 	constructor(command: string, ui: TUI, excludeFromContext = false) {
 		super();
@@ -68,13 +69,19 @@ export class BashExecutionComponent extends Container {
 	 * Set whether the output is expanded (shows full output) or collapsed (preview only).
 	 */
 	setExpanded(expanded: boolean): void {
+		if (this.expanded === expanded) return;
 		this.expanded = expanded;
-		this.updateDisplay();
+		this.displayDirty = true;
 	}
 
 	override invalidate(): void {
 		super.invalidate();
-		this.updateDisplay();
+		this.displayDirty = true;
+	}
+
+	override render(width: number): string[] {
+		this.ensureDisplay();
+		return super.render(width);
 	}
 
 	appendOutput(chunk: string): void {
@@ -82,7 +89,9 @@ export class BashExecutionComponent extends Container {
 		// Note: binary data is already sanitized in tui-renderer.ts executeBashCommand
 		const clean = stripAnsi(chunk).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
-		// Append to output lines
+		// Append to output lines. Rebuilding the visible component tree is deferred until the next
+		// render; shell processes can emit many chunks in one event-loop turn.
+		this.displayDirty = true;
 		const newLines = clean.split("\n");
 		if (this.outputLines.length > 0 && newLines.length > 0) {
 			// Append first chunk to last line (incomplete line continuation)
@@ -91,8 +100,6 @@ export class BashExecutionComponent extends Container {
 		} else {
 			this.outputLines.push(...newLines);
 		}
-
-		this.updateDisplay();
 	}
 
 	setComplete(
@@ -112,8 +119,13 @@ export class BashExecutionComponent extends Container {
 
 		// Stop loader
 		this.loader.stop();
+		this.displayDirty = true;
+	}
 
+	private ensureDisplay(): void {
+		if (!this.displayDirty) return;
 		this.updateDisplay();
+		this.displayDirty = false;
 	}
 
 	private updateDisplay(): void {

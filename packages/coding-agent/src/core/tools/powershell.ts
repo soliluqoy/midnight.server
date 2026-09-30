@@ -14,6 +14,12 @@ import {
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
 const UTF8_OUTPUT_PREFIX = "try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\n";
+/**
+ * `-Command` exits 1 whenever the last statement fails, so `node -e "process.exit(3)"` reports 1
+ * and a test runner's exit code (pytest 5: no tests collected) is lost. When the last statement
+ * failed and a native command set an exit code, exit with that code instead.
+ */
+const EXIT_CODE_SUFFIX = "\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }";
 
 export const powershellToolSystemPromptContribution = {
 	snippet: "Execute PowerShell commands",
@@ -32,7 +38,8 @@ export interface PowerShellToolOptions
 export function createLocalPowerShellOperations(): PowerShellOperations {
 	const operations = createLocalShellOperations("PowerShell", getPowerShellConfig);
 	return {
-		exec: (command, cwd, options) => operations.exec(`${UTF8_OUTPUT_PREFIX}${command}`, cwd, options),
+		exec: (command, cwd, options) =>
+			operations.exec(`${UTF8_OUTPUT_PREFIX}${command}${EXIT_CODE_SUFFIX}`, cwd, options),
 	};
 }
 

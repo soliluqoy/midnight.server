@@ -21,6 +21,10 @@ function getBashShellConfig(shell: string): ShellConfig {
 	return isLegacyWslBashPath(shell) ? { shell, args: ["-s"], commandTransport: "stdin" } : { shell, args: ["-c"] };
 }
 
+let defaultShellConfig: ShellConfig | undefined;
+const customShellConfigs = new Map<string, ShellConfig>();
+let powerShellConfig: ShellConfig | undefined;
+
 function findExecutableOnPath(executable: string): string | null {
 	if (process.platform === "win32") {
 		// Windows: Use 'where' and verify file exists (where can return non-existent paths)
@@ -65,13 +69,20 @@ function findExecutableOnPath(executable: string): string | null {
  * 3. On Unix: /bin/bash, then bash on PATH, then fallback to sh
  */
 export function getShellConfig(customShellPath?: string): ShellConfig {
-	// 1. Check user-specified shell path
+	// Shell resolution is stable for the lifetime of an interactive process. Avoid probing PATH or
+	// the filesystem for every tool call; the old behavior made the first line of every command pay
+	// for a synchronous `where`/`which` lookup on Windows and Unix respectively.
 	if (customShellPath) {
+		const cached = customShellConfigs.get(customShellPath);
+		if (cached) return cached;
 		if (existsSync(customShellPath)) {
-			return getBashShellConfig(customShellPath);
+			const resolved = getBashShellConfig(customShellPath);
+			customShellConfigs.set(customShellPath, resolved);
+			return resolved;
 		}
 		throw new Error(`Custom shell path not found: ${customShellPath}`);
 	}
+	if (defaultShellConfig) return defaultShellConfig;
 
 	if (process.platform === "win32") {
 		// 2. Try Git Bash in known locations
@@ -87,14 +98,16 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 
 		for (const path of paths) {
 			if (existsSync(path)) {
-				return getBashShellConfig(path);
+				defaultShellConfig = getBashShellConfig(path);
+				return defaultShellConfig;
 			}
 		}
 
 		// 3. Fallback: search bash.exe on PATH (Cygwin, MSYS2, WSL, etc.)
 		const bashOnPath = findExecutableOnPath("bash.exe");
 		if (bashOnPath) {
-			return getBashShellConfig(bashOnPath);
+			defaultShellConfig = getBashShellConfig(bashOnPath);
+			return defaultShellConfig;
 		}
 
 		throw new Error(
@@ -108,15 +121,18 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 
 	// Unix: try /bin/bash, then bash on PATH, then fallback to sh
 	if (existsSync("/bin/bash")) {
-		return getBashShellConfig("/bin/bash");
+		defaultShellConfig = getBashShellConfig("/bin/bash");
+		return defaultShellConfig;
 	}
 
 	const bashOnPath = findExecutableOnPath("bash");
 	if (bashOnPath) {
-		return getBashShellConfig(bashOnPath);
+		defaultShellConfig = getBashShellConfig(bashOnPath);
+		return defaultShellConfig;
 	}
 
-	return { shell: "sh", args: ["-c"] };
+	defaultShellConfig = { shell: "sh", args: ["-c"] };
+	return defaultShellConfig;
 }
 
 export const POWERSHELL_ARGS = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"] as const;
@@ -126,13 +142,15 @@ export function getPowerShellConfig(): ShellConfig {
 	if (process.platform !== "win32") {
 		throw new Error("The powershell tool is only available on Windows.");
 	}
+	if (powerShellConfig) return powerShellConfig;
 
 	const shell = findExecutableOnPath("pwsh.exe") ?? findExecutableOnPath("powershell.exe");
 	if (!shell) {
 		throw new Error("No PowerShell executable found. Install PowerShell or add powershell.exe/pwsh.exe to PATH.");
 	}
 
-	return { shell, args: [...POWERSHELL_ARGS] };
+	powerShellConfig = { shell, args: [...POWERSHELL_ARGS] };
+	return powerShellConfig;
 }
 
 export function getShellEnv(): NodeJS.ProcessEnv {

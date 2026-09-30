@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fullscreen frames with side-by-side columns (`HStack`) no longer re-scan each row once per column: a column that starts past the painted part of a row is appended. With a file explorer and sidebar at 200 columns, a scroll frame drops from about 23 ms to 5 ms.
+- `sliceByColumn`, `sliceWithWidth`, `extractSegments` and `getGraphemeCellRange` skip grapheme segmentation for printable ASCII runs.
+
 ## [0.99.1] - 2026-09-29
 
 ## [0.99.0] - 2026-09-29

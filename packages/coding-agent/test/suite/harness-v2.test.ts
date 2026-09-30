@@ -198,6 +198,46 @@ describe("harness v2 in a session", () => {
 		expect(harness.getPendingResponseCount()).toBe(0);
 	});
 
+	it("runs a monorepo package's related tests in the package when the root test script delegates", async () => {
+		const harness = await setup();
+		const dir = harness.tempDir;
+		const pkg = join(dir, "packages", "math");
+		mkdirSync(join(pkg, "test"), { recursive: true });
+		writeFileSync(
+			join(dir, "package.json"),
+			JSON.stringify({ workspaces: ["packages/*"], scripts: { test: "npm run test --workspaces" } }),
+		);
+		writeFileSync(join(pkg, "package.json"), JSON.stringify({ scripts: { test: "node --test test/" } }));
+		writeFileSync(join(pkg, "double.js"), "module.exports = (n) => n * 2;\n");
+		// The test resolves double.js relative to itself: it only passes when run from the package.
+		writeFileSync(
+			join(pkg, "test", "double.test.js"),
+			"const test = require('node:test');\nconst assert = require('node:assert');\nconst double = require('../double.js');\ntest('doubles', () => assert.strictEqual(double(2), 4));\n",
+		);
+		initGit(dir);
+		const requests: string[] = [];
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("edit", {
+						path: "packages/math/double.js",
+						edits: [{ oldText: "n * 2", newText: "n * 3" }],
+					}),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("done"),
+			(context) => {
+				requests.push(contextText(context));
+				return fauxAssistantMessage("I could not fix it.");
+			},
+		]);
+		await harness.session.prompt("make double triple");
+		const feedback = customMessages(harness, CHECK_MESSAGE_TYPE)[0] ?? "";
+		expect(feedback).toContain("[FAIL] related tests: node --test test/double.test.js in packages/math");
+		expect(requests[0]).toContain("Harness checks failed");
+	});
+
 	it("does not check between turns that keep editing", async () => {
 		const harness = await setup();
 		writeProject(harness.tempDir);

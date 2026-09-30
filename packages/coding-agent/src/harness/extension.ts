@@ -16,7 +16,8 @@ import { compareWithBaseline } from "./baseline.ts";
 import {
 	blocks,
 	type CheckOutcome,
-	expandCommand,
+	checkArgv,
+	filesForCheck,
 	filesModifiedSince,
 	formatCheckFeedback,
 	formatCheckSummary,
@@ -141,9 +142,35 @@ function freshRun(prompt = ""): RunState {
 	};
 }
 
-/** Shell commands that run a project's tests or checks: their success verifies the change. */
-export const TEST_COMMAND =
-	/\b(?:test|tests|pytest|vitest|jest|mocha|ava|tap|unittest|go\s+(?:test|vet)|cargo\s+(?:test|check)|tsc|mypy|ruff|eslint|biome|check)\b|node\s+(?:--test\b|\S*test\S*\.m?js)|python\d?\s+\S*test\S*\.py/i;
+/** A package script that runs tests or checks: `npm test`, `pnpm run test:unit`, `yarn check`. */
+const SCRIPT_RUNNER =
+	/^(?:npm|pnpm|yarn|bun)\s+(?:run(?:-script)?\s+)?(?:--\S+\s+)*(?:test|check|lint|typecheck|type-check|types|tsc|verify)(?:[:\w-]*)(?:\s|$)/i;
+/** A test runner, type checker or linter, directly or through a launcher (`npx vitest`, `python -m pytest`). */
+const TOOL_RUNNER =
+	/^(?:(?:npx|bunx|pnpx)\s+(?:--\S+\s+)*|(?:pnpm|yarn|bun)\s+(?:exec\s+|dlx\s+)?|(?:uv|poetry|pipenv|hatch)\s+run\s+|(?:python[\d.]*|py)\s+-m\s+|(?:go|cargo|dotnet|deno|make|just|mvnw?|\.?[\\/]?gradlew?(?:\.bat)?)\s+)?(?:test|tests|vitest|jest|mocha|ava|tap|pytest|unittest|tox|nox|tsc|tsgo|mypy|pyright|ruff|eslint|biome|flake8|pylint|vet|check|clippy|nextest|rspec|phpunit|ctest|verify)(?:\s|$)/i;
+/** A test file or test script run directly: `node --test`, `node test/a.test.mjs`, `./run_tests.sh`. */
+const TEST_SCRIPT =
+	/^(?:node\s+(?:--\S+\s+)*(?:--test\b|\S*(?:test|jest|mocha)\S*\.[cm]?[jt]s\b)|(?:python[\d.]*|py|bash|sh|pwsh|powershell)\s+(?:-\S+\s+)*\S*test\S*\.(?:py|sh|ps1)\b|\.?[\\/]\S*test\S*\.(?:sh|ps1|bat|cmd)\b)/i;
+
+/**
+ * Whether a shell command runs the project's tests or checks, so its success verifies the change.
+ * Each segment (`;`, `&&`, `||`, `|`, line break) is judged by what it runs, not by the words it
+ * contains: `Get-ChildItem test` or `git log --grep check` verifies nothing.
+ */
+export function runsTestsOrChecks(command: string): boolean {
+	return command
+		.split(/;|&&|\|\||\||\r?\n/)
+		.map((segment) =>
+			segment
+				.trim()
+				// PowerShell call operator, `cmd /c`, environment prefixes (`CI=1 npm test`), `timeout 60`.
+				.replace(/^&\s*/, "")
+				.replace(/^cmd(?:\.exe)?\s+\/c\s+/i, "")
+				.replace(/^(?:[A-Za-z_]\w*=\S*\s+)+/, "")
+				.replace(/^timeout\s+\d+\s+/, ""),
+		)
+		.some((segment) => SCRIPT_RUNNER.test(segment) || TOOL_RUNNER.test(segment) || TEST_SCRIPT.test(segment));
+}
 
 /** A command line in one canonical spelling, so the model's own run of a check can be recognized. */
 export function commandKey(command: string): string {
@@ -509,7 +536,7 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 					run.loopGuard.noteChange();
 					if (typeof command === "string") {
 						run.passedCommands.set(commandKey(command), changeEpoch);
-						if (TEST_COMMAND.test(command)) run.verifiedAt = Date.now();
+						if (runsTestsOrChecks(command)) run.verifiedAt = Date.now();
 					}
 				}
 			}
@@ -594,10 +621,17 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 		if (levelChecks.length === 0) return [];
 		const selected: SelectedCheck[] = [];
 		let tests: string[] | undefined;
+		// A test belongs to the deepest check directory containing it: a package nested in another
+		// package (an example extension inside the CLI package) runs its own tests.
+		const dirs = levelChecks.flatMap((check) => (check.cwd ? [check.cwd] : []));
+		const owner = (path: string) =>
+			dirs.filter((dir) => path.startsWith(`${dir}/`)).sort((a, b) => b.length - a.length)[0];
 		for (const item of selectChecks(levelChecks, changed)) {
 			if (item.check.command.includes("{tests}")) {
 				tests ??= await testsFor(cwd, await workspaceFiles(), changed);
-				const argv = expandTests(item.check, tests);
+				const checkDir = item.check.cwd;
+				const own = checkDir ? tests.filter((test) => owner(test) === checkDir) : tests;
+				const argv = expandTests(item.check, filesForCheck(item.check, own));
 				if (!argv) continue;
 				selected.push({ ...item, argv });
 			} else selected.push(item);
@@ -622,8 +656,8 @@ export default function harnessExtension(pi: ExtensionAPI): void {
 			if (selected.length === 0) continue;
 			const levelOutcomes: CheckOutcome[] = [];
 			for (const item of selected) {
-				const argv = item.argv ?? expandCommand(item.check.command, item.files);
-				if (run.passedCommands.get(commandKey(argv.join(" "))) === changeEpoch) {
+				const argv = checkArgv(item);
+				if (!item.check.cwd && run.passedCommands.get(commandKey(argv.join(" "))) === changeEpoch) {
 					stats.checksReused++;
 					telemetry.record({ type: "check_reused", check: item.check.name });
 					levelOutcomes.push({

@@ -78,6 +78,8 @@ export class ToolExecutionComponent extends Container {
 		{ sourceData: string; sourceMimeType: string; data: string; mimeType: string }
 	> = new Map();
 	private hideComponent = false;
+	/** State changes are cheap during a stream; rebuild renderer children only when a frame needs them. */
+	private displayDirty = true;
 
 	constructor(
 		toolName: string,
@@ -115,6 +117,7 @@ export class ToolExecutionComponent extends Container {
 		}
 
 		this.updateDisplay();
+		this.displayDirty = false;
 	}
 
 	private getCallRenderer(): ToolDefinition<any, any>["renderCall"] | undefined {
@@ -193,18 +196,23 @@ export class ToolExecutionComponent extends Container {
 
 	updateArgs(args: any): void {
 		this.args = args;
-		this.updateDisplay();
+		this.displayDirty = true;
 	}
 
 	markExecutionStarted(): void {
 		this.executionStarted = true;
-		this.updateDisplay();
+		// Establish renderer state (notably shell start time) synchronously; subsequent partial
+		// results remain lazy and are rebuilt only by the coalesced render.
+		this.displayDirty = true;
+		this.ensureDisplay();
 		this.ui.requestRender();
 	}
 
 	setArgsComplete(): void {
 		this.argsComplete = true;
-		this.updateDisplay();
+		// Some renderers compute their final diff only after arguments are complete.
+		this.displayDirty = true;
+		this.ensureDisplay();
 		this.ui.requestRender();
 	}
 
@@ -218,7 +226,7 @@ export class ToolExecutionComponent extends Container {
 	): void {
 		this.result = result;
 		this.isPartial = isPartial;
-		this.updateDisplay();
+		this.displayDirty = true;
 		this.maybeConvertImagesForKitty();
 	}
 
@@ -246,33 +254,38 @@ export class ToolExecutionComponent extends Container {
 					sourceMimeType,
 					...converted,
 				});
-				this.updateDisplay();
+				this.displayDirty = true;
 				this.ui.requestRender();
 			});
 		}
 	}
 
 	setExpanded(expanded: boolean): void {
+		if (this.expanded === expanded) return;
 		this.expanded = expanded;
-		this.updateDisplay();
+		this.displayDirty = true;
 	}
 
 	setShowImages(show: boolean): void {
+		if (this.showImages === show) return;
 		this.showImages = show;
-		this.updateDisplay();
+		this.displayDirty = true;
 	}
 
 	setImageWidthCells(width: number): void {
-		this.imageWidthCells = Math.max(1, Math.floor(width));
-		this.updateDisplay();
+		const nextWidth = Math.max(1, Math.floor(width));
+		if (this.imageWidthCells === nextWidth) return;
+		this.imageWidthCells = nextWidth;
+		this.displayDirty = true;
 	}
 
 	override invalidate(): void {
 		super.invalidate();
-		this.updateDisplay();
+		this.displayDirty = true;
 	}
 
 	override render(width: number): string[] {
+		this.ensureDisplay();
 		if (this.hideComponent) {
 			return [];
 		}
@@ -306,6 +319,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override handleMouse(event: TuiMouseEvent): ReturnType<Container["handleMouse"]> {
+		this.ensureDisplay();
 		if (!this.hasRendererDefinition() || this.getRenderShell() !== "self") return super.handleMouse(event);
 		if (event.y <= 0 || event.y > this.selfRenderHeight) return undefined;
 		return this.selfRenderContainer.handleMouse({
@@ -313,6 +327,14 @@ export class ToolExecutionComponent extends Container {
 			y: event.y - 1,
 			height: this.selfRenderHeight,
 		});
+	}
+
+	private ensureDisplay(): void {
+		if (!this.displayDirty) return;
+		// Clear before invoking extension renderers. A renderer may call context.invalidate(), and
+		// that request must survive this rebuild for the following frame.
+		this.displayDirty = false;
+		this.updateDisplay();
 	}
 
 	private updateDisplay(): void {
