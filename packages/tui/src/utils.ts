@@ -336,13 +336,18 @@ export function getGraphemeCellRange(line: string, column: number): GraphemeCell
 	let currentCol = 0;
 	let i = 0;
 	while (i < line.length) {
-		const ansi = extractAnsiCode(line, i);
-		if (ansi) {
-			i += ansi.length;
+		const ansiLength = ansiCodeLength(line, i);
+		if (ansiLength > 0) {
+			i += ansiLength;
 			continue;
 		}
-		let textEnd = i;
-		while (textEnd < line.length && !extractAnsiCode(line, textEnd)) textEnd++;
+		const textEnd = textRunEnd(line, i);
+		if (isPrintableAsciiRange(line, i, textEnd)) {
+			if (column >= currentCol && column < currentCol + textEnd - i) return { start: column, end: column + 1 };
+			currentCol += textEnd - i;
+			i = textEnd;
+			continue;
+		}
 		for (const { segment } of graphemeSegmenter.segment(line.slice(i, textEnd))) {
 			const width = graphemeWidth(segment);
 			if (width > 0 && column >= currentCol && column < currentCol + width) {
@@ -447,6 +452,29 @@ function asciiVisibleWidth(str: string): number {
 		}
 	}
 	return width;
+}
+
+/**
+ * End of the text run starting at `pos`, where no escape sequence starts: the start of the next
+ * ANSI/OSC/APC sequence, or the end of the string. An ESC that starts no sequence is text.
+ */
+function textRunEnd(str: string, pos: number): number {
+	let next = str.indexOf("\x1b", pos + 1);
+	while (next !== -1 && ansiCodeLength(str, next) === 0) next = str.indexOf("\x1b", next + 1);
+	return next === -1 ? str.length : next;
+}
+
+/**
+ * Whether `str[start, end)` is printable ASCII. In such a text run every character is its own
+ * grapheme one cell wide: no ASCII character extends a grapheme, and the run ends at an escape
+ * sequence or the end of the string, so nothing after it can join its last character.
+ */
+function isPrintableAsciiRange(str: string, start: number, end: number): boolean {
+	for (let i = start; i < end; i++) {
+		const code = str.charCodeAt(i);
+		if (code < 0x20 || code > 0x7e) return false;
+	}
+	return true;
 }
 
 /** Length of the ANSI/OSC/APC escape sequence starting at `pos`, or 0 if there is none. */
@@ -1271,16 +1299,35 @@ export function sliceWithWidth(
 		pendingAnsi = "";
 
 	while (i < line.length) {
-		const ansi = extractAnsiCode(line, i);
-		if (ansi) {
-			if (currentCol >= startCol && currentCol < endCol) result += ansi.code;
-			else if (currentCol < startCol) pendingAnsi += ansi.code;
-			i += ansi.length;
+		const ansiLength = ansiCodeLength(line, i);
+		if (ansiLength > 0) {
+			const code = line.substring(i, i + ansiLength);
+			if (currentCol >= startCol && currentCol < endCol) result += code;
+			else if (currentCol < startCol) pendingAnsi += code;
+			i += ansiLength;
 			continue;
 		}
 
-		let textEnd = i;
-		while (textEnd < line.length && !extractAnsiCode(line, textEnd)) textEnd++;
+		const textEnd = textRunEnd(line, i);
+
+		if (isPrintableAsciiRange(line, i, textEnd)) {
+			// One cell per character: take the columns that fall in the range in one slice.
+			const runEnd = currentCol + textEnd - i;
+			const from = Math.max(startCol, currentCol);
+			const to = Math.min(endCol, runEnd);
+			if (to > from) {
+				if (pendingAnsi) {
+					result += pendingAnsi;
+					pendingAnsi = "";
+				}
+				result += line.slice(i + from - currentCol, i + to - currentCol);
+				resultWidth += to - from;
+			}
+			currentCol = Math.min(runEnd, endCol);
+			i = textEnd;
+			if (currentCol >= endCol) break;
+			continue;
+		}
 
 		for (const { segment } of graphemeSegmenter.segment(line.slice(i, textEnd))) {
 			const w = graphemeWidth(segment);
@@ -1331,24 +1378,55 @@ export function extractSegments(
 	// Track styling state so "after" inherits styling from before the overlay
 	pooledStyleTracker.clear();
 
+	const stopCol = afterLen <= 0 ? beforeEnd : afterEnd;
 	while (i < line.length) {
-		const ansi = extractAnsiCode(line, i);
-		if (ansi) {
+		const ansiLength = ansiCodeLength(line, i);
+		if (ansiLength > 0) {
+			const code = line.substring(i, i + ansiLength);
 			// Track all SGR codes to know styling state at afterStart
-			pooledStyleTracker.process(ansi.code);
+			pooledStyleTracker.process(code);
 			// Include ANSI codes in their respective segments
 			if (currentCol < beforeEnd) {
-				pendingAnsiBefore += ansi.code;
+				pendingAnsiBefore += code;
 			} else if (currentCol >= afterStart && currentCol < afterEnd && afterStarted) {
 				// Only include after we've started "after" (styling already prepended)
-				after += ansi.code;
+				after += code;
 			}
-			i += ansi.length;
+			i += ansiLength;
 			continue;
 		}
 
-		let textEnd = i;
-		while (textEnd < line.length && !extractAnsiCode(line, textEnd)) textEnd++;
+		const textEnd = textRunEnd(line, i);
+
+		if (isPrintableAsciiRange(line, i, textEnd)) {
+			// One cell per character. Like the grapheme loop below, stop after the column that
+			// reaches `stopCol`, but always consume at least one character.
+			const runStart = currentCol;
+			const runEnd = Math.min(runStart + textEnd - i, Math.max(stopCol, runStart + 1));
+			const beforeTo = Math.min(runEnd, beforeEnd);
+			if (beforeTo > runStart) {
+				if (pendingAnsiBefore) {
+					before += pendingAnsiBefore;
+					pendingAnsiBefore = "";
+				}
+				before += line.slice(i, i + beforeTo - runStart);
+				beforeWidth += beforeTo - runStart;
+			}
+			const afterFrom = Math.max(runStart, afterStart, beforeEnd);
+			const afterTo = Math.min(runEnd, afterEnd);
+			if (afterTo > afterFrom) {
+				if (!afterStarted) {
+					after += pooledStyleTracker.getActiveCodes();
+					afterStarted = true;
+				}
+				after += line.slice(i + afterFrom - runStart, i + afterTo - runStart);
+				afterWidth += afterTo - afterFrom;
+			}
+			currentCol = runEnd;
+			i = textEnd;
+			if (currentCol >= stopCol) break;
+			continue;
+		}
 
 		for (const { segment } of graphemeSegmenter.segment(line.slice(i, textEnd))) {
 			const w = graphemeWidth(segment);

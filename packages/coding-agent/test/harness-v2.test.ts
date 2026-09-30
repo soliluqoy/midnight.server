@@ -209,6 +209,23 @@ describe("workspace files and related tests", () => {
 		expect(isTestPath("src/port.js")).toBe(false);
 	});
 
+	it("does not run helpers and scripts beside named tests", async () => {
+		// packages/tui/test/key-tester.ts imports the changed source but waits for keyboard input, so
+		// `node --test` on it never finished and the related-tests check timed out.
+		writeTree(root, {
+			"test/key-tester.js": "import { parsePort } from '../src/port.js';\n",
+			"test/fixture.js": "import { pad } from '../src/util/strings.js';\n",
+			"test/strings.test.js": "import { pad } from './fixture.js';\n",
+			"legacy/test/csv.js": "import { parseCsvLine } from '../../src/csv.js';\n",
+		});
+		const { files } = await listWorkspaceFiles(root);
+		expect(await testsFor(root, files, ["src/port.js"])).toEqual(["test/port.test.js"]);
+		// A changed helper selects the tests that import it, not itself.
+		expect(await testsFor(root, files, ["test/fixture.js"])).toEqual(["test/strings.test.js"]);
+		// Without named tests in the directory, every file there is a test.
+		expect(await testsFor(root, files, ["src/csv.js"])).toEqual(["legacy/test/csv.js"]);
+	});
+
 	it("does not index the home directory or a filesystem root", async () => {
 		expect(isUnindexableRoot(homedir())).toBe(true);
 		expect(isUnindexableRoot(parse(root).root)).toBe(true);

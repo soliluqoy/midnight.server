@@ -16,6 +16,8 @@
 ### Fixed
 
 - The `powershell` tool reports a native command's exit code (`node -e "process.exit(3)"` is 3, not 1).
+- Harness: related tests no longer include helpers and scripts in a test directory whose tests are named as tests (`test/key-tester.ts` beside `test/*.test.ts`); `node --test` ran the interactive key tester and the check timed out. A changed helper selects the tests that import it.
+- Fullscreen: scrolling and redraws no longer lag while the file explorer or sidebar is open; each frame spent 15-20 ms compositing the side columns and now takes a few milliseconds.
 
 ## [0.99.1-midnight.1] - 2026-09-30
 

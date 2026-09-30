@@ -8,10 +8,25 @@ import {
 	getActiveBackgroundAnsi,
 	getGraphemeCellRange,
 	sliceByColumn,
+	sliceWithWidth,
 	visibleWidth,
 } from "./utils.ts";
 
 const OSC133_ZONE_PREFIX = /^(?:\x1b\]133;[ABC](?:\x07|\x1b\\))+/;
+/** Same reset `compositeTuiLine` puts around a composited segment: SGR reset and OSC 8 link close. */
+const SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07";
+
+/**
+ * Screen rows being painted, with the column where each row's content ends. Side-by-side columns
+ * (explorer, transcript, sidebar) paint left to right, so most boxes start at or after that column
+ * and can be appended without re-scanning the row. `totalWidth` marks an end that is not known
+ * exactly, which forces the compositing path for anything painted later on that row.
+ */
+interface PaintTarget {
+	lines: string[];
+	ends: number[];
+	totalWidth: number;
+}
 
 export interface LayoutRect {
 	x: number;
@@ -250,14 +265,15 @@ function layoutComponent(
 	return box;
 }
 
+/** Returns the row with the cell replaced and the column just past the replaced cell. */
 function replaceScrollbarCell(
 	line: string,
 	column: number,
 	totalWidth: number,
 	replacement: string,
 	preserveTargetBackground: boolean,
-): string {
-	if (isImageLine(line)) return line;
+): { line: string; end: number } {
+	if (isImageLine(line)) return { line, end: totalWidth };
 
 	const graphemeRange = getGraphemeCellRange(line, column);
 	const start = graphemeRange?.start ?? column;
@@ -278,7 +294,10 @@ function replaceScrollbarCell(
 	const cellPaddingBefore = " ".repeat(Math.max(0, column - start));
 	const cellPaddingAfter = " ".repeat(Math.max(0, end - column - 1));
 	const targetStyle = `\x1b[0m\x1b]8;;\x07${preserveTargetBackground ? getActiveBackgroundAnsi(targetPrefix) : ""}`;
-	return `${before}${beforePadding}${targetStyle}${cellPaddingBefore}${replacement}${cellPaddingAfter}${after}`;
+	return {
+		line: `${before}${beforePadding}${targetStyle}${cellPaddingBefore}${replacement}${cellPaddingAfter}${after}`,
+		end,
+	};
 }
 
 export function getScrollbarGeometry(box: LayoutBox, includeHiddenAuto = false): ScrollbarGeometry | undefined {
@@ -310,9 +329,10 @@ export function getScrollbarGeometry(box: LayoutBox, includeHiddenAuto = false):
 	};
 }
 
-function paintScrollbar(box: LayoutBox, screen: string[], totalWidth: number): void {
+function paintScrollbar(box: LayoutBox, target: PaintTarget): void {
 	const geometry = getScrollbarGeometry(box);
 	if (!geometry || !box.scrollView) return;
+	const screen = target.lines;
 
 	for (let offset = 0; offset < geometry.trackHeight; offset++) {
 		const row = geometry.trackTop + offset;
@@ -321,17 +341,50 @@ function paintScrollbar(box: LayoutBox, screen: string[], totalWidth: number): v
 		const replacement = isThumb
 			? box.scrollView.scrollbarThumbStyle(box.scrollView.isScrollbarActive ? "█" : "┃")
 			: box.scrollView.scrollbarTrackStyle("│");
-		screen[row] = replaceScrollbarCell(
+		const replaced = replaceScrollbarCell(
 			screen[row] ?? "",
 			geometry.column,
-			totalWidth,
+			target.totalWidth,
 			replacement,
 			box.scrollView.scrollbar !== "always",
 		);
+		screen[row] = replaced.line;
+		// Content past the cell is kept, so the row ends at whichever is further.
+		target.ends[row] = Math.max(target.ends[row]!, replaced.end);
 	}
 }
 
-function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
+/**
+ * Paint `line` into `row` at the box's columns. A box that starts at or after the row's content
+ * end is appended: the result matches `compositeTuiLine` (padding, reset, line padded to the box
+ * width, reset) without re-segmenting the part of the row that is already painted. That part is
+ * most of the row for the transcript and sidebar columns, on every frame and scroll step.
+ */
+function paintLine(target: PaintTarget, row: number, line: string, x: number, width: number): void {
+	const screen = target.lines;
+	const existing = screen[row] ?? "";
+	const end = target.ends[row]!;
+	if (end <= x && !isImageLine(line) && !isImageLine(existing)) {
+		let text = line;
+		let textWidth = line.includes("\t") ? Number.POSITIVE_INFINITY : visibleWidth(line);
+		if (textWidth > width) {
+			const sliced = sliceWithWidth(line, 0, width, true);
+			text = sliced.text;
+			textWidth = sliced.width;
+		}
+		screen[row] =
+			`${existing}${" ".repeat(x - end)}${SEGMENT_RESET}${text}` +
+			`${" ".repeat(Math.max(0, width - textWidth))}${SEGMENT_RESET}`;
+		target.ends[row] = x + Math.max(width, textWidth);
+		return;
+	}
+	screen[row] = compositeTuiLine(existing, line, x, width, target.totalWidth);
+	target.ends[row] = target.totalWidth;
+}
+
+function paintBox(box: LayoutBox, target: PaintTarget): void {
+	const screen = target.lines;
+	const totalWidth = target.totalWidth;
 	if (box.lines) {
 		const offset = box.lineOffset ?? 0;
 		const firstRow = Math.max(box.rect.y, box.clip.y, 0);
@@ -353,12 +406,13 @@ function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
 			// width clamp still truncates over-wide lines.
 			if (box.rect.x === 0 && box.rect.width >= totalWidth && (isImageLine(line) || !screen[row])) {
 				screen[row] = line;
+				target.ends[row] = totalWidth;
 			} else {
-				screen[row] = compositeTuiLine(screen[row] ?? "", line, box.rect.x, box.rect.width, totalWidth);
+				paintLine(target, row, line, box.rect.x, box.rect.width);
 			}
 		}
 	}
-	for (const child of box.children) paintBox(child, screen, totalWidth);
+	for (const child of box.children) paintBox(child, target);
 
 	if (box.scrollView && box.scrollContentLines && box.scrollView.scrollTop > 0 && box.rect.height > 0) {
 		for (let imageRow = box.scrollView.scrollTop - 1; imageRow >= 0; imageRow--) {
@@ -369,7 +423,10 @@ function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
 				if (hiddenRows < metadata.rows) {
 					const visibleRows = Math.min(box.rect.height, metadata.rows - hiddenRows);
 					const cropped = cropKittyImageLine(imageLine, hiddenRows, visibleRows);
-					if (box.rect.x === 0 && box.rect.width >= totalWidth) screen[box.rect.y] = cropped;
+					if (box.rect.x === 0 && box.rect.width >= totalWidth) {
+						screen[box.rect.y] = cropped;
+						target.ends[box.rect.y] = totalWidth;
+					}
 				}
 				break;
 			}
@@ -377,7 +434,7 @@ function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
 		}
 	}
 
-	paintScrollbar(box, screen, totalWidth);
+	paintScrollbar(box, target);
 }
 
 export function renderLayoutFrame(
@@ -401,7 +458,7 @@ export function renderLayoutFrame(
 		height: safeHeight,
 	});
 	const lines = Array.from({ length: safeHeight }, () => "");
-	paintBox(rootBox, lines, safeWidth);
+	paintBox(rootBox, { lines, ends: Array.from({ length: safeHeight }, () => 0), totalWidth: safeWidth });
 	return {
 		root: rootBox,
 		width: safeWidth,

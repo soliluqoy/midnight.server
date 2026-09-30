@@ -158,6 +158,41 @@ describe("viewport layout", () => {
 		assert.deepStrictEqual(visibleLines(frame.lines), ["left  right"]);
 	});
 
+	it("paints side columns around a scrolled transcript without shifting or leaking styles", () => {
+		// Explorer | transcript with scrollbar | sidebar, as in the fullscreen coding agent. The left
+		// column leaves a background and a hyperlink open and uses wide characters.
+		const explorer = {
+			render: () => ["\x1b[44mexplorer", "\x1b]8;;http://x\x07\u4e2d\u6587x"],
+			invalidate: () => {},
+		};
+		const transcript = new ScrollView(
+			{ render: () => ["a".repeat(20), "body"], invalidate: () => {} },
+			{ scrollbar: "always" },
+		);
+		const sidebar = { render: () => ["side", "link"], invalidate: () => {} };
+		const frame = renderLayoutFrame(
+			new HStack(
+				[
+					{ component: explorer, basis: 8, grow: 0, shrink: 0 },
+					{ component: transcript, basis: 0, grow: 1, shrink: 1 },
+					{ component: sidebar, basis: 4, grow: 0, shrink: 0 },
+				],
+				{ gap: 1 },
+			),
+			24,
+			2,
+			() => {},
+		);
+
+		assert.deepStrictEqual(visibleLines(frame.lines), [
+			"explorer aaaaaaaaa\u2503 side",
+			"\u4e2d\u6587x    body     \u2503 link",
+		]);
+		const [first, second] = frame.lines as [string, string];
+		assert.ok(first.lastIndexOf("\x1b[0m", first.indexOf("aaa")) > first.indexOf("\x1b[44m"));
+		assert.ok(second.indexOf("\x1b]8;;\x07", second.indexOf("\u6587x")) < second.indexOf("body"));
+	});
+
 	it("does not paint zero-width horizontal children", () => {
 		const frame = renderLayoutFrame(
 			new HStack([
