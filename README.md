@@ -2,6 +2,8 @@
 
 Midnight's session sidebar and file explorer, extracted from `midnight.server` into a standalone pi extension. Targets **pi 1.0.4**, Node 22.19+, and fullscreen mode. No build step or runtime dependencies beyond pi.
 
+![Midnight running in pi, showing the file explorer, session sidebar, and folder locations menu](docs/images/midnight-preview.jpg)
+
 ## Install
 
 ```powershell
