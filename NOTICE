@@ -1,0 +1,12 @@
+Derived from midnight.server, commit bd9cd3efa21378fa44913d529a60825907043e44:
+packages/coding-agent/src/modes/interactive/components/file-explorer.ts
+packages/coding-agent/src/modes/interactive/components/file-preview.ts
+packages/coding-agent/src/modes/interactive/components/sidebar.ts
+packages/coding-agent/src/core/session-file-changes.ts
+packages/coding-agent/src/core/workspace-files.ts
+packages/coding-agent/src/core/git-status.ts
+
+Source: https://github.com/soliluqoy/midnight.server
+Original MIT copyright and license are retained in LICENSE.
+Adaptations provide pi extension integration, asynchronous filesystem access,
+configurable shortcuts, cached rendering and lifecycle cleanup.
