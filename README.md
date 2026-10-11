@@ -1,10 +1,40 @@
 # midnight.server
 
-Midnight's session sidebar and file explorer, extracted from `midnight.server` into a standalone pi extension. Targets **pi 1.0.4**, Node 22.19+, and fullscreen mode. No build step or runtime dependencies beyond pi.
+Midnight's session sidebar and file explorer for **pi 1.0.4**, with native project-tool plugins for **Claude Code** and **Codex CLI**. Requires Node 22.19+. The Pi extension uses fullscreen mode with no build step or runtime dependencies beyond pi; the native plugins need only Node and Git.
+
+Claude Code and Codex CLI get read-only Git status, folder browsing, file previews, and staged/unstaged diffs through a bundled Midnight skill and MCP server. Claude also supports Midnight's optional status line; Codex uses its built-in footer. See [Native CLI plugins](docs/clients.md) for setup and feature details. The panels, shortcuts, compact tool rendering, and token-speed display are Pi features.
 
 ![Midnight running in pi, showing the file explorer, session sidebar, and folder locations menu](docs/images/midnight-preview.jpg)
 
 ## Install
+
+Install with the commands for your client below. Native plugins require Node.js **22.19+** and Git on PATH, with no build or `npm install`. Tested with Claude Code **2.1.293** and Codex CLI **0.162.1**.
+
+### Claude Code
+
+Run in your terminal:
+
+```powershell
+claude plugin marketplace add soliluqoy/midnight.server
+claude plugin install midnight@midnight
+```
+
+Start a new Claude Code session in your project, then run `/midnight:midnight`. You can also use `/midnight:midnight preview src/index.ts` or `/midnight:midnight diff src/index.ts`. Run `/mcp` to check the server and its four tools. Inside Claude Code, the equivalent install commands start with `/plugin` instead of `claude plugin`.
+
+### Codex CLI
+
+Run in your terminal:
+
+```powershell
+codex plugin marketplace add soliluqoy/midnight.server
+codex plugin add midnight@midnight
+```
+
+Start a new Codex session in your project. Type `$` and select `midnight:midnight`, or ask “Use Midnight to show this project's status.” Run `/mcp` to check the tools and `/statusline` to choose built-in footer fields.
+
+For local installations, updates, removal, and Claude's optional status line, see the [client guide](docs/clients.md). Tagged source archives and a packaged `.tgz` are available from [GitHub Releases](https://github.com/soliluqoy/midnight.server/releases). These plugins install directly from GitHub; an npm registry install is not required.
+
+### Pi
 
 ```powershell
 pi install git:github.com/soliluqoy/midnight.server
@@ -22,7 +52,7 @@ pi --extension ./src/index.ts --tui-mode fullscreen
 
 For ongoing local development, configure the local checkout as a package **instead of** the Git install, not alongside it. `pi list` should show only one Midnight source. Enabling both creates competing panels/shortcuts; `/reload` reloads both copies rather than updating the Git checkout from your local edits.
 
-## Controls
+## Pi controls
 
 | Key | Action |
 | --- | --- |
@@ -100,7 +130,7 @@ Default session storage follows the destination project; an existing custom sess
 
 **Performance:** no new polling, watchers, background discovery, render-path I/O, history copying, or model calls. Path validation and session creation run only on explicit activation. The locations menu does no filesystem work until an action is chosen; switching does not first browse/scan the destination. Pi’s native resource reload and Midnight’s normal initial shared Git refresh still have a one-time switching cost. There is no additional steady-state refresh work.
 
-## Configuration
+## Pi configuration
 
 Both panels start in `auto` mode: the sidebar appears at 110 columns; the explorer at 150. The panels reserve 36 and 32 columns respectively. Explicitly opened panels still hide when too little room remains for the prompt.
 
@@ -143,7 +173,7 @@ Customize keys in `~/.pi/agent/keybindings.json`, then `/reload`:
 
 Generic navigation uses pi's `tui.select.*` bindings. An empty array disables a binding. Shortcut handling leaves overlays in control while they are open.
 
-## Performance and integration
+## Pi performance and integration
 
 Filesystem reads and Git commands run asynchronously, outside rendering. One shared, NUL-delimited project Git status scan supplies the branch, summary, file marks, ignored paths, and session-file reconciliation. Repository identity is revalidated at refresh, with bounded HEAD/index metadata probes around status and deltas; creating a nested repository cannot leave a stale workspace prefix. Only repositories owning active session candidates receive additional status scans, grouped per repository. Ownership lookups coalesce by parent within each refresh. Numstat reads batch candidate paths by repository/layer with bounded argument lengths; detailed patches are fetched only on click. At most four candidate filesystem reads run concurrently, and refresh invalidates content even when status codes remain unchanged. Untracked files are counted individually, including files inside new directories. Directory reads coalesce, use a shared natural-sort collator, and run at most eight at a time. Refresh batches explorer updates and reloads only visible, expanded directories; collapsed directories refresh when reopened. Hidden explorers do not trigger directory reads. Previous listings remain visible until replacement data arrives. Folder navigation reads only the destination directory and reuses it immediately. Only the project cache and the current browsing cache are retained; replaced/pending locations are disposed and late results discarded. External browsing adds no Git scans, polling, watchers, model calls, or dependencies.
 

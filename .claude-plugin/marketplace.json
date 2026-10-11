@@ -1,0 +1,13 @@
+{
+	"name": "midnight",
+	"description": "Midnight native project browsing and Git tools for coding agents",
+	"owner": { "name": "soliluqoy" },
+	"plugins": [
+		{
+			"name": "midnight",
+			"source": "./",
+			"description": "Midnight project browsing and Git tools",
+			"version": "0.2.0"
+		}
+	]
+}
