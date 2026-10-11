@@ -15,7 +15,7 @@ const help = `Midnight native client tools (Node 22.19+ and Git)
 
 Status/list/preview/diff return JSON. --offset N and --limit N paginate results.
 Config prints a settings fragment; merge it with your settings. It writes nothing.
-The plugins provide native commands and status information, not Pi's panel layout.
+Claude Code also provides /midnight-sidebar. Codex sidebars require the separate Midnight CLI fork.
 `;
 
 export function configuration(client: string, entry = fileURLToPath(import.meta.url)): string {

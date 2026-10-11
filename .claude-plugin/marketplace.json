@@ -6,8 +6,8 @@
 		{
 			"name": "midnight",
 			"source": "./",
-			"description": "Midnight project browsing and Git tools",
-			"version": "0.2.0"
+			"description": "Midnight native sidebar, project browsing and Git tools",
+			"version": "0.3.0"
 		}
 	]
 }

@@ -2,7 +2,19 @@
 
 Midnight's session sidebar and file explorer for **pi 1.0.4**, with native project-tool plugins for **Claude Code** and **Codex CLI**. Requires Node 22.19+. The Pi extension uses fullscreen mode with no build step or runtime dependencies beyond pi; the native plugins need only Node and Git.
 
-Claude Code and Codex CLI get read-only Git status, folder browsing, file previews, and staged/unstaged diffs through a bundled Midnight skill and MCP server. Claude also supports Midnight's optional status line; Codex uses its built-in footer. See [Native CLI plugins](docs/clients.md) for setup and feature details. The panels, shortcuts, compact tool rendering, and token-speed display are Pi features.
+Claude Code and Codex CLI get read-only Git status, folder browsing, file previews, and staged/unstaged diffs through a bundled Midnight skill and MCP server. Midnight **v0.3.0** also adds a **native Claude Code sidebar** through its Mods API. For a sidebar inside Codex itself, use the separate [Midnight Codex fork](https://github.com/soliluqoy/midnight.codex/tree/midnight/sidebar). See [Native sidebars](docs/sidebars.md) for commands and limits, and [Native CLI plugins](docs/clients.md) for the conversation tools. Pi retains its own panels, shortcuts, compact tool rendering, and token-speed display.
+
+## Native sidebars
+
+After installing Midnight below, start Claude Code **2.1.293+** in your working project:
+
+```powershell
+claude
+```
+
+The sidebar opens automatically in a wide fullscreen terminal. Use `/midnight-sidebar` to open/focus it, `/midnight-sidebar hide` to close it, or `/midnight-sidebar refresh` to reload Git. It shows session usage, Git changes, and interactive file views. Existing installations can follow the [update commands](docs/clients.md#claude-code) to get v0.3.0.
+
+Codex needs the [custom CLI build](docs/sidebars.md#codex-cli-fork), available as a [Windows x64 prerelease](https://github.com/soliluqoy/midnight.codex/releases/tag/v0.162.1-midnight.1). Its sidebar is drawn by Codex's own renderer; **Alt+S** toggles it and **Alt+R** refreshes Git. The stock Codex plugin remains a tools-only integration.
 
 ![Midnight running in pi, showing the file explorer, session sidebar, and folder locations menu](docs/images/midnight-preview.jpg)
 

@@ -5,23 +5,25 @@ read-only MCP server. The Pi extension keeps its existing panels and controls.
 
 | Feature | Pi | Claude Code | Codex CLI |
 | --- | --- | --- | --- |
-| Sidebar and interactive Explorer | Fullscreen panels | Conversation tools | Conversation tools |
-| Git branch and pending changes | Sidebar | Tools and custom status line | Tools and built-in footer |
-| Folder browsing, previews, staged/unstaged diffs | Interactive views | Midnight tools | Midnight tools |
-| Session title, model, context, cost | Sidebar | Client-reported status-line fields | Client's built-in UI |
+| Sidebar and interactive Explorer | Fullscreen panels | Native mod pane and file views | Native sidebar in the separate Codex fork |
+| Git branch and pending changes | Sidebar | Sidebar, tools, optional status line | Fork sidebar, tools, built-in footer |
+| Folder browsing, previews, staged/unstaged diffs | Interactive views | Native pane and Midnight tools | Midnight tools |
+| Session title, model, context, cost | Sidebar | Pane shows model/context/cost; status line can report title | Fork sidebar shows title/model/context; built-in UI |
 | Session-touched pending files | Supported | Repository-wide changes | Repository-wide changes |
 | Compact tool rendering, token speed, TTFT | Supported | Not provided by this plugin | Not provided by this plugin |
 | Switch working project | Fresh Pi session | Start the client in the other folder | Start the client in the other folder |
 
-The documented plugin APIs do not provide Pi's layout/component controls. These
-ports use the clients' supported interfaces; installing them does not add side
-panels or Pi's Alt+S/Alt+E shortcuts.
+Claude Code's Mods API now provides a native pane. Midnight v0.3.0 includes that
+mod. Stock Codex plugins still have no documented layout API, so
+its native sidebar lives in a separate, pinned CLI fork. See [Native sidebars](sidebars.md)
+for setup, supported controls, and differences from Pi.
 
 ## Requirements
 
 - Node.js **22.19+** and Git on the client's PATH.
-- Claude Code with plugin support, or Codex CLI with portable Agent Plugins
-  support. Integration checks used Claude Code **2.1.293** and Codex **0.162.1**.
+- Claude Code **2.1.293+** for the sidebar mod, or Codex CLI with portable Agent Plugins
+  support. Checks used Claude Code **2.1.293** (live pane), **2.1.296** (mod tests),
+  and Codex **0.162.1** (the fork's upstream base).
 - The plugin's source checkout/cache must be outside `node_modules`: Node does
   not strip TypeScript in dependencies. Install as a CLI plugin, not an npm dependency.
 
@@ -44,7 +46,7 @@ Use `/midnight:midnight` for a project overview, or
 `/midnight:midnight preview src/index.ts` and `/midnight:midnight diff src/index.ts`.
 `/mcp` shows the Midnight server and its four tools.
 
-To pin this release, use `soliluqoy/midnight.server#v0.2.0` as the marketplace
+To pin this release, use `soliluqoy/midnight.server#v0.3.0` as the marketplace
 source. To try a local checkout for one session, run from your working project:
 
 ```powershell
@@ -115,7 +117,7 @@ Start a new Codex session in your project. Select `midnight:midnight` from the `
 skill picker, or ask Midnight to show status, browse a folder, preview a file, or
 inspect its diff. `/mcp` lists the bundled tools.
 
-To pin this release, append `--ref v0.2.0` to the marketplace command. For local
+To pin this release, append `--ref v0.3.0` to the marketplace command. For local
 development, replace `soliluqoy/midnight.server` with your checkout path, such as
 `"C:/zsolusi/midnight.server"`. Use one marketplace source at a time; remove an
 existing source with `codex plugin marketplace remove midnight` before adding
@@ -198,6 +200,7 @@ choose a different project. `--help` lists commands.
 ## References
 
 Integration contracts: [Claude installation and updates](https://code.claude.com/docs/en/discover-plugins),
+[Claude native panes](https://code.claude.com/docs/en/plugins/mods/interface),
 [Claude plugin components](https://code.claude.com/docs/en/plugins/components),
 [Claude status line](https://code.claude.com/docs/en/statusline),
 [Codex plugin packaging](https://developers.openai.com/plugins/build/plugins),
