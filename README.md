@@ -1,60 +1,22 @@
 # midnight.server
 
-Midnight's session sidebar and file explorer for **pi 1.0.4**, with native project-tool plugins for **Claude Code** and **Codex CLI**. Requires Node 22.19+. The Pi extension uses fullscreen mode with no build step or runtime dependencies beyond pi; the native plugins need only Node and Git.
+A session sidebar and file explorer for **Pi**, with compact tool output, automatic session titles, and token-speed stats.
 
-Claude Code and Codex CLI get read-only Git status, folder browsing, file previews, and staged/unstaged diffs through a bundled Midnight skill and MCP server. Midnight **v0.3.0** also adds a **native Claude Code sidebar** through its Mods API. For a sidebar inside Codex itself, use the separate [Midnight Codex fork](https://github.com/soliluqoy/midnight.codex/tree/midnight/sidebar). See [Native sidebars](docs/sidebars.md) for commands and limits, and [Native CLI plugins](docs/clients.md) for the conversation tools. Pi retains its own panels, shortcuts, compact tool rendering, and token-speed display.
+Requires **Pi 1.0.4**, **Node.js 22.19+**, and Git on PATH. Side panels need fullscreen mode. No build step or runtime dependencies beyond Pi.
 
-## Native sidebars
+[**v0.4.0**](https://github.com/soliluqoy/midnight.server/releases/tag/v0.4.0) returns Midnight to a Pi-only extension. Claude Code and Codex CLI integrations are no longer included.
 
-After installing Midnight below, start Claude Code **2.1.293+** in your working project:
-
-```powershell
-claude
-```
-
-The sidebar opens automatically in a wide fullscreen terminal. Use `/midnight-sidebar` to open/focus it, `/midnight-sidebar hide` to close it, or `/midnight-sidebar refresh` to reload Git. It shows session usage, Git changes, and interactive file views. Existing installations can follow the [update commands](docs/clients.md#claude-code) to get v0.3.0.
-
-Codex needs the [custom CLI build](docs/sidebars.md#codex-cli-fork), available as a [Windows x64 prerelease](https://github.com/soliluqoy/midnight.codex/releases/tag/v0.162.1-midnight.1). Its sidebar is drawn by Codex's own renderer; **Alt+S** toggles it and **Alt+R** refreshes Git. The stock Codex plugin remains a tools-only integration.
-
-![Midnight running in pi, showing the file explorer, session sidebar, and folder locations menu](docs/images/midnight-preview.jpg)
+![Midnight's file explorer, session sidebar, and folder menu](docs/images/midnight-preview.jpg)
 
 ## Install
-
-Install with the commands for your client below. Native plugins require Node.js **22.19+** and Git on PATH, with no build or `npm install`. Tested with Claude Code **2.1.293** and Codex CLI **0.162.1**.
-
-### Claude Code
-
-Run in your terminal:
-
-```powershell
-claude plugin marketplace add soliluqoy/midnight.server
-claude plugin install midnight@midnight
-```
-
-Start a new Claude Code session in your project, then run `/midnight:midnight`. You can also use `/midnight:midnight preview src/index.ts` or `/midnight:midnight diff src/index.ts`. Run `/mcp` to check the server and its four tools. Inside Claude Code, the equivalent install commands start with `/plugin` instead of `claude plugin`.
-
-### Codex CLI
-
-Run in your terminal:
-
-```powershell
-codex plugin marketplace add soliluqoy/midnight.server
-codex plugin add midnight@midnight
-```
-
-Start a new Codex session in your project. Type `$` and select `midnight:midnight`, or ask “Use Midnight to show this project's status.” Run `/mcp` to check the tools and `/statusline` to choose built-in footer fields.
-
-For local installations, updates, removal, and Claude's optional status line, see the [client guide](docs/clients.md). Tagged source archives and a packaged `.tgz` are available from [GitHub Releases](https://github.com/soliluqoy/midnight.server/releases). These plugins install directly from GitHub; an npm registry install is not required.
-
-### Pi
 
 ```powershell
 pi install git:github.com/soliluqoy/midnight.server
 ```
 
-Git access to this repository is required. Restart pi or run `/reload`. Select fullscreen TUI mode in `/settings` if needed.
+Restart Pi or run `/reload`, then choose fullscreen TUI mode in `/settings`. Source archives, a packaged `.tgz`, and checksums are available from [GitHub Releases](https://github.com/soliluqoy/midnight.server/releases).
 
-To try a local checkout for one session:
+To try a local checkout:
 
 ```powershell
 git clone https://github.com/soliluqoy/midnight.server.git
@@ -62,111 +24,83 @@ cd midnight.server
 pi --extension ./src/index.ts --tui-mode fullscreen
 ```
 
-For ongoing local development, configure the local checkout as a package **instead of** the Git install, not alongside it. `pi list` should show only one Midnight source. Enabling both creates competing panels/shortcuts; `/reload` reloads both copies rather than updating the Git checkout from your local edits.
+**Load only one Midnight source.** For local development, use the checkout instead of the Git-installed copy. Check `pi list`; duplicate copies compete for panels and shortcuts.
 
-## Pi controls
+## Controls
 
 | Key | Action |
 | --- | --- |
 | Alt+S | Toggle the right session sidebar |
-| Alt+E | Show and focus the left explorer; hide it when already focused |
-| Up/Down, PageUp/PageDown | Navigate files |
-| Right/Left | Expand/collapse a directory or select its parent |
-| Enter | Expand a directory or insert `@path` into the prompt |
-| Space | Read-only file preview |
-| Alt+G (Explorer focused) | Locations menu: browse folders or explicitly switch the working project |
-| Alt+Up (Explorer focused) | Browse the parent folder |
-| Alt+Home (Explorer focused) | Back to the session’s project folder |
-| Escape | Close preview or return to the prompt |
-| Other typing | Return to the prompt and forward the keystroke |
+| Alt+E | Show/focus the left Explorer; hide it when already focused |
+| Up/Down, PageUp/PageDown | Move through files |
+| Right/Left | Expand/collapse a folder or select its parent |
+| Enter | Open a folder or insert `@path` into the prompt |
+| Space | Preview a file without editing it |
+| Alt+G | Open the Explorer's folder/project menu |
+| Alt+Up | Browse the parent folder |
+| Alt+Home | Return to the session's project folder |
+| Escape | Close a preview or return to the prompt |
+| Ctrl+O | Expand/collapse tool output |
 
-Click to select files, double-click to insert them, or use the mouse wheel to scroll. Click the sidebar model to select a model. Explorer previews include line numbers, syntax highlighting, scrolling, and Enter to insert a reference. Binary files and files larger than 1 MiB display an explanation instead.
+File-navigation keys apply while Explorer is focused. Other typing returns to the prompt. Click to select, double-click to insert a file, and use the mouse wheel to scroll. Click the sidebar's model name to choose a model. In a preview, Enter inserts a file reference.
 
-**SESSION FILES** shows files touched by successful `edit`/`write` tools on the active conversation branch that still have pending changes in their owning Git repository. Restoring all changes, removing an untracked file, or committing a touched file removes its row and Explorer session dot at the next refresh. Tracked deletions, staged changes, untracked files, and conflicts remain visible. Sibling/nested repositories and linked worktrees are checked independently; the sidebar **GIT** summary remains the working project's summary. Shell-only changes to never-touched paths appear only in Git/Explorer marks. Shell changes to already-touched paths are reconciled normally.
+Both panels start in `auto` mode: the sidebar appears at 110 columns and Explorer at 150. Panels hide when the terminal is too narrow, even when explicitly opened.
 
-This is a **dirty-file view scoped to session-touched paths**, not an exact session-start diff or line-ownership claim. Pre-existing user changes and subsequent external edits to a touched file can be included. Conversation-tree navigation changes the candidate history, not the disk: each branch is compared against disk state **now**. Saved operations and messages are never rewritten to remove undone edits.
+## Features
 
-Click a pending entry for its current diff, revalidated before opening. Tracked previews have separate **Staged — HEAD → index** and **Unstaged — index → working tree** sections (an empty tree replaces HEAD before the first commit). Row totals sum both layers; a line can occur in both, even when the working file equals HEAD. Untracked text is compared against empty content using the current file, never an old write snapshot. Conflicts, binary content, mode/type/symlink and submodule changes show explicit status without invented line counts. Pi's diff styling, scrolling, Escape/Space to close, and Enter to insert `@file` are retained. Previews are bounded to 1 MiB and 20,000 source lines; oversized output explains the limit instead of displaying a partial patch as complete. Renames reference the destination and identify both paths in the preview.
+### Session sidebar
 
-**RECORDED FILES** separately labels unverifiable candidates as `history only · status unavailable`. Existing non-Git/ignored files have no reliable persisted baseline and therefore no current +/- totals or pending dots. Clicking them explicitly shows **Recorded operations — not current diff**. Confirmed-absent non-Git/ignored paths disappear; permission/Git failures never count as clean. During refresh, the previous reconciled snapshot remains visible with an updating/stale indication. Existing previews close when refresh invalidates their source; concurrent changes detected while reading produce an unavailable explanation rather than an atomic-snapshot claim. Refresh happens on initialization/resume/reload, agent completion (including bash-only undo), tree navigation, compaction, Explorer focus, and `/midnight refresh`. External changes are not polled.
+Shows the session title, model/thinking level, context use, token totals, cost, runtime/trust status, active tools, Git status, and session-touched files.
 
-The sidebar also shows runtime and trust status, active tools, session title, Git branch/status/ahead/behind, context usage, input/output token totals, cost/subscription status, and model/thinking level.
+While the sidebar is visible, repeated session/model/usage fields disappear from Pi's footer. Cache stats and extension statuses remain. Hiding the sidebar restores the normal footer. Explorer hides the footer's directory path only when it shows the same working directory.
 
-In fullscreen, the session name, Git branch, context, input/output tokens, cost and model/provider/thinking level appear only in the sidebar while it is visible. Cache reads/writes (`R`/`W`) and cache-hit rate (`CH`) stay in the footer and are not duplicated in the sidebar. Closing the sidebar (Alt+S), shrinking the terminal until it hides, or leaving fullscreen restores them in pi's bottom bar. The explorer alone does not hide them. The working-directory path is hidden from the footer only while the visible Explorer shows that same directory. Hiding Explorer or browsing elsewhere restores it; the browse location never replaces a different session working directory. Branch/session labels remain when the sidebar is hidden, and a fully redundant path row is removed. Sidebar context usage and token/cost totals refresh as messages and tool results are saved, rather than waiting for the entire agent run to end. Context percentages use the same one-decimal precision as pi's footer; `(auto)` indicates automatic compaction.
+### Session files and diffs
 
-### Token speed
+**SESSION FILES** lists paths touched by successful `edit`/`write` calls on the current conversation branch that still have pending changes. Restoring, committing, or removing those changes clears their rows and Explorer dots on the next refresh. Shell-only changes to never-touched paths appear in Git/Explorer marks, not this list.
 
-The footer status area shows the latest assistant response's **tokens/sec**, **response duration**, and **TTFT** (time to first token), in both fullscreen and regular TUI mode—even with the sidebar visible. Each model turn resets the measurement; tool execution time is excluded. Timing starts at Pi's `turn_start`, so duration and throughput include context preparation, network latency, and generation. TTFT ends at the first non-empty text/thinking/tool-argument delta or tool-call start, not at a stream header. Providers that do not stream content show `TTFT —`.
+This is **current Git state for session-touched paths**, not an exact session-start diff or a claim that the session authored every change. Pre-existing and external edits can be included. Branch navigation changes the candidate list, not disk contents or saved messages. Files in other repositories are checked separately; the Git summary still describes the working project.
 
-While streaming, `~` marks a rough estimate based on emitted characters divided by four (including visible thinking and tool arguments). Updates are throttled to four per second, driven by stream events with no polling timers. On completion, the provider's output-token count replaces the estimate; hidden reasoning may make the final speed differ substantially. Errors/aborts are labeled, and unavailable usage keeps the estimate. The last result stays visible until the next turn; reload, session replacement, or branch navigation clears it. No extra model requests or session entries are created.
+Click a file for its current diff. Staged and unstaged changes are shown separately; row totals sum both layers. Untracked files are compared against empty content. Conflicts, binary files, and unsupported changes show a status instead of invented line counts. Diff previews are limited to 1 MiB and 20,000 source lines.
 
-### Compact tool output
+Unverifiable paths appear under **RECORDED FILES** as history only. Their previews show recorded operations, not a current diff, and they have no pending dot or current line counts. Refreshes mark old data as updating; read failures are not treated as clean state.
 
-Tool calls render as one dim summary line instead of pi's shaded box with an output preview, for example `Ran shell command · git status · 2 lines`, `Edited src/index.ts · +12 −3`, or `Searched · /pattern/ in src · 14 matches`. A running call shows its title, elapsed seconds, and the command beneath it. Failed calls show a red `✗` line with the last line of the error. Press Ctrl+O (or click a row) to expand rows into pi's normal renderers. This applies to textual output from every tool, including MCP and other extension tools, in all TUI modes. Inline images remain managed by Pi's image settings.
+### Explorer and project switching
 
-Expanded codemode results unwrap recognized command-result JSON into readable multiline output, followed by exit code, duration, and any truncation/full-output-file notice. Pi's native block, script highlighting, and nested-call list are retained. Only the display changes: saved/model-facing results, other tools, and unrecognized JSON stay untouched. Formatting runs lazily once per content revision, survives resize/collapse/re-expansion, and has a shared 256 Ki-character parsing budget per result; text beyond that budget remains raw. No parsing runs while collapsed or streaming.
+Explorer includes hidden and ignored files, loads folders only when expanded, and supports read-only previews. Binary files and files larger than 1 MiB show an explanation instead of a preview.
 
-`/midnight compact off` restores pi's default tool rendering and `/midnight compact on` re-enables it; existing rows redraw immediately. The choice lasts for the current extension instance. Pi still separates tool rows with a blank line. To hide thinking blocks as well, press Ctrl+T (pi remembers this setting).
+Use **Alt+E → Alt+G** to browse the parent, project, home, or an entered folder. The `..` row also opens the parent. Relative paths resolve from the current Explorer location; quotes, spaces, `~`, other drives, and accessible network shares are supported.
 
-### Automatic session titles
+**Browsing never changes the agent's working project.** Use **Open this folder as working project…**, **Switch working project…**, or `/midnight project <path>` to switch explicitly. Command-relative paths resolve from the working project.
 
-Sidebar titles wrap at word boundaries across up to three lines, with an ellipsis only if more text remains. The sidebar width is unchanged. New automatic titles prefer short, specific 3–5-word task labels; existing titles are not renamed merely to shorten them.
+Switching asks for confirmation and creates a fresh persistent Pi session. It carries over only your unsent draft—not conversation history—so review relative file references. It is blocked while work, compaction, or queued messages remain, and is unavailable with `--no-session`. Use `/resume` and show all projects to return to the old conversation. A header-only session file left unchanged by hooks is removed if switching is cancelled; a fatal destination-initialization error may require restarting Pi and resuming the old session.
 
-Midnight names unnamed interactive sessions automatically, then checks for title updates after agent rounds, branch navigation, and compaction. Named sessions have a **five-minute cooldown** between background requests, and unchanged conversational text skips the request entirely. There is no delayed background job: the next eligible lifecycle event triggers an update. Unnamed sessions can retry after 30 seconds. It uses a short request to the current model with bounded conversational text (no tool output or images). Titles and the last request time are saved with the title state, so normal reload/resume preserves the cooldown. Titles appear in the sidebar and session selector without toggling Alt+S.
+### Compact tools, titles, and speed
 
-Existing manually named sessions are preserved. `/name Your title` pauses automatic naming; `/midnight title auto` enables it again and explicitly requests an update without waiting for the cooldown; `/midnight title off` disables it. These choices survive reload/resume. Model failures leave the existing title unchanged and retry on a later round. Extra title requests use your provider credentials and may incur charges; their usage is included in Midnight's sidebar totals.
+- **Compact tools:** one-line summaries replace tool-output boxes. Ctrl+O or a click expands Pi's normal output; failures remain visible. Recognized expanded codemode command results are formatted for readability. Saved/model-facing results are unchanged. Use `/midnight compact off` for Pi's default rendering; Ctrl+T controls thinking blocks separately.
+- **Automatic titles:** unnamed interactive sessions get short titles from the current model. Named sessions have a five-minute request cooldown, and unchanged conversation text skips the request. Manual `/name` titles are preserved; `/midnight title off` disables automatic naming and `/midnight title auto` resumes it. These settings survive reload/resume. **Title requests use your provider and may incur charges.**
+- **Token speed:** the footer shows tokens/sec, response duration, and time to first token (TTFT), in fullscreen and regular TUI mode. Measurements include turn preparation and network time but exclude tool execution. `~` means a streaming estimate; reported output tokens replace it on completion. Missing timing stays unavailable. These stats make no extra model requests.
 
-### Browse other locations
+## Commands
 
-Focus Explorer with **Alt+E**, then press **Alt+G** for the **Go to folder** menu: **Parent folder**, **Project folder**, **Home folder**, or **Enter path…**. Destinations are shown beside the first three choices. Use Up/Down and Enter to choose, or Escape to cancel without moving. The menu uses Pi’s built-in selector and reads no directories until a destination is chosen.
+Angle brackets describe an argument; omit the brackets when typing a command.
 
-A selectable **`.. (parent folder)`** row appears at the top of the tree, except at a drive/filesystem/share root. Enter, Right, Space, or a click on that row opens the parent; it never inserts a file reference. The first file is selected by default; press Up to reach the parent row. Outside the project the title shows `[external]` and long paths keep the trailing segment visible. Ordinary folder expansion and file previews are unchanged. **Alt+Up** and **Alt+Home** remain quick shortcuts for parent and project.
+| Command | Action |
+| --- | --- |
+| `/midnight sidebar` | Toggle the sidebar |
+| `/midnight explorer` | Show/focus or hide Explorer |
+| `/midnight sidebar <auto\|always\|hidden>` | Set sidebar visibility |
+| `/midnight explorer <auto\|always\|hidden>` | Set Explorer visibility |
+| `/midnight explorer go` | Open the folder menu |
+| `/midnight explorer go <path>` | Browse a folder |
+| `/midnight explorer parent` | Browse the parent folder |
+| `/midnight explorer project` | Return to the project folder |
+| `/midnight project` | Ask for a new working project |
+| `/midnight project <path>` | Switch to a new working project |
+| `/midnight compact <on\|off>` | Enable/disable compact tool rendering |
+| `/midnight title <auto\|off>` | Enable/disable automatic titles |
+| `/midnight refresh` | Refresh Git and file state |
 
-Choose **Enter path…** for a folder such as `D:\Projects`, `C:\Users\solusi\Downloads`, or `~/Downloads`. Quoted paths and spaces are supported; relative paths resolve from the folder currently shown in Explorer. The current location appears once below the plain Explorer title, without repeating the folder name in the heading. Unfocused Explorer shows only the browse shortcut; focused hints show file actions, locations, and Escape. The return-to-project hint appears only when browsing away from the project root. All navigation shortcuts remain available while focused. These navigation keys only apply while Explorer is focused; ordinary typing still returns to the prompt.
-
-The four browsing actions never change the agent’s working directory, session, or sidebar Git repository. The separate **Open this folder as working project…** and **Switch working project…** actions do, after confirmation (see below). Space previews files locally; Enter inserts a project-relative `@file` inside the project or an absolute reference outside it, quoting as needed. Browsing and previewing make no model requests. Other drives and accessible network shares can be opened by path; OS permissions still apply. Invalid or unreadable destinations leave the current tree intact. Navigation resets expansion and selection, and reload/session replacement returns to the project.
-
-The explorer includes hidden and ignored files, `node_modules`, and `.git`. Ignored project paths are dimmed. Directories load only when expanded. Project Git marks and session-change dots are mapped to the browsing location; unrelated repositories are not scanned or decorated with project Git marks. The sidebar always shows the session’s project Git status.
-
-### Switch the working project
-
-Press **Alt+E → Alt+G → Open this folder as working project…** to make the currently browsed folder the agent’s working directory. Or choose **Switch working project…** and enter a path; relative paths in this menu resolve from the Explorer location. Any accessible folder is supported; it need not be a Git repository.
-
-From the prompt, use **`/midnight project C:\Projects\other-repo`**, or **`/midnight project`** to ask for a path. Command-relative paths resolve from the current working project. Quotes, spaces, `~`, other drives, and UNC paths are supported. Aliases are resolved to their canonical directory; selecting the current project is a no-op.
-
-A confirmation shows the old/new paths and explains the fresh-session boundary. Switching is refused while the agent is active, compacting, or has queued messages; finish/stop the work and clear the queue first. The unsent text draft moves unchanged into the new session for review, not automatic submission—check any relative file references. Previous conversation history and instructions are **not** copied or summarized. Return to the old saved conversation using `/resume` (show all projects in the picker).
-
-Midnight uses Pi 1.0.4’s public `SessionManager` and `ctx.switchSession()` APIs, not `process.chdir()`, a subprocess, or private-field patches. It writes one header-only destination session and lets Pi perform its normal `/resume` teardown/rebuild, including cwd-bound tools, project instructions, settings, extensions, trust handling, and the UI. Midnight cancels its old work and rebuilds Explorer/sidebar Git state from the new context. Other extensions must likewise use Pi’s context cwd rather than assume the process startup directory changes. Install Midnight as a user-level package to keep these controls available across projects.
-
-Default session storage follows the destination project; an existing custom session directory is retained. Switching requires persistent sessions (`--no-session` is not supported). Each successful switch creates a fresh saved session, without scanning or selecting old sessions. Cancelled/abandoned attempts remove their unused header-only file; a file modified by a hook is retained. Validation failures leave the current session intact. As with Pi’s `/resume`, a fatal error while initializing destination resources can require restarting Pi and resuming the old saved session; the extension does not attempt an unsafe partial rollback.
-
-**Performance:** no new polling, watchers, background discovery, render-path I/O, history copying, or model calls. Path validation and session creation run only on explicit activation. The locations menu does no filesystem work until an action is chosen; switching does not first browse/scan the destination. Pi’s native resource reload and Midnight’s normal initial shared Git refresh still have a one-time switching cost. There is no additional steady-state refresh work.
-
-## Pi configuration
-
-Both panels start in `auto` mode: the sidebar appears at 110 columns; the explorer at 150. The panels reserve 36 and 32 columns respectively. Explicitly opened panels still hide when too little room remains for the prompt.
-
-```text
-/midnight sidebar auto
-/midnight sidebar always
-/midnight sidebar hidden
-/midnight explorer auto
-/midnight explorer always
-/midnight explorer hidden
-/midnight explorer go D:\Projects
-/midnight explorer go
-/midnight explorer parent
-/midnight explorer project
-/midnight project C:\Projects\other-repo
-/midnight project
-/midnight compact on
-/midnight compact off
-/midnight title auto
-/midnight title off
-/midnight refresh
-```
-
-Without a mode, `/midnight sidebar` and `/midnight explorer` perform their shortcut actions. `/midnight explorer go` opens the locations menu; supplying a path skips the menu and navigates directly. Modes last for the current extension instance and reset on reload/session replacement. Refresh runs automatically after agent completion, branch navigation, compaction, and explorer focus. Use `/midnight refresh` for external filesystem changes.
+Panel modes reset on reload/session replacement; the compact setting lasts for the current extension instance. Refresh also runs on initialization, agent completion, conversation navigation, compaction, and Explorer focus. External changes are not polled; use `/midnight refresh` when needed.
 
 Customize keys in `~/.pi/agent/keybindings.json`, then `/reload`:
 
@@ -183,21 +117,17 @@ Customize keys in `~/.pi/agent/keybindings.json`, then `/reload`:
 }
 ```
 
-Generic navigation uses pi's `tui.select.*` bindings. An empty array disables a binding. Shortcut handling leaves overlays in control while they are open.
+Navigation also follows Pi's `tui.select.*` bindings. An empty array disables a binding. Overlays keep control of input while open.
 
-## Pi performance and integration
+## Performance and compatibility
 
-Filesystem reads and Git commands run asynchronously, outside rendering. One shared, NUL-delimited project Git status scan supplies the branch, summary, file marks, ignored paths, and session-file reconciliation. Repository identity is revalidated at refresh, with bounded HEAD/index metadata probes around status and deltas; creating a nested repository cannot leave a stale workspace prefix. Only repositories owning active session candidates receive additional status scans, grouped per repository. Ownership lookups coalesce by parent within each refresh. Numstat reads batch candidate paths by repository/layer with bounded argument lengths; detailed patches are fetched only on click. At most four candidate filesystem reads run concurrently, and refresh invalidates content even when status codes remain unchanged. Untracked files are counted individually, including files inside new directories. Directory reads coalesce, use a shared natural-sort collator, and run at most eight at a time. Refresh batches explorer updates and reloads only visible, expanded directories; collapsed directories refresh when reopened. Hidden explorers do not trigger directory reads. Previous listings remain visible until replacement data arrives. Folder navigation reads only the destination directory and reuses it immediately. Only the project cache and the current browsing cache are retained; replaced/pending locations are disposed and late results discarded. External browsing adds no Git scans, polling, watchers, model calls, or dependencies.
-
-Session totals and file changes update incrementally on append; branch/session replacement safely rebuilds them. Saved revisions detected while drawing are analyzed in a coalesced microtask rather than inside rendering. Unchanged sidebar, explorer, preview, and compact-tool rows reuse cached lines. Completed tool summaries are computed once per result revision, and preview resizing does not repeat syntax highlighting. A single elapsed-time clock runs only while compact tool calls are executing, and is cleared on session replacement/reload/shutdown. There are no filesystem polling timers or recursive watchers.
-
-The extension preserves pi's existing transcript, scroll view, editor, header, footer, and widgets. It wraps the fullscreen layout in an `HStack`. Pi 1.0.4 exposes a layout setter but no getter, so `src/layout.ts` contains guarded reads of its internal `layoutRoot` and built-in footer data. The footer keeps its cache stats and extension statuses; its session name, branch, input/output tokens, cost, context and model/provider/thinking level are filtered while the sidebar is visible. A read-only footer view omits the session name before path formatting/truncation without changing shared session data. `src/footer-usage.ts` uses ANSI-aware slicing before narrow-width truncation to preserve cache stats and remove the other usage fields. Independent Explorer visibility/path checks suppress only the matching working-directory path, preserving any branch/session suffix before truncation. Custom extension footers are left untouched. `src/session-analysis.ts` also guards access to Pi's O(1) entry-count method, which exists at runtime but is omitted from its read-only type; without it, analysis falls back to full snapshots. This is why compatibility is pinned to 1.0.4. Unknown layouts are left untouched. Other extensions that replace the entire fullscreen layout may conflict.
-
-Reload/shutdown restores the original layout, returns focus, closes previews, cancels Git processes, and discards late filesystem results. RPC, JSON, and print modes do not initialize panels. Midnight-specific server services are not required; runtime and trust values come from pi's extension context.
+- Filesystem/Git work is asynchronous and outside rendering. Reads are bounded and cached, requests coalesce, directories load lazily, and session analysis updates incrementally. There is no filesystem polling, recursive watching, or model call for ordinary UI updates.
+- Reload, session replacement, and shutdown cancel pending work, discard late results, close previews, and restore Pi's layout. Project switching uses Pi's session APIs, not `process.chdir()`.
+- Midnight preserves the transcript, editor, widgets, and custom footers. Panels are disabled in RPC, JSON, and print modes. Extensions that replace the whole fullscreen layout may conflict.
+- Compatibility is pinned to **Pi 1.0.4**. Guarded internal accesses in `src/layout.ts` and `src/session-analysis.ts` need review before supporting another version; unknown layouts are left alone.
+- Git/file reads detect ordinary concurrent changes but are not transactional snapshots. OS permissions still apply.
 
 ## Development
-
-From the repository root:
 
 ```powershell
 npm ci --ignore-scripts
@@ -205,6 +135,6 @@ npm run check
 npm test
 ```
 
-`npm run check` runs Biome (warnings are errors) and TypeScript validation, including test sources. `npm test` uses Node's built-in test runner and native TypeScript stripping; it runs injected-I/O/component tests and real Git scenarios in disposable temporary repositories, without providers. It requires Git on PATH. Fullscreen interaction still needs manual verification with only the local extension loaded.
+`npm run check` runs Biome and TypeScript validation. `npm test` runs Node's test runner with injected I/O/component checks and real Git in temporary repositories; no provider calls are made. Test fullscreen interaction separately with only the local extension loaded.
 
-See `NOTICE` for extraction provenance and `LICENSE` for the inherited MIT license.
+See [NOTICE](NOTICE) for extraction provenance and [LICENSE](LICENSE) for the MIT license.

@@ -1,4 +1,0 @@
-{
-	"description": "Midnight native sidebar",
-	"modules": ["./register.js"]
-}
