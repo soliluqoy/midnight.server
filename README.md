@@ -50,7 +50,7 @@ Both panels start in `auto` mode: the sidebar appears at 110 columns and Explore
 
 ### Session sidebar
 
-Shows the session title, model/thinking level, context use, token totals, cost, runtime/trust status, active tools, Git status, and session-touched files.
+Starts with **MIDNIGHT: SESSION** and the session title, followed by Git status, context use, token totals, cost, model/thinking level, and session-touched files.
 
 While the sidebar is visible, repeated session/model/usage fields disappear from Pi's footer. Cache stats and extension statuses remain. Hiding the sidebar restores the normal footer. Explorer hides the footer's directory path only when it shows the same working directory.
 

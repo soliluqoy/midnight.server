@@ -145,12 +145,7 @@ export class Sidebar implements Component {
 			line(theme.bold(theme.fg("muted", text)));
 		};
 		const tokens = (value: number) => (value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value));
-		line(theme.bold(theme.fg("accent", "MIDNIGHT")));
-		heading("RUNTIME");
-		line(theme.fg(ctx.isIdle() ? "muted" : "accent", ctx.isIdle() ? "idle" : "working"));
-		line(theme.fg("muted", `project ${ctx.isProjectTrusted() ? "trusted" : "untrusted"}`));
-		line(theme.fg("muted", `${this.pi.getActiveTools().length} active tools`));
-		heading("SESSION");
+		line(theme.bold(theme.fg("accent", "MIDNIGHT: SESSION")));
 		const title =
 			stripTerminalSequences(ctx.sessionManager.getSessionName() || "")
 				.replace(/\p{Cc}/gu, " ")
