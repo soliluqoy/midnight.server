@@ -27,8 +27,10 @@ they do not identify which changes this session authored. They are read-only and
 do not switch the agent's working project. To browse another location, use that
 explicitly requested directory as `cwd`.
 
-This native plugin provides conversation tools, not Pi's side panels, keyboard
-shortcuts, compact tool renderer or token-speed display. Claude Code can run the
-included status-line script; Codex uses its built-in `/statusline` picker. For
-setup instructions, read [the client guide](../../docs/clients.md). Do not rewrite
+Claude Code includes a native mod pane: `/midnight-sidebar` opens it, with `hide`
+and `refresh` arguments available. A sidebar inside Codex requires the separate
+Midnight Codex fork; the stock Codex plugin supplies conversation tools. Neither
+port supplies Pi's compact tool renderer or token-speed display. For sidebar
+setup, read [the sidebar guide](../../docs/sidebars.md); for tools and optional
+status lines, read [the client guide](../../docs/clients.md). Do not rewrite
 the user's existing status-line settings merely because they ask for a status view.

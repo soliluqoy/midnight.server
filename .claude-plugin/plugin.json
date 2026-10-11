@@ -1,10 +1,11 @@
 {
 	"name": "midnight",
-	"version": "0.2.0",
-	"description": "Midnight project browsing, Git status, file previews and diffs for Claude Code",
+	"version": "0.3.0",
+	"description": "Midnight native sidebar, project browsing, Git status, file previews and diffs for Claude Code",
 	"author": { "name": "soliluqoy" },
 	"homepage": "https://github.com/soliluqoy/midnight.server",
 	"repository": "https://github.com/soliluqoy/midnight.server",
 	"license": "MIT",
+	"hooks": "./claude-mod/hooks.json",
 	"keywords": ["midnight", "git", "files", "status"]
 }

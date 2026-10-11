@@ -1,6 +1,6 @@
 {
 	"name": "midnight.server",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"description": "Midnight panels for pi and native project tools for Claude Code and Codex CLI",
 	"type": "module",
 	"license": "MIT",
@@ -10,12 +10,14 @@
 	"files": [
 		"src",
 		"skills",
+		"claude-mod",
 		".claude-plugin",
 		"plugin.json",
 		"mcp.json",
 		".agents/plugins/marketplace.json",
 		".mcp.json",
 		"docs/clients.md",
+		"docs/sidebars.md",
 		"docs/images/midnight-preview.jpg",
 		"README.md",
 		"NOTICE",
@@ -27,6 +29,7 @@
 		]
 	},
 	"scripts": {
+		"test:claude": "node scripts/test-claude-mod.mjs",
 		"check": "biome check --error-on-warnings . && tsc --noEmit",
 		"test": "node --experimental-strip-types --test tests/*.test.ts"
 	},
