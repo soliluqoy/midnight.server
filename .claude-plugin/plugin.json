@@ -1,0 +1,10 @@
+{
+	"name": "midnight",
+	"version": "0.2.0",
+	"description": "Midnight project browsing, Git status, file previews and diffs for Claude Code",
+	"author": { "name": "soliluqoy" },
+	"homepage": "https://github.com/soliluqoy/midnight.server",
+	"repository": "https://github.com/soliluqoy/midnight.server",
+	"license": "MIT",
+	"keywords": ["midnight", "git", "files", "status"]
+}

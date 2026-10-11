@@ -1,7 +1,7 @@
 {
 	"name": "midnight.server",
-	"version": "0.1.0",
-	"description": "Fast session sidebar and file explorer extracted from midnight.server for pi",
+	"version": "0.2.0",
+	"description": "Midnight panels for pi and native project tools for Claude Code and Codex CLI",
 	"type": "module",
 	"license": "MIT",
 	"keywords": [
@@ -9,6 +9,14 @@
 	],
 	"files": [
 		"src",
+		"skills",
+		".claude-plugin",
+		"plugin.json",
+		"mcp.json",
+		".agents/plugins/marketplace.json",
+		".mcp.json",
+		"docs/clients.md",
+		"docs/images/midnight-preview.jpg",
 		"README.md",
 		"NOTICE",
 		"LICENSE"
