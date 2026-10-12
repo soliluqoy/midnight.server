@@ -13,6 +13,7 @@ import { sessionDiffSections } from "./session-diff.ts";
 import { type PendingFile, SessionPendingFiles } from "./session-pending-files.ts";
 import { SessionTitle } from "./session-title.ts";
 import { Sidebar } from "./sidebar.ts";
+import { applyDefaultTheme } from "./theme.ts";
 import { registerTokenSpeed } from "./token-speed.ts";
 
 export class MidnightPanels {
@@ -398,6 +399,7 @@ export default function midnight(pi: ExtensionAPI): void {
 		panels = undefined;
 		title = undefined;
 		if (ctx.mode !== "tui") return;
+		applyDefaultTheme(pi, ctx);
 		title = new SessionTitle(pi, ctx, (context) => panels?.update(context, true));
 		ctx.ui.setWidget("midnight-panels", (tui) => {
 			panels = new MidnightPanels(pi, ctx, tui, () => projectSwitcher.active);
