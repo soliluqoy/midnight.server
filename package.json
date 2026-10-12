@@ -9,6 +9,7 @@
 	],
 	"files": [
 		"src",
+		"themes",
 		"docs/images/midnight-preview.jpg",
 		"README.md",
 		"NOTICE",
@@ -17,6 +18,9 @@
 	"pi": {
 		"extensions": [
 			"./src/index.ts"
+		],
+		"themes": [
+			"./themes/midnight.json"
 		]
 	},
 	"scripts": {

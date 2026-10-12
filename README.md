@@ -1,6 +1,6 @@
 # midnight.server
 
-A session sidebar and file explorer for **Pi**, with compact tool output, automatic session titles, and token-speed stats.
+A session sidebar and file explorer for **Pi**, with a default blue theme, compact tool output, automatic session titles, and token-speed stats.
 
 Requires **Pi 1.0.4**, **Node.js 22.19+**, and Git on PATH. Side panels need fullscreen mode. No build step or runtime dependencies beyond Pi.
 
@@ -21,10 +21,18 @@ To try a local checkout:
 ```powershell
 git clone https://github.com/soliluqoy/midnight.server.git
 cd midnight.server
-pi --extension ./src/index.ts --tui-mode fullscreen
+pi --extension . --tui-mode fullscreen
 ```
 
 **Load only one Midnight source.** For local development, use the checkout instead of the Git-installed copy. Check `pi list`; duplicate copies compete for panels and shortcuts.
+
+## Theme
+
+Midnight bundles the **`midnight`** dark theme: blue accents, navy selection/message backgrounds, and blue editor borders at every thinking level (including `xhigh` and `max`). Success, warning, and error colors stay green, amber, and red.
+
+On interactive startup, Midnight selects and saves this default if no theme preference is configured and Pi is still using its default `system` theme. Explicit user, project, and `--use-theme` selections are preserved. To switch an existing setup, select **midnight** in `/settings` → **Theme**; selecting another theme there also opts out of the default.
+
+Load the **package directory**, not only `src/index.ts`, so Pi discovers the bundled theme as well as the extension. Themes apply in regular and fullscreen TUI mode; non-interactive runs do not change theme settings. The terminal's own background color is unchanged.
 
 ## Controls
 
