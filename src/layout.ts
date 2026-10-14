@@ -53,7 +53,7 @@ function withoutSessionName(footer: FooterComponent): FooterComponent {
 	});
 }
 
-/** Keep checks for Pi 1.0.4's private layout and footer fields in this class. */
+/** Keep checks for Pi 1.2.0's private layout and footer fields in this class. */
 export class SidebarLayout {
 	private readonly tui: TUI;
 	private readonly sidebar: Component;

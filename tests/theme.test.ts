@@ -13,7 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { loadThemeFromPath } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 // Validate with the pinned host's parser, not a second copy of the theme schema.
-import { validateThemeJson } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme-json.js";
+import { validateThemeJson } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme-schema.js";
 import { applyDefaultTheme, MIDNIGHT_THEME } from "../src/theme.ts";
 
 const themePath = fileURLToPath(new URL("../themes/midnight.json", import.meta.url));

@@ -8,8 +8,10 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import type { EvidenceSummary } from "./evidence/model.ts";
 import type { GitStatusSummary } from "./git-status.ts";
 import { alignColumns, truncateLeftToWidth } from "./presentation.ts";
+import type { ScaleDownStatus } from "./scaledown/index.ts";
 import { SessionAnalysis, sessionEntryCount } from "./session-analysis.ts";
 import type { PendingFile, PendingSnapshot } from "./session-pending-files.ts";
 
@@ -26,6 +28,8 @@ export class Sidebar implements Component {
 	private disposed = false;
 	private rows: PendingFile[] = [];
 	updating = false;
+	scaleDown: ScaleDownStatus | undefined;
+	evidence: EvidenceSummary | undefined;
 	get candidates() {
 		return this.analysis.changes;
 	}
@@ -213,6 +217,39 @@ export class Sidebar implements Component {
 			theme.fg("muted", [ctx.model?.provider, this.pi.getThinkingLevel()].filter(Boolean).join(" · ")),
 			this.selectModel,
 		);
+		if (this.scaleDown) {
+			const { enabled, requests, tokens: totalTokens, incomplete, localCalls, cacheHits, lastCall } = this.scaleDown;
+			heading("SCALEDOWN", theme.fg(enabled ? "success" : "dim", enabled ? "on" : "off"));
+			line(theme.fg("muted", `${requests} req · ${tokens(totalTokens)} tokens${incomplete ? "*" : ""}`));
+			line(theme.fg("dim", `${localCalls} local · ${cacheHits} cache`));
+			line(
+				theme.fg(
+					lastCall?.issues ? "warning" : "dim",
+					lastCall
+						? `last: ${lastCall.mode} · ${lastCall.totalMs}ms${lastCall.issues ? " · issues" : ""}`
+						: requests
+							? "remote requested"
+							: "not used yet",
+				),
+			);
+			if (incomplete) line(theme.fg("dim", "* usage incomplete"));
+		}
+		if (
+			this.evidence &&
+			(this.evidence.evidence ||
+				this.evidence.claims ||
+				this.evidence.review ||
+				this.evidence.gaps ||
+				this.evidence.capacityReached ||
+				this.evidence.invalidEvents)
+		) {
+			const { evidence, claims, review, gaps, capacityReached, invalidEvents } = this.evidence;
+			heading("EVIDENCE", theme.fg("dim", "local"));
+			line(theme.fg("muted", `${evidence} sources · ${claims} claims`));
+			line(theme.fg(review ? "warning" : "dim", `${review} review · ${gaps} open gaps`));
+			if (capacityReached || invalidEvents)
+				line(theme.fg("warning", invalidEvents ? "Stored events need inspection" : "Capture limit reached"));
+		}
 		const pending = this.rows.filter((row) => row.state === "pending");
 		const recorded = this.rows.filter((row) => row.state === "unavailable" || row.state === "checking");
 		if (pending.length || this.updating) {

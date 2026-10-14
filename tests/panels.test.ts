@@ -171,6 +171,86 @@ function sidebarHarness() {
 	};
 }
 
+test("ScaleDown stays compact in the sidebar without reported cost text", (t) => {
+	const h = sidebarHarness();
+	t.after(() => h.sidebar.dispose());
+	assert.doesNotMatch(plain(h.sidebar.render(32)).join("\n"), /SCALEDOWN/);
+	h.sidebar.scaleDown = { enabled: true, requests: 0, tokens: 0, incomplete: false, localCalls: 0, cacheHits: 0 };
+	h.sidebar.invalidate();
+	let lines = plain(h.sidebar.render(32));
+	const start = lines.findIndex((row) => row.includes("SCALEDOWN"));
+	assert.match(lines[start], /SCALEDOWN\s+on/);
+	assert.match(lines[start + 1], /0 req · 0 tokens/);
+	assert.match(lines[start + 2], /0 local · 0 cache/);
+	assert.match(lines[start + 3], /not used yet/);
+	assert.doesNotMatch(lines.slice(start).join("\n"), /\$|reported/);
+	h.sidebar.scaleDown = {
+		enabled: false,
+		requests: 2,
+		tokens: 1200,
+		incomplete: true,
+		localCalls: 1,
+		cacheHits: 2,
+		lastCall: { mode: "remote", reason: "no_local_match", totalMs: 8, providerMs: 5, issues: true },
+	};
+	h.sidebar.invalidate();
+	lines = plain(h.sidebar.render(32));
+	assert.match(lines[start], /SCALEDOWN\s+off/);
+	assert.match(lines[start + 1], /2 req · 1.2k tokens\*/);
+	assert.match(lines[start + 2], /1 local · 2 cache/);
+	assert.match(lines[start + 3], /last: remote · 8ms · issues/);
+	assert.ok(h.sidebar.render(32)[start + 3].includes(h.theme.fg("warning", "last: remote · 8ms · issues")));
+	assert.match(lines[start + 4], /usage incomplete/);
+	for (const mode of ["local", "remote", "cache"] as const) {
+		h.sidebar.scaleDown.lastCall = { mode, reason: null, totalMs: 5, providerMs: 0, issues: false };
+		h.sidebar.invalidate();
+		assert.match(plain(h.sidebar.render(32))[start + 3], new RegExp(`last: ${mode} · 5ms`));
+	}
+	h.sidebar.scaleDown.lastCall = undefined;
+	h.sidebar.invalidate();
+	assert.match(plain(h.sidebar.render(32))[start + 3], /remote requested/);
+	for (const width of [0, 1, 8, 24, 32]) assert.ok(h.sidebar.render(width).every((row) => visibleWidth(row) <= width));
+	h.sidebar.scaleDown = undefined;
+	h.sidebar.invalidate();
+	assert.doesNotMatch(plain(h.sidebar.render(32)).join("\n"), /SCALEDOWN/);
+});
+
+test("evidence sidebar stays local, width-safe, and visible when only review items remain", (t) => {
+	const h = sidebarHarness();
+	t.after(() => h.sidebar.dispose());
+	assert.doesNotMatch(plain(h.sidebar.render(36)).join("\n"), /EVIDENCE/);
+	h.sidebar.evidence = {
+		evidence: 2,
+		claims: 1,
+		review: 1,
+		gaps: 2,
+		receipts: 1,
+		capacityReached: false,
+		invalidEvents: 0,
+	};
+	h.sidebar.invalidate();
+	const rendered = h.sidebar.render(36);
+	const lines = plain(rendered);
+	assert.match(lines.join("\n"), /EVIDENCE\s+local/);
+	assert.match(lines.join("\n"), /2 sources · 1 claims/);
+	assert.ok(rendered.some((row) => row.includes(h.theme.fg("warning", "1 review · 2 open gaps"))));
+	h.sidebar.evidence = {
+		evidence: 0,
+		claims: 0,
+		review: 1,
+		gaps: 0,
+		receipts: 0,
+		capacityReached: true,
+		invalidEvents: 0,
+	};
+	h.sidebar.invalidate();
+	assert.match(plain(h.sidebar.render(36)).join("\n"), /EVIDENCE[\s\S]*Capture limit reached/);
+	for (const width of [0, 1, 8, 24, 36]) assert.ok(h.sidebar.render(width).every((row) => visibleWidth(row) <= width));
+	h.sidebar.evidence.invalidEvents = 1;
+	h.sidebar.invalidate();
+	assert.match(plain(h.sidebar.render(36)).join("\n"), /Stored events need inspection/);
+});
+
 test("Explorer uses a local rail and ice-blue name, not a full-height bright border", () => {
 	const h = explorerHarness();
 	const inactive = h.explorer.render(32);

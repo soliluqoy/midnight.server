@@ -25,7 +25,7 @@ export async function validateProjectFolder(input: string, cwd: string): Promise
 }
 
 /**
- * Pi 1.0.4 can switchSession across folders, but newSession cannot set cwd.
+ * Pi 1.2.0 can switchSession across folders, but newSession cannot set cwd.
  * Let SessionManager make the path and header. Save the header ourselves because
  * create() waits for a conversation before saving. Do not copy history, guess the
  * file format, or change Pi's private fields.

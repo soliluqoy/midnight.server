@@ -4,7 +4,7 @@ import { sessionTitleUsage } from "./session-title.ts";
 
 type Manager = ExtensionContext["sessionManager"];
 
-/** Pi 1.0.4 can count entries without a scan, but its read-only type leaves this method out. */
+/** Pi 1.2.0 can count entries without a scan, but its read-only type leaves this method out. */
 export function sessionEntryCount(manager: Manager): number | undefined {
 	const getter: unknown = Reflect.get(manager, "getEntryCount");
 	if (typeof getter !== "function") return undefined;

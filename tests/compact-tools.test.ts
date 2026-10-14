@@ -39,6 +39,8 @@ function harness(name: string, args: Record<string, unknown>, base?: ToolRendere
 		isError: false,
 		expanded: false,
 		showImages: false,
+		durationMs: undefined,
+		outputPad: 0,
 		invalidate() {
 			invalidations++;
 			row?.invalidate();
@@ -93,6 +95,63 @@ test("compact tools share one-line operation, target, and semantic success marks
 		"✓ edit themes/midnight.json · +2 −1",
 	]);
 	assert.deepEqual(plain(bash.finish(result("done"))), ["✓ bash npm test …"]);
+});
+
+test("evidence rows show operation and review counts without changing model-facing evidence", (t) => {
+	const h = harness("midnight_evidence", { action: "add", kind: "claim" });
+	t.after(h.dispose);
+	const value = result("Original evidence result", { version: 1, summary: { review: 2, gaps: 3 } });
+	const original = structuredClone(value);
+	const component = h.finish(value);
+	assert.deepEqual(plain(component), ["✓ midnight_evidence add claim · 2 review · 3 gaps"]);
+	for (const width of [0, 1, 8, 24, 80])
+		assert.ok(component.render(width).every((line) => visibleWidth(line) <= width));
+	h.context.expanded = true;
+	assert.match(plain(h.call()).join("\n"), /Original evidence result/);
+	assert.deepEqual(value, original);
+});
+
+test("log-triage rows show actual routing, new requests, timing, and helper issues without mutating results", (t) => {
+	for (const mode of ["local", "remote", "cache"] as const) {
+		const h = harness("midnight_log_triage", { path: ".artifacts/build.log" });
+		t.after(h.dispose);
+		const attempts = mode === "remote" ? 2 : 0;
+		const value = result("full evidence\nElapsed: 12 ms total; 8 ms provider wait.", {
+			version: 2,
+			mode,
+			requestAttempts: attempts,
+			totalMs: 12,
+			errors: [],
+			summaryTruncated: false,
+		});
+		const original = structuredClone(value);
+		const row = h.finish(value);
+		assert.match(plain(row)[0], new RegExp(`${mode} · ${attempts} req · 12ms`));
+		for (const width of [0, 1, 8, 32, 80]) assert.ok(row.render(width).every((line) => visibleWidth(line) <= width));
+		h.context.expanded = true;
+		assert.match(plain(h.call()).join("\n"), /full evidence/);
+		assert.deepEqual(value, original);
+	}
+	const h = harness("midnight_log_triage", { path: "build.log" });
+	t.after(h.dispose);
+	const details = {
+		version: 2,
+		mode: "remote",
+		requestAttempts: 2,
+		totalMs: 9,
+		errors: ["HTTP 502"],
+		summaryTruncated: false,
+	};
+	assert.match(plain(h.finish(result("details", details)))[0], /remote · issues · 2 req · 9ms/);
+	assert.match(plain(h.finish(result("details", details), true))[0], /failed · remote · issues/);
+	assert.match(
+		plain(h.finish(result("details", { ...details, errors: [], summaryTruncated: true })))[0],
+		/remote · issues/,
+	);
+	assert.match(plain(h.finish(result("preflight failure"), true))[0], /failed · preflight failure/);
+	for (const invalid of [undefined, { ...details, totalMs: Number.NaN }, { ...details, mode: "injected" }]) {
+		assert.match(plain(h.finish(result("one\ntwo", invalid)))[0], /2 lines/);
+	}
 });
 
 test("queued and running rows use stationary signals and a single disposable render clock", (t) => {

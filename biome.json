@@ -1,6 +1,6 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.3.5/schema.json",
-	"files": { "includes": ["**", "!package-lock.json"] },
+	"files": { "includes": ["**", "!package-lock.json", "!!.artifacts"] },
 	"formatter": { "indentStyle": "tab", "lineWidth": 120 },
 	"linter": { "enabled": true, "rules": { "recommended": true } }
 }

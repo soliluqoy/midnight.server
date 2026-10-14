@@ -136,7 +136,7 @@ class CompactRow implements Component {
 			this.resultContent = result.content;
 			this.resultDetails = result.details;
 			this.outcome = outcomeOf(this.name, result);
-			this.reason = lastLine(textOf(result));
+			this.reason = triageOutcome(this.name, result.details) ?? lastLine(textOf(result));
 		}
 		this.cache = undefined;
 		this.normal = undefined;
@@ -334,6 +334,8 @@ function describe(name: string, args: Args): string {
 		case "edit":
 		case "write":
 			return path;
+		case "midnight_evidence":
+			return [str(args.action), str(args.kind), path || str(args.id)].filter(Boolean).join(" ");
 		case "grep":
 			return `/${firstLine(str(args.pattern))}/${scope(args)}`;
 		case "find":
@@ -345,7 +347,45 @@ function describe(name: string, args: Args): string {
 	}
 }
 
+function triageOutcome(name: string, details: unknown): string | undefined {
+	if (name !== "midnight_log_triage" || !details || typeof details !== "object") return undefined;
+	const data = details as Record<string, unknown>;
+	if (
+		data.version !== 2 ||
+		!["local", "remote", "cache"].includes(str(data.mode)) ||
+		typeof data.requestAttempts !== "number" ||
+		!Number.isSafeInteger(data.requestAttempts) ||
+		data.requestAttempts < 0 ||
+		typeof data.totalMs !== "number" ||
+		!Number.isFinite(data.totalMs) ||
+		data.totalMs < 0 ||
+		!Array.isArray(data.errors) ||
+		typeof data.summaryTruncated !== "boolean"
+	)
+		return undefined;
+	const issues = data.errors.length || data.summaryTruncated ? " · issues" : "";
+	return `${data.mode}${issues} · ${data.requestAttempts} req · ${Math.round(data.totalMs)}ms`;
+}
+
 function outcomeOf(name: string, result: AgentToolResult<unknown>): string {
+	if (name === "midnight_evidence" && result.details && typeof result.details === "object") {
+		const details = result.details as Record<string, unknown>;
+		const summary = details.summary;
+		if (details.version === 1 && summary && typeof summary === "object") {
+			const { review, gaps } = summary as Record<string, unknown>;
+			if (
+				typeof review === "number" &&
+				Number.isSafeInteger(review) &&
+				review >= 0 &&
+				typeof gaps === "number" &&
+				Number.isSafeInteger(gaps) &&
+				gaps >= 0
+			)
+				return `${review} review · ${gaps} gaps`;
+		}
+	}
+	const triage = triageOutcome(name, result.details);
+	if (triage) return triage;
 	if (name === "write") return "";
 	if (name === "edit") {
 		const diff = (result.details as { diff?: unknown } | undefined)?.diff;

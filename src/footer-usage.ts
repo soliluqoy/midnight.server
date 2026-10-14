@@ -22,7 +22,7 @@ export function renderWithoutWorkingDirectory(
 }
 
 /**
- * Pi 1.0.4 has no setting for this. Hide stats already shown in the sidebar.
+ * Pi 1.2.0 has no setting for this. Hide stats already shown in the sidebar.
  * Keep cache stats and extension status text in the footer.
  */
 export function renderWithoutSidebarStats(render: (width: number) => string[], width: number): string[] {

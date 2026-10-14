@@ -3,12 +3,15 @@ import { dirname, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, isKeyRelease, stripTerminalSequences, type TUI } from "@earendil-works/pi-tui";
 import { compactToolRenderers } from "./compact-tools.ts";
+import { registerEvidence } from "./evidence/index.ts";
+import type { EvidenceSummary } from "./evidence/model.ts";
 import { ExplorerLocation, resolveExplorerFolder } from "./explorer-location.ts";
 import { FileExplorerComponent } from "./file-explorer.ts";
 import { FilePreviewComponent, type FilePreviewContent, loadFilePreview } from "./file-preview.ts";
 import { createKeybindings } from "./keys.ts";
 import { focusedComponent, type PanelMode, SidebarLayout } from "./layout.ts";
 import { OPEN_PROJECT, ProjectSwitcher, SWITCH_PROJECT } from "./project-switch.ts";
+import { registerScaleDown, type ScaleDownStatus } from "./scaledown/index.ts";
 import { sessionDiffSections } from "./session-diff.ts";
 import { type PendingFile, SessionPendingFiles } from "./session-pending-files.ts";
 import { SessionTitle } from "./session-title.ts";
@@ -113,6 +116,20 @@ export class MidnightPanels {
 	update(ctx: ExtensionContext, scan: boolean): void {
 		this.ctx = ctx;
 		this.sidebar.refresh(scan);
+		this.tui.requestRender();
+	}
+
+	updateScaleDown(status: ScaleDownStatus | undefined): void {
+		if (this.disposed) return;
+		this.sidebar.scaleDown = status;
+		this.sidebar.invalidate();
+		this.tui.requestRender();
+	}
+
+	updateEvidence(summary: EvidenceSummary): void {
+		if (this.disposed) return;
+		this.sidebar.evidence = summary;
+		this.sidebar.invalidate();
 		this.tui.requestRender();
 	}
 
@@ -241,7 +258,7 @@ export class MidnightPanels {
 	private supported(): boolean {
 		if (this.layout.ensure()) return true;
 		this.ctx.ui.notify(
-			"Midnight panels require pi 1.0.4 fullscreen mode. Set TUI mode to fullscreen in /settings.",
+			"Midnight panels require pi 1.2.0 fullscreen mode. Set TUI mode to fullscreen in /settings.",
 			"warning",
 		);
 		return false;
@@ -385,6 +402,8 @@ export class MidnightPanels {
 export default function midnight(pi: ExtensionAPI): void {
 	registerTokenSpeed(pi);
 	let panels: MidnightPanels | undefined;
+	const scaleDown = registerScaleDown(pi, { onUpdate: (status) => panels?.updateScaleDown(status) });
+	const evidence = registerEvidence(pi, (summary) => panels?.updateEvidence(summary));
 	let title: SessionTitle | undefined;
 	let projectSwitcher = new ProjectSwitcher();
 	let compactTools = true;
@@ -403,6 +422,8 @@ export default function midnight(pi: ExtensionAPI): void {
 		title = new SessionTitle(pi, ctx, (context) => panels?.update(context, true));
 		ctx.ui.setWidget("midnight-panels", (tui) => {
 			panels = new MidnightPanels(pi, ctx, tui, () => projectSwitcher.active);
+			panels.updateScaleDown(scaleDown.sidebarStatus());
+			panels.updateEvidence(evidence.summary());
 			return panels;
 		});
 		void title.update(ctx);
@@ -438,9 +459,17 @@ export default function midnight(pi: ExtensionAPI): void {
 	pi.on("session_compact", refreshTitle);
 	pi.registerCommand("midnight", {
 		description:
-			"Midnight: sidebar|explorer [auto|always|hidden], explorer go [path]|parent|project, project [path], compact on|off, title auto|off, refresh",
+			"Midnight: sidebar|explorer [auto|always|hidden], explorer go [path]|parent|project, project [path], compact on|off, title auto|off, scaledown on|off|status, evidence status|check|show [id], refresh",
 		handler: async (args, ctx) => {
 			const [panel, mode] = args.trim().split(/\s+/);
+			if (panel === "scaledown") {
+				await scaleDown.command(args.trim().replace(/^scaledown(?:\s+|$)/, ""), ctx);
+				return;
+			}
+			if (panel === "evidence") {
+				await evidence.command(args.trim().replace(/^evidence(?:\s+|$)/, ""), ctx);
+				return;
+			}
 			if (panel === "project") {
 				await projectSwitcher.run(args.trim().replace(/^project(?:\s+|$)/, "") || undefined, ctx);
 				return;
@@ -478,7 +507,7 @@ export default function midnight(pi: ExtensionAPI): void {
 			else if (panel === "explorer" && !mode) panels.toggleExplorer();
 			else
 				ctx.ui.notify(
-					"/midnight sidebar|explorer [auto|always|hidden], explorer go [path]|parent|project, project [path], compact on|off, title auto|off, or refresh",
+					"/midnight sidebar|explorer [auto|always|hidden], explorer go [path]|parent|project, project [path], compact on|off, title auto|off, scaledown on|off|status, evidence status|check|show [id], or refresh",
 					"info",
 				);
 		},
