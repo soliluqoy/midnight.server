@@ -25,7 +25,7 @@ export const SourceSchema = Type.Union([
 		sha256: hash,
 		exitCode: Type.Union([Type.Integer(), Type.Null()]),
 		advisory: Type.Boolean(),
-		// ScaleDown's own source provenance, never its generated summary or log text.
+		// Triage's own source provenance, never its generated summary or log text.
 		sourceHash: Type.Optional(hash),
 		selectionHash: Type.Optional(hash),
 	}),

@@ -13,13 +13,13 @@ import { createKeybindings } from "./keys.ts";
 import { focusedComponent, type PanelMode, SidebarLayout } from "./layout.ts";
 import { OPEN_PROJECT, ProjectSwitcher, SWITCH_PROJECT } from "./project-switch.ts";
 import { registerQuestion } from "./question.ts";
-import { registerScaleDown, type ScaleDownStatus } from "./scaledown/index.ts";
 import { sessionDiffSections } from "./session-diff.ts";
 import { type PendingFile, SessionPendingFiles } from "./session-pending-files.ts";
 import { SessionTitle } from "./session-title.ts";
 import { Sidebar } from "./sidebar.ts";
 import { applyDefaultTheme } from "./theme.ts";
 import { registerTokenSpeed } from "./token-speed.ts";
+import { registerTriage, type TriageStatus } from "./triage/index.ts";
 
 export class MidnightPanels {
 	private ctx: ExtensionContext;
@@ -135,9 +135,9 @@ export class MidnightPanels {
 		this.tui.requestRender();
 	}
 
-	updateScaleDown(status: ScaleDownStatus | undefined): void {
+	updateTriage(status: TriageStatus | undefined): void {
 		if (this.disposed) return;
-		this.sidebar.scaleDown = status;
+		this.sidebar.triage = status;
 		this.sidebar.invalidate();
 		this.tui.requestRender();
 	}
@@ -195,7 +195,7 @@ export class MidnightPanels {
 		this.tui.requestRender();
 	}
 
-	/** Close previews before Pi's native question dialog takes ownership of the editor. */
+	/** Close previews before Pi's native question/helper dialog takes ownership of the editor. */
 	prepareQuestion(): boolean {
 		if (this.disposed || this.folderDialogOpen || this.modelDialogOpen || this.projectSwitchActive()) return false;
 		this.previewGeneration++;
@@ -443,8 +443,11 @@ export default function midnight(pi: ExtensionAPI): void {
 		await evidence.check(ctx);
 	});
 	registerTokenSpeed(pi);
-	const question = registerQuestion(pi, () => panels?.prepareQuestion() ?? true);
-	const scaleDown = registerScaleDown(pi, { onUpdate: (status) => panels?.updateScaleDown(status) });
+	const question = registerQuestion(pi, () => !triage.active && (panels?.prepareQuestion() ?? true));
+	const triage = registerTriage(pi, {
+		onUpdate: (status) => panels?.updateTriage(status),
+		beforeDialog: () => !question.active && (panels?.prepareQuestion() ?? true),
+	});
 	const evidence = registerEvidence(pi, (summary) => panels?.updateEvidence(summary));
 	let title: SessionTitle | undefined;
 	let projectSwitcher = new ProjectSwitcher();
@@ -468,9 +471,9 @@ export default function midnight(pi: ExtensionAPI): void {
 				ctx,
 				tui,
 				() => projectSwitcher.active,
-				() => question.active,
+				() => question.active || triage.active,
 			);
-			panels.updateScaleDown(scaleDown.sidebarStatus());
+			panels.updateTriage(triage.sidebarStatus());
 			panels.updateEvidence(evidence.summary());
 			return panels;
 		});
@@ -507,16 +510,23 @@ export default function midnight(pi: ExtensionAPI): void {
 	pi.on("session_compact", refreshTitle);
 	pi.registerCommand("midnight", {
 		description:
-			"Midnight: status|doctor|config|context|rewind|checkpoints|browser; sidebar|explorer, project, compact, title, scaledown, evidence, refresh",
+			"Midnight: status|doctor|config|context|rewind|checkpoints|browser; sidebar|explorer, project, compact, title, triage, evidence, refresh",
 		handler: async (args, ctx) => {
-			if (question.active) {
-				ctx.ui.notify("Answer or cancel the Midnight question before using /midnight commands.", "info");
+			if (question.active || triage.active) {
+				ctx.ui.notify("Finish or cancel the Midnight dialog before using /midnight commands.", "info");
 				return;
 			}
 			if (await suite.command(args, ctx)) return;
 			const [panel, mode] = args.trim().split(/\s+/);
 			if (panel === "scaledown") {
-				await scaleDown.command(args.trim().replace(/^scaledown(?:\s+|$)/, ""), ctx);
+				ctx.ui.notify(
+					"ScaleDown was replaced by local-first chat-model triage. Old ScaleDown keys/consent are ignored. Use /midnight triage models, then model provider/id and on to authorize the selected helper.",
+					"info",
+				);
+				return;
+			}
+			if (panel === "triage") {
+				await triage.command(args.trim().replace(/^triage(?:\s+|$)/, ""), ctx);
 				return;
 			}
 			if (panel === "evidence") {
@@ -560,7 +570,7 @@ export default function midnight(pi: ExtensionAPI): void {
 			else if (panel === "explorer" && !mode) panels.toggleExplorer();
 			else
 				ctx.ui.notify(
-					"/midnight status|doctor|config|context|rewind|checkpoints|browser; sidebar|explorer [auto|always|hidden], explorer go [path]|parent|project, project [path], compact on|off, title auto|off, scaledown on|off|status, evidence status|check|show [id], or refresh",
+					"/midnight status|doctor|config|context|rewind|checkpoints|browser; sidebar|explorer [auto|always|hidden], explorer go [path]|parent|project, project [path], compact on|off, title auto|off, triage model [provider/id]|models|on|off|status, evidence status|check|show [id], or refresh",
 					"info",
 				);
 		},

@@ -196,20 +196,20 @@ test("question dialogs retain mouse and keyboard ownership over both panels", (t
 	assert.equal(sidebar.selectedModels, 1);
 });
 
-test("ScaleDown stays compact in the sidebar without reported cost text", (t) => {
+test("Triage stays compact in the sidebar without reported cost text", (t) => {
 	const h = sidebarHarness();
 	t.after(() => h.sidebar.dispose());
-	assert.doesNotMatch(plain(h.sidebar.render(32)).join("\n"), /SCALEDOWN/);
-	h.sidebar.scaleDown = { enabled: true, requests: 0, tokens: 0, incomplete: false, localCalls: 0, cacheHits: 0 };
+	assert.doesNotMatch(plain(h.sidebar.render(32)).join("\n"), /TRIAGE/);
+	h.sidebar.triage = { enabled: true, requests: 0, tokens: 0, incomplete: false, localCalls: 0, cacheHits: 0 };
 	h.sidebar.invalidate();
 	let lines = plain(h.sidebar.render(32));
-	const start = lines.findIndex((row) => row.includes("SCALEDOWN"));
-	assert.match(lines[start], /SCALEDOWN\s+on/);
+	const start = lines.findIndex((row) => row.includes("TRIAGE"));
+	assert.match(lines[start], /TRIAGE\s+on/);
 	assert.match(lines[start + 1], /0 req · 0 tokens/);
 	assert.match(lines[start + 2], /0 local · 0 cache/);
 	assert.match(lines[start + 3], /not used yet/);
 	assert.doesNotMatch(lines.slice(start).join("\n"), /\$|reported/);
-	h.sidebar.scaleDown = {
+	h.sidebar.triage = {
 		enabled: false,
 		requests: 2,
 		tokens: 1200,
@@ -220,24 +220,24 @@ test("ScaleDown stays compact in the sidebar without reported cost text", (t) =>
 	};
 	h.sidebar.invalidate();
 	lines = plain(h.sidebar.render(32));
-	assert.match(lines[start], /SCALEDOWN\s+off/);
+	assert.match(lines[start], /TRIAGE\s+off/);
 	assert.match(lines[start + 1], /2 req · 1.2k tokens\*/);
 	assert.match(lines[start + 2], /1 local · 2 cache/);
 	assert.match(lines[start + 3], /last: remote · 8ms · issues/);
 	assert.ok(h.sidebar.render(32)[start + 3].includes(h.theme.fg("warning", "last: remote · 8ms · issues")));
 	assert.match(lines[start + 4], /usage incomplete/);
 	for (const mode of ["local", "remote", "cache"] as const) {
-		h.sidebar.scaleDown.lastCall = { mode, reason: null, totalMs: 5, providerMs: 0, issues: false };
+		h.sidebar.triage.lastCall = { mode, reason: null, totalMs: 5, providerMs: 0, issues: false };
 		h.sidebar.invalidate();
 		assert.match(plain(h.sidebar.render(32))[start + 3], new RegExp(`last: ${mode} · 5ms`));
 	}
-	h.sidebar.scaleDown.lastCall = undefined;
+	h.sidebar.triage.lastCall = undefined;
 	h.sidebar.invalidate();
 	assert.match(plain(h.sidebar.render(32))[start + 3], /remote requested/);
 	for (const width of [0, 1, 8, 24, 32]) assert.ok(h.sidebar.render(width).every((row) => visibleWidth(row) <= width));
-	h.sidebar.scaleDown = undefined;
+	h.sidebar.triage = undefined;
 	h.sidebar.invalidate();
-	assert.doesNotMatch(plain(h.sidebar.render(32)).join("\n"), /SCALEDOWN/);
+	assert.doesNotMatch(plain(h.sidebar.render(32)).join("\n"), /TRIAGE/);
 });
 
 test("evidence sidebar stays local, width-safe, and visible when only review items remain", (t) => {

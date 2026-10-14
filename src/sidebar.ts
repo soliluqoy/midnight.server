@@ -11,9 +11,9 @@ import {
 import type { EvidenceSummary } from "./evidence/model.ts";
 import type { GitStatusSummary } from "./git-status.ts";
 import { alignColumns, truncateLeftToWidth } from "./presentation.ts";
-import type { ScaleDownStatus } from "./scaledown/index.ts";
 import { SessionAnalysis, sessionEntryCount } from "./session-analysis.ts";
 import type { PendingFile, PendingSnapshot } from "./session-pending-files.ts";
+import type { TriageStatus } from "./triage/index.ts";
 
 export class Sidebar implements Component {
 	private readonly context: () => ExtensionContext;
@@ -28,7 +28,7 @@ export class Sidebar implements Component {
 	private disposed = false;
 	private rows: PendingFile[] = [];
 	updating = false;
-	scaleDown: ScaleDownStatus | undefined;
+	triage: TriageStatus | undefined;
 	evidence: EvidenceSummary | undefined;
 	get candidates() {
 		return this.analysis.changes;
@@ -221,9 +221,9 @@ export class Sidebar implements Component {
 			theme.fg("muted", [ctx.model?.provider, this.pi.getThinkingLevel()].filter(Boolean).join(" · ")),
 			this.selectModel,
 		);
-		if (this.scaleDown) {
-			const { enabled, requests, tokens: totalTokens, incomplete, localCalls, cacheHits, lastCall } = this.scaleDown;
-			heading("SCALEDOWN", theme.fg(enabled ? "success" : "dim", enabled ? "on" : "off"));
+		if (this.triage) {
+			const { enabled, requests, tokens: totalTokens, incomplete, localCalls, cacheHits, lastCall } = this.triage;
+			heading("TRIAGE", theme.fg(enabled ? "success" : "dim", enabled ? "on" : "off"));
 			line(theme.fg("muted", `${requests} req · ${tokens(totalTokens)} tokens${incomplete ? "*" : ""}`));
 			line(theme.fg("dim", `${localCalls} local · ${cacheHits} cache`));
 			line(

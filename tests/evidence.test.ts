@@ -15,7 +15,7 @@ import { Value } from "typebox/value";
 import { ParamsSchema, receipt, registerEvidence } from "../src/evidence/index.ts";
 import { ENTRY_TYPE, EvidenceLedger, type EvidenceRecord, MAX_RECEIPTS, ResultSchema } from "../src/evidence/model.ts";
 import { captureSource, MAX_SOURCE_BYTES, sha256 } from "../src/evidence/source.ts";
-import { type TriageData, TriageSchema } from "../src/scaledown/result.ts";
+import { type TriageData, TriageSchema } from "../src/triage/result.ts";
 
 const hash = "a".repeat(64);
 function record(id: string, overrides: Partial<EvidenceRecord> = {}): EvidenceRecord {
@@ -208,7 +208,7 @@ test("passive receipts use actual structured exit codes, not prose or success fl
 	assert.doesNotMatch(JSON.stringify(result), /secret-like|do not copy|all tests passed/);
 });
 
-test("ScaleDown receipts preserve provenance without promoting summaries to command success", async (t) => {
+test("Triage receipts preserve provenance without promoting summaries to command success", async (t) => {
 	const h = harness(await workspace(t));
 	const triage: TriageData = {
 		version: 2,

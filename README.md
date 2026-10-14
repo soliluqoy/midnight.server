@@ -1,6 +1,6 @@
 # midnight.server
 
-A native **Pi suite** with context management, safe checkpoints/rewind, session sidebar and file explorer, a blue theme, compact tool output, automatic titles, token-speed stats, clarification questions and a local evidence ledger. Browser access and ScaleDown log triage are included as explicit opt-in integrations. No separate pi-clm or pi-rewind installation is needed.
+A native **Pi suite** with context management, safe checkpoints/rewind, session sidebar and file explorer, a blue theme, compact tool output, automatic titles, token-speed stats, clarification questions and a local evidence ledger. Local log triage is included; browser access and chat-helper uploads are explicit opt-in integrations. No separate pi-clm or pi-rewind installation is needed.
 
 Requires **Pi 1.2.0** (matching the current managed Pi installation), **Node.js 22.19+**, and Git on PATH. Side panels need fullscreen mode. There is no build step or standalone server. Core services use the pinned Pi libraries; the browser server is an optional npm dependency.
 
@@ -10,13 +10,21 @@ Requires **Pi 1.2.0** (matching the current managed Pi installation), **Node.js 
 
 ## Install
 
-Install this prerelease with a pinned tag:
+Install the published native-suite prerelease with a pinned tag:
 
 ```powershell
 pi install git:github.com/soliluqoy/midnight.server@v0.5.0-beta.1
 ```
 
-Restart Pi or run `/reload`, then choose fullscreen TUI mode in `/settings`. Source archives, a packaged `.tgz`, and checksums are available from [GitHub Releases](https://github.com/soliluqoy/midnight.server/releases).
+That published tag still includes the older ScaleDown integration; it does **not** include the newer local-first chat-model triage or helper picker described below. To try those changes from the development branch instead:
+
+```powershell
+pi install git:github.com/soliluqoy/midnight.server@main
+```
+
+`main` is a moving development branch, not a pinned release. Installing the same repository with a different ref replaces its Pi package declaration; check `pi list` and keep only one Midnight source. Updating a tag-pinned install does not move it to a newer tag or to `main`.
+
+Restart Pi or run `/reload`, then choose fullscreen TUI mode in `/settings`. Source archives, a packaged `.tgz`, and checksums for the published prerelease are available from [GitHub Releases](https://github.com/soliluqoy/midnight.server/releases).
 
 To try a local checkout:
 
@@ -30,7 +38,7 @@ pi --extension . --tui-mode fullscreen
 
 ## Native ownership and migration
 
-A fresh single-package installation enables native context management and Git checkpoints automatically. Existing panel, title, question and evidence behavior is preserved. ScaleDown still requires its existing credential/consent flow; browser access requires an explicit connection.
+A fresh single-package installation enables native context management and Git checkpoints automatically. Existing panel, title, question and evidence behavior is preserved. Local log triage needs no helper key; optional chat-helper uploads require model selection and explicit consent. Browser access requires an explicit connection.
 
 **Do not run two context or rewind engines.** At session startup Midnight checks public runtime command/tool registration. If external CLM/live-context or rewind ownership is detected, the overlapping native service pauses and `/midnight status` explains why. Canonical `/midnight-context`, `/midnight-context-compact` and `/midnight-rewind` controls remain diagnostic/guarded; familiar `/clm`, `/clm-compact` and `/rewind` aliases are registered only when native ownership is confirmed and names are free.
 
@@ -171,7 +179,7 @@ Cancellation is **not consent and does not select a default**: the result tells 
 
 Midnight keeps a small, branch-aware investigation ledger inspired by [LongHarness](https://arxiv.org/abs/2610.13075). It separates **evidence** (source-linked observations), **claims** (agent interpretations supported by evidence IDs), and **gaps** (unanswered, decision-changing questions). It is bookkeeping, **not independent verification**: a valid reference does not prove that a source supports a claim, and exit code zero does not prove correctness.
 
-**Passive by default:** when loaded, Midnight records bounded metadata receipts for `bash`/`powershell` results that include a structured `exit_code`, and for schema-valid `midnight_log_triage` results. It never infers exit codes from prose, copies command strings or log output into receipts, or creates conclusions automatically. ScaleDown receipts retain source/selection hashes and remain advisory with unknown exit code, including local/cache results and partial failures. Tool-call IDs (and parent IDs for nested codemode calls) link receipts to their original tool observations.
+**Passive by default:** when loaded, Midnight records bounded metadata receipts for `bash`/`powershell` results that include a structured `exit_code`, and for schema-valid `midnight_log_triage` results. It never infers exit codes from prose, copies command strings or log output into receipts, or creates conclusions automatically. Log-triage receipts retain source/selection hashes and remain advisory with unknown exit code, including local/cache results and partial failures. Tool-call IDs (and parent IDs for nested codemode calls) link receipts to their original tool observations.
 
 For substantial investigations, use the **`midnight_evidence`** tool:
 
@@ -194,21 +202,25 @@ Choose the actual relevant lines; that range is only an example. Use the returne
 
 The sidebar shows **EVIDENCE / local**, active sources, claims without review flags, review items, and open gaps. `/midnight evidence status` reports counts; `check` rechecks tracked sources; `show [id]` shows one record or the ten newest active records. Use the tool to inspect full bounded provenance and relationships. Compact tool rows show review/gap counts; expanding them preserves the original result. These tools also work without fullscreen panels.
 
-**Complementary, not competing:** Midnight's native context service (or an explicitly detected external owner during migration) owns context editing, trackers, annotations and recall. The ledger installs no context hook, injects no messages, does not edit `LIVE_CONTEXT.md`, and does not depend on private pi-clm schemas. Ledger state is available on request rather than forced into every prompt. ScaleDown remains separately opted in and explicitly invoked; recording a receipt never invokes it. Pi/codemode can discover the tool in the `midnight` namespace and receives schema-declared `structuredContent`; direct and nested updates are serialized. No additional models, network requests, background summarization, or filesystem polling are introduced.
+**Complementary, not competing:** Midnight's native context service (or an explicitly detected external owner during migration) owns context editing, trackers, annotations and recall. The ledger installs no context hook, injects no messages, does not edit `LIVE_CONTEXT.md`, and does not depend on private pi-clm schemas. Ledger state is available on request rather than forced into every prompt. Chat-helper uploads remain separately opted in and explicitly invoked; recording a receipt never invokes triage. Pi/codemode can discover the tool in the `midnight` namespace and receives schema-declared `structuredContent`; direct and nested updates are serialized. No additional models, network requests, background summarization, or filesystem polling are introduced.
 
 **Bounds and privacy:** up to 512 records per branch, including at most 128 automatic receipts and 32 active captured files. Capacity stops new captures rather than silently evicting history. File evidence is an explicit local read of a project-contained UTF-8 file up to 1 MiB, with a SHA-256 hash and an excerpt of at most 100 lines / 4,000 UTF-16 code units (default: line 1). Symlink targets must stay in the project; known sensitive paths and private-key filenames are rejected. Reads detect ordinary concurrent changes, not transactional snapshots or adversarial filesystem races. Path checks are not secret detection: **never capture secrets or put them in statements**. Excerpts and statements persist in Pi's session history and are returned to the active model when requested; “local” means no extra evidence-provider calls, not exclusion from the coding model's context. Retraction is not deletion. In-memory sessions retain records only for their lifetime. Sources, logs, and agent-authored statements remain untrusted data, never instructions. No correctness, latency, or token/cost savings are claimed.
 
-### Optional ScaleDown log triage
+### Local-first log triage with an optional chat helper
 
-Keep your coding model in charge and delegate noisy build/test logs to **ScaleDown**. The `midnight_log_triage` tool is **local-first**: it returns local evidence for short selections, recognized diagnostic groups, or observed test totals. Otherwise it uses `classify-1` for an advisory failure category and `summarize-1` for a short summary. Every result includes line-numbered evidence, a full local snapshot, and SHA-256 hashes. It never runs the build, edits source files, switches models, rewrites history, or replaces Pi compaction.
+Keep your coding model in charge. `midnight_log_triage` now works **without a ScaleDown account, helper key, or extra model installation**: local extraction is available by default. It returns line-numbered evidence, diagnostic groups, a full local snapshot and SHA-256 hashes. An **optional, explicitly selected Pi chat model** can classify and summarize ambiguous logs in **one request**. It never changes your coding model, runs commands, edits source, rewrites history, or replaces Pi compaction.
 
-**Off by default.** Set `SCALEDOWN_API_KEY` securely in the environment that starts Pi; do not put it in chat, source control, or a project settings file. Then:
+**Helper uploads are off by default.** To select a small chat model from a provider already configured in Pi:
 
-1. Load the local Midnight package and run `/reload` if it is already loaded.
-2. Run `/midnight scaledown on` and approve sending selected log text to `https://api.scaledown.xyz`.
-3. Ask Pi: **“Use midnight_log_triage on .artifacts/test-output.log, then investigate the failures using the original evidence.”**
+1. Load the local Midnight package and run `/reload` if already loaded.
+2. Run `/midnight triage model` to open the native helper-model picker (Up/Down → Enter; Escape cancels).
+3. Choose a physical chat model with configured Pi authentication. Selection leaves uploads off and does not change the coding model. Alternatively, list entries with `/midnight triage models` and select one explicitly with `/midnight triage model provider/model-id`.
+4. Run `/midnight triage on` and confirm sharing selected log text with that model's configured provider.
+5. Ask Pi: **“Use midnight_log_triage on .artifacts/test-output.log, then investigate using the original evidence.”**
 
-Create a UTF-8 log inside the working project first. For example, from PowerShell (the exit code is saved separately; the helper does not execute the command):
+The helper uses Pi's public model registry and request-time provider authentication, including the configured auth route where supported. **Access to the coding model does not guarantee access to the helper**; OAuth subscriptions, API credentials, scopes and billing differ. Only chat models qualify: classifier-only models (including GPT-6 Luna in Pi's catalog) cannot supply a generated summary. Virtual/router models are rejected to avoid hidden helper routing. Midnight never guesses a cheap model or silently falls back to the coding model. A missing/unavailable helper returns local evidence with a limitation; no fallback provider is called.
+
+Create a UTF-8 log inside the working project first. For example, in PowerShell (capture the real exit code separately):
 
 ```powershell
 New-Item -ItemType Directory -Force .artifacts | Out-Null
@@ -216,40 +228,36 @@ npm test 2>&1 | Out-File -Encoding utf8 .artifacts/test-output.log
 $testExitCode = $LASTEXITCODE
 ```
 
-The tool accepts `{ "path": ".artifacts/test-output.log", "mode": "auto", "startLine": 1, "maxLines": 200 }`. It reads only ordinary UTF-8 `.log`, `.txt`, or `.out` files up to **1 MiB**, inside the working project. Symlinks resolving outside the project or into known sensitive directories are rejected.
+Example tool arguments: `{ "path": ".artifacts/test-output.log", "mode": "auto", "maxLines": 200 }`. Only ordinary UTF-8 `.log`, `.txt`, or `.out` files up to **1 MiB** inside the working project are accepted. Escaping symlinks and known sensitive paths are rejected.
 
-- **Selection:** omit `startLine` to scan the log locally and prioritize the first failure, distinct diagnostic groups with nearby context, and final output. Remaining space uses a tail without filling it with repeated diagnostic lines. Small logs fit in full. With `startLine`, scan a contiguous window instead; the byte limit can shorten its end. At most **400 complete source lines / 24 KiB**, including line-number prefixes, are sent **to each of two requests**. Exact selected and omitted ranges distinguish local scanning from what the provider actually sees.
-- **Grouping:** identical trimmed diagnostic lines are grouped after redaction, with occurrence counts and first/last line numbers in the scanned range. Output is capped at 24 groups / 6 KiB; omitted groups and clipped messages are marked. Passing TAP/spec test names containing words such as “error” or “failure” are not treated as failures.
-- **`mode: "auto"` (default):** skip uploads for fully selected small windows (at most 24 lines, 3,000 UTF-16 code units, and 4 KiB), recognized diagnostic groups whose representatives fit in local evidence, or observed Node/TAP test totals with zero reported failures/cancellations and a duration. Recognizers cover TypeScript error codes, selected npm dependency/environment codes, and common failing-test markers; they are not general parsers. Unknown output is never declared clean. Prefer dedicated local parsers for structured reports such as JUnit.
-- **`mode: "local"`:** return bounded local evidence only, regardless of size/recognition. No provider calls.
-- **`mode: "remote"`:** bypass local gates when a provider assessment is useful, but still reuse a successful cached result. This does not bypass consent or limits.
+- **Selection:** omit `startLine` to prioritize the first failure, distinct diagnostic groups with nearby context, and final output. Remaining space uses a tail rather than repeated diagnostics. With `startLine`, scan a contiguous window instead. At most **400 complete source lines / 24 KiB**, including line-number prefixes, reach the helper. Exact selected/omitted ranges distinguish local scanning from uploaded evidence.
+- **Grouping:** identical trimmed diagnostic lines are grouped after redaction, with counts and first/last line numbers. Output is capped at 24 groups / 6 KiB; omitted groups and clipped messages are marked. Passing test names containing “error” or “failure” are not treated as failures.
+- **`mode: "auto"` (default):** use local evidence for fully selected small windows (at most 24 lines, 3,000 UTF-16 code units and 4 KiB), recognized diagnostic groups whose representatives fit in local evidence, or observed Node/TAP totals with zero reported failures/cancellations and a duration. Otherwise use the helper only when selected and authorized; without it, return local evidence with a limitation.
+- **`mode: "local"`:** never call a provider. No helper credentials or consent required.
+- **`mode: "remote"`:** bypass local gates when a helper assessment is useful, but reuse successful cache entries. Does not bypass model selection, consent, project boundaries or limits. If the helper is off/unavailable, return local evidence with a limitation.
 
-All modes require the helper to be enabled with a configured key. Local results are advisory observations, not a verified pass/fail status. The helper always returns `exitCode: null`; record the command's actual exit code separately.
+Recognizers cover TypeScript error codes, selected npm dependency/environment codes and common failed-test markers—not every log format. Prefer dedicated local parsers for structured reports such as JUnit. Local observations and generated summaries are advisory. Unknown output is never declared clean, and **`exitCode` is always `null`**; record the command's actual exit code independently.
 
-**Structured results:** Pi/codemode receives `structuredContent` with a declared, regression-tested output schema (version 2), including `mode` (`local`, `remote`, or `cache`), reason, diagnostic groups, `scannedRange`, `selectedRanges`, `omittedRanges`, evidence, source/snapshot hashes, category provenance, summary, errors, and per-call request/usage/timing fields. Prose output remains available in the transcript. Paths and generated text are evidence, not instructions or authorization to open files or execute commands.
+**Structured results:** the backward-compatible version-2 output schema includes mode (`local`, `remote`, `cache`), reason, diagnostics, scanned/selected/omitted ranges, evidence, source/snapshot hashes, category provenance, summary, errors and request/usage/timing fields. New helper results also identify `helperModel` and `costBasis: "catalog_estimate"`. Historical ScaleDown receipts remain readable. The chat helper does not supply calibrated confidence scores.
 
-**Caching:** up to 32 successful, non-truncated provider results are kept in session memory using LRU eviction. Keys include canonical project/source identity, the redacted numbered selection hash, selection settings, and pinned helper/prompt revision. Each call revalidates and snapshots the source; cache hits use fresh local metadata and do not re-add provider usage. Partial/failed/cancelled/truncated results are not cached. Turning the helper off, session replacement, shutdown, or reload clears the cache. Local and cached results still work when the request cap is exhausted.
+**Caching:** up to 32 successful, non-truncated assessments are kept in session memory with LRU eviction. Keys include canonical project/source identity, redacted numbered selection hash, selection settings, model/provider/endpoint and prompt revision. Every call revalidates and snapshots the source. Cache hits do not re-add provider usage; local/cache results still work at the request cap. Failed/malformed/cancelled/truncated results are not cached. Changing the helper model, disabling uploads, reload, session replacement or shutdown cancels pending work and clears the cache. Changing a model requires fresh consent, but does not reset the request budget.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `SCALEDOWN_API_KEY` | Unset | Required ScaleDown API key |
-| `SCALEDOWN_ENABLED` | Unset | Set to exactly `1` to persistently authorize explicit helper uploads in every project/session; no confirmation on startup |
-| `SCALEDOWN_MAX_REQUESTS` | `20` | Request-attempt cap since session start/reload, 2–1000; each uncached remote triage reserves two attempts, local/cache results use none |
-| `SCALEDOWN_TIMEOUT_MS` | `15000` | Timeout per request, 100–60000 ms |
+| `MIDNIGHT_TRIAGE_MODEL` | Unset | Exact `provider/model-id` chat helper; never automatically selected |
+| `MIDNIGHT_TRIAGE_ENABLED` | Unset | Exactly `1` persistently authorizes explicit helper uploads in every project/session when a model is selected |
+| `MIDNIGHT_TRIAGE_MAX_REQUESTS` | `20` | Attempt cap since session start/reload, 1–1000; each uncached helper assessment reserves one |
+| `MIDNIGHT_TRIAGE_TIMEOUT_MS` | `15000` | Request timeout, 100–60000 ms |
 
-There are no automatic retries, background uploads, or calls triggered by rendering. Failed requests count against the cap. A partial failure retains the other helper's result; a complete API failure returns the local evidence as an error result. Turning the helper off cancels in-flight requests. Session replacement and shutdown also cancel work and discard late UI updates. Cancellation or timeout does not guarantee the provider avoided billing.
+Interactive selection/consent are session-local and reset on reload/session replacement. Cancelling the picker leaves the current helper, consent, cache and request budget unchanged. Native dialogs retain keyboard/mouse input ownership; open previews close before a dialog. The picker also works with RPC clients supporting Pi's extension UI protocol; print/JSON modes require explicit model arguments. Session replacement, tree navigation and shutdown cancel pending dialogs and discard stale selections. For print/JSON/RPC, explicitly configure `MIDNIGHT_TRIAGE_MODEL` and pass `--midnight-triage`; flag consent is restricted to the invocation's starting project. Alternatively, `MIDNIGHT_TRIAGE_ENABLED=1` authorizes across projects. Restart Pi after changing its external environment. `/midnight triage off` cancels helper work and disables uploads until session start/reload; **local triage remains available**.
 
-The sidebar separates **enabled** from **used**: it shows on/off, request attempts, reported tokens, local-result/cache-hit counts, and the last result's local/remote/cache mode and elapsed time (or **not used yet**). Results with errors or truncated summaries are marked **issues**; this is helper health, not the build's status. Compact `midnight_log_triage` rows also show the actual mode, new request attempts, and elapsed time; expand them for original evidence and full details. There is no cost text in the footer. `/midnight scaledown status` shows full reported cost details, cumulative provider-wait time, and the last result's routing reason, elapsed time, and provider-wait time. Enabled means explicit calls are authorized, not that automatic uploads are running. Each result also reports total elapsed time and provider-wait time; local/cache calls have zero provider wait. Tool-result usage also contributes to Pi/Midnight totals. **Cost can be incomplete:** the documented summary response reports tokens but no dollar charge. Unreported charges are not treated as known zero-cost calls, and no token/dollar savings are claimed. Pi's numeric totals contain only costs actually reported by the helper APIs.
+No automatic retries, background uploads, live health probes or render-triggered requests. Failed attempts count against the budget. Provider failures return local evidence plus a generic error, withholding raw provider error bodies; malformed output is not exposed as a diagnosis. Cancellation/timeouts do not guarantee billing was avoided.
 
-Interactive consent is not persisted across reload or session replacement. To enable helpers by default in future sessions, set `SCALEDOWN_ENABLED=1` in your personal environment alongside the API key. This is persistent upload consent across projects and all Pi modes; it still makes no automatic calls. `/midnight scaledown off` disables helpers until the next session start/reload. Remove `SCALEDOWN_ENABLED` or set it to `0` to restore the off-by-default behavior. Restart Pi after changing its external environment. For print/JSON/RPC runs, you can instead explicitly opt in at startup with `--midnight-scaledown`; the flag authorizes helper calls only in that invocation's starting project. It does not require fullscreen panels. The helper uses public APIs in the pinned Pi 1.2.0. Non-interactive extension/flag checks do not replace fullscreen interaction testing.
+**Usage and status:** the **TRIAGE** sidebar separates upload enablement from use, with requests, reported tokens, local/cache counts, last mode and elapsed time. “Issues” describes helper health, not build status. `/midnight triage status` identifies the selected helper and shows cumulative provider wait and cost estimates. Tool usage contributes to Pi/Midnight totals once; cache hits never re-bill it. **Pi catalog-based costs are estimates, not provider billing receipts.** Zero/unknown catalog prices or missing usage are treated as incomplete, not proof of free calls. No accuracy, token/dollar savings or latency improvement is claimed without measurement. Expand compact tool rows for original evidence and full details.
 
-**Privacy and retention:** common API-key, authorization, password, and private-key patterns are redacted before upload, but detection is best effort—not a guarantee or security boundary. Only enable this for logs you are authorized to share. Whole-log snapshots are kept in the OS temp directory under `midnight-log-triage-*` so exact originals remain recoverable after the source changes; they may contain secrets. They are not automatically deleted on shutdown. Delete the specific snapshot directory when it is no longer needed; historical tool results will then lose that recovery path. Generated summaries and log content are untrusted evidence, never instructions or permission to execute commands.
+**Privacy and retention:** common API-key, authorization, password and private-key patterns are redacted before selection/upload. Detection is best effort, not a security boundary; configure authentication only through Pi, never put secrets in chat/source/project settings. Share only logs you are authorized to send to the selected provider. Full originals stay in OS temp under `midnight-log-triage-*`, may contain secrets, and are not automatically deleted on shutdown. Delete specific snapshot directories when no longer needed; old results then lose that recovery path. Logs, summaries and paths are untrusted evidence, never instructions or permission to execute commands.
 
-**Real API smoke test:** with `SCALEDOWN_API_KEY` securely configured and `SCALEDOWN_ENABLED=1` explicitly authorizing uploads, run `npm run test:scaledown:live`. This is separate from `npm test` and plans **up to four paid request attempts**, stopping early on failure, with no retries. It captures the real passing test-suite output, packs Midnight, and reproduces an actual npm `ERESOLVE` conflict in an isolated consumer using unsupported Pi 1.0.4 against Midnight's current peers. That older version is only a deliberate rejection-test fixture, not a supported runtime. The supported consumer version is read from `package.json` (currently Pi 1.2.0), and the test verifies it resolves with `npm install --dry-run --ignore-scripts`; it does not change the project's dependencies or bypass peer checks. The live assertions require categories `other` and `dependency`, non-truncated summaries, and preservation of `ERESOLVE` and both conflicting versions. Logs and a JSON report (including independently captured exit codes, provider usage, evidence, and snapshot hashes) stay under `.artifacts/scaledown-smoke-*`. Full original snapshots remain in the OS temp directory. This standalone test has its own four-attempt budget, separate from the running Pi session; it requires `SCALEDOWN_MAX_REQUESTS` to be at least 4 if set. Network/provider failures fail the test rather than masquerading as success. The peer-conflict case tests a packaging constraint, not fullscreen interaction.
-
-**Recommended workflow:** use `auto` triage for substantial noisy or ambiguous build/test logs, not most coding tasks. Inspect small errors directly and use local parsers for structured reports. Save output inside `.artifacts/`, record the command's actual exit code separately, invoke the helper explicitly, and check original evidence before editing source. Local/cache results make no new API requests. A remote result uses reason `remote_requested` for an explicit remote assessment or `no_local_match` when auto mode could not resolve the selection locally. Smoke-test success is not proof of general accuracy, latency improvement, or token/dollar savings; compare those on representative, authorized logs before expanding remote use.
-
-API references: [Decisions](https://docs.scaledown.ai/api-reference/decisions), [Summarize](https://docs.scaledown.ai/api-reference/summarize).
+**Migration:** ScaleDown endpoints, keys and consent are no longer used. `SCALEDOWN_*` settings do not authorize the new helper. `/midnight scaledown` only explains migration; use `/midnight triage`. The ScaleDown-specific paid smoke script was removed. Automated tests use mocked Pi chat responses and make no provider calls.
 
 ## Commands
 
@@ -276,7 +284,8 @@ Angle brackets describe an argument; omit the brackets when typing a command.
 | `/midnight project <path>` | Switch to a new working project |
 | `/midnight compact <on\|off>` | Enable/disable compact tool rendering |
 | `/midnight title <auto\|off>` | Enable/disable automatic titles |
-| `/midnight scaledown <on\|off\|status>` | Opt in to log-triage uploads, disable/cancel them, or inspect helper usage |
+| `/midnight triage model [provider/model-id]` | Open the helper-model picker, or select an exact chat helper; leaves uploads off until consent |
+| `/midnight triage <models\|on\|off\|status>` | List configured chat helpers, authorize uploads, disable/cancel uploads, or inspect usage |
 | `/midnight evidence <status\|check\|show> [id]` | Inspect local evidence counts/records or recheck tracked sources |
 | `/midnight refresh` | Refresh Git and file state |
 
@@ -315,7 +324,7 @@ npm run check
 npm test
 ```
 
-`npm run check` runs Biome and TypeScript validation. `npm test` runs Node's test runner with injected I/O/component checks, mocked ScaleDown responses, and real Git in temporary repositories; no provider calls are made. Evidence tests cover immutable corrections, dependency review, gap reopening, branch replay, nested receipts, source bounds, symlink retargets, cancellation, and structured results. ScaleDown tests cover opt-in, request limits, log boundaries, redaction, symlink rejection, cancellation, partial failure, structured response validation, usage accounting, local gates, timing, and cache identity/eviction. A synthetic offline corpus in `tests/fixtures/scaledown-corpus.ts` checks early failures, repeated/mixed diagnostics, misleading passing-test names, Unicode, ambiguous output, and log-embedded instructions; it makes no model-quality or savings claims. Run focused tests during development and the full check/test commands once for final validation; avoid unrelated or repeated tests. Test fullscreen interaction separately with only the local extension loaded.
+`npm run check` runs Biome and TypeScript validation. `npm test` runs Node's test runner with injected I/O/component checks, mocked Pi chat-model responses, and real Git in temporary repositories; no provider calls are made. Evidence tests cover immutable corrections, dependency review, gap reopening, branch replay, nested receipts, source bounds, symlink retargets, cancellation, and structured results. Triage tests cover opt-in, request limits, log boundaries, redaction, symlink rejection, cancellation, partial failure, structured response validation, usage accounting, local gates, timing, and cache identity/eviction. A synthetic offline corpus in `tests/fixtures/triage-corpus.ts` checks early failures, repeated/mixed diagnostics, misleading passing-test names, Unicode, ambiguous output, and log-embedded instructions; it makes no model-quality or savings claims. Run focused tests during development and the full check/test commands once for final validation; avoid unrelated or repeated tests. Test fullscreen interaction separately with only the local extension loaded.
 
 Native suite regression tests cover mirror validation, projection, annotations, budgets/overflow, ownership, mocked browser registration, scoped restore, recovery, legacy import, raw CRLF bytes and Git object reachability. Before publishing a release, also check fullscreen keyboard/mouse/resize/reload behavior and an isolated one-package installation; offline tests and package manifests do not establish those manual/runtime gates.
 

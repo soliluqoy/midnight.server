@@ -11,6 +11,9 @@ export const TriageSchema = Type.Object({
 	warning: Type.String(),
 	mode: Type.Union([Type.Literal("local"), Type.Literal("remote"), Type.Literal("cache")]),
 	reason: NullableString,
+	// Optional for backward compatibility with historical version-2 ScaleDown receipts.
+	helperModel: Type.Optional(Type.String()),
+	costBasis: Type.Optional(Type.Literal("catalog_estimate")),
 	source: Type.String(),
 	snapshot: Type.String(),
 	sha256: Type.String(),
@@ -48,8 +51,9 @@ export function renderTriage(data: TriageData): string {
 			.map(({ startLine, endLine }) => (startLine === endLine ? `${startLine}` : `${startLine}–${endLine}`))
 			.join(", ") || "none";
 	return [
-		`ScaleDown log triage — ${data.warning}`,
+		`Midnight log triage — ${data.warning}`,
 		`Mode: ${data.mode}${data.reason ? ` (${data.reason})` : ""}; ${data.requestAttempts} new request attempts.`,
+		...(data.helperModel ? [`Selected chat helper: ${data.helperModel}; coding model unchanged.`] : []),
 		`Source: ${data.source}`,
 		`Local full snapshot (may contain secrets; do not upload): ${data.snapshot}\nSnapshot SHA-256: ${data.sha256}`,
 		`Locally scanned lines ${formatRanges([data.scannedRange])} of ${data.totalLines}. Selected evidence/upload lines: ${formatRanges(data.selectedRanges)}. Omitted from selection: ${formatRanges(data.omittedRanges)}. Only selected lines reach the provider; a local scan is not exhaustive diagnosis. Exit code is unknown unless independently recorded.`,
@@ -68,7 +72,7 @@ export function renderTriage(data: TriageData): string {
 		"Local evidence (sampled, line-numbered; terminal escapes removed and common credentials redacted):",
 		data.evidence,
 		...data.errors,
-		`This call: ${data.reportedTokens ?? "unknown"} reported helper tokens${data.completeUsage ? "" : " (incomplete)"}; ${data.reportedCostUsd === null ? "unknown cost" : `$${data.reportedCostUsd.toFixed(6)} reported cost`}${data.completeCost ? "" : " (incomplete; unreported charges are not zero)"}. Cache hits never re-add usage. No savings estimate.`,
+		`This call: ${data.reportedTokens ?? "unknown"} reported helper tokens${data.completeUsage ? "" : " (incomplete)"}; ${data.reportedCostUsd === null ? "unknown cost" : `$${data.reportedCostUsd.toFixed(6)} ${data.costBasis === "catalog_estimate" ? "catalog-estimated cost (not a billing receipt)" : "reported cost"}`}${data.completeCost ? "" : " (incomplete; unknown charges are not zero)"}. Cache hits never re-add usage. No savings estimate.`,
 		`Elapsed: ${data.totalMs} ms total; ${data.providerMs} ms provider wait.`,
 	].join("\n\n");
 }

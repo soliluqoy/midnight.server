@@ -91,7 +91,7 @@ export function registerSuite(pi: ExtensionAPI, onRestore: (ctx: ExtensionContex
 		for (const alias of registerAvailableAliases(pi, commands, requested)) aliases.add(alias);
 	});
 	function status() {
-		return `Midnight native suite\nContext: ${contextOwner}${contextProblem ? ` — ${contextProblem}` : ""}\nCheckpoints: ${checkpointOwner}\n${checkpoints.status()}\nCore services need no separate pi-clm/pi-rewind install. ScaleDown and browser connections remain explicit opt-ins.`;
+		return `Midnight native suite\nContext: ${contextOwner}${contextProblem ? ` — ${contextProblem}` : ""}\nCheckpoints: ${checkpointOwner}\n${checkpoints.status()}\nCore services need no separate pi-clm/pi-rewind install. Local log triage needs no key. Chat-helper uploads and browser connections remain explicit opt-ins.`;
 	}
 	async function command(args: string, ctx: ExtensionCommandContext) {
 		const [action, ...rest] = args.trim().split(/\s+/);
@@ -125,7 +125,7 @@ export function registerSuite(pi: ExtensionAPI, onRestore: (ctx: ExtensionContex
 			const [key, value] = rest;
 			if (!key) {
 				ctx.ui.notify(
-					`Session service settings: context=${preferences.context ? "on" : "off"}, checkpoints=${preferences.checkpoints ? "on" : "off"}.\n/midnight config context|checkpoints on|off (saved on this branch; reload or switch session/branch to activate).\nContext policy: /midnight context config. Existing panel/title/ScaleDown controls are unchanged.`,
+					`Session service settings: context=${preferences.context ? "on" : "off"}, checkpoints=${preferences.checkpoints ? "on" : "off"}.\n/midnight config context|checkpoints on|off (saved on this branch; reload or switch session/branch to activate).\nContext policy: /midnight context config. Panel/title/triage controls are separate from these service settings.`,
 					"info",
 				);
 				return true;

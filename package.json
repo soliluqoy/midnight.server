@@ -33,8 +33,7 @@
 	},
 	"scripts": {
 		"check": "biome check --error-on-warnings . && tsc --noEmit",
-		"test": "node --experimental-strip-types --test tests/*.test.ts",
-		"test:scaledown:live": "node --experimental-strip-types scripts/scaledown-smoke.ts"
+		"test": "node --experimental-strip-types --test tests/*.test.ts"
 	},
 	"engines": {
 		"node": ">=22.19.0"

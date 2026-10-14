@@ -3,7 +3,7 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry, ToolResultEvent } fr
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
-import { TriageSchema } from "../scaledown/result.ts";
+import { TriageSchema } from "../triage/result.ts";
 import {
 	ENTRY_TYPE,
 	type EvidenceEvent,
@@ -62,7 +62,7 @@ export function receipt(event: ToolResultEvent): { text: string; source: Evidenc
 	const advisory = event.toolName === "midnight_log_triage";
 	if (advisory) {
 		if (!Value.Check(TriageSchema, data) || !/^[a-f0-9]{64}$/.test(data.sha256)) return;
-		text = `ScaleDown ${data.mode} triage; advisory only; exit code unknown${event.isError || data.errors.length || data.summaryTruncated ? "; issues reported" : ""}.`;
+		text = `Log ${data.mode} triage; advisory only; exit code unknown${event.isError || data.errors.length || data.summaryTruncated ? "; issues reported" : ""}.`;
 		sourceHash = data.sha256;
 		if (/^[a-f0-9]{64}$/.test(data.selectionSha256)) selectionHash = data.selectionSha256;
 	} else {
@@ -350,7 +350,7 @@ export function registerEvidence(pi: ExtensionAPI, onUpdate: (summary: EvidenceS
 		description:
 			"Local branch-aware evidence, claims, and decision-changing gaps. list is paginated, newest first; use id to inspect. " +
 			"add evidence reads a project file excerpt (path/startLine/endLine); statements are your interpretation, not verified facts. " +
-			"Command exit-code and advisory ScaleDown receipts are captured passively, including codemode calls. " +
+			"Command exit-code and advisory log-triage receipts are captured passively, including codemode calls. " +
 			"add claim requires evidence refs; current claims need reassessment after shell/edit/write or session navigation. " +
 			"add gap records an unanswered question, optionally linked by refs. Use supersedes to correct any active record. " +
 			"retract requires id/reason; resolve requires a gap id/reason and active evidence refs. " +
