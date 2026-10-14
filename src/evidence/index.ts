@@ -368,6 +368,7 @@ export function registerEvidence(pi: ExtensionAPI, onUpdate: (summary: EvidenceS
 		},
 	});
 	return {
+		check: (ctx: ExtensionContext) => check(undefined, ctx),
 		summary: () => runtime.ledger.summary(),
 		async command(args: string, ctx: ExtensionContext) {
 			const [action = "status", id] = args.trim().split(/\s+/).filter(Boolean);

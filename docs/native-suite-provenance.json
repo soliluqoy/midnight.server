@@ -1,0 +1,59 @@
+{
+	"version": 1,
+	"compatibility": {
+		"pi": "1.2.0",
+		"node": ">=22.19.0"
+	},
+	"sources": [
+		{
+			"name": "@lolipopshock/pi-clm",
+			"version": "1.0.0",
+			"license": "MIT",
+			"origin": "Installed package distribution inspected during integration; hashes identify that local input, not an independently verified publication or upstream Git revision.",
+			"files": {
+				"src/budget.ts": "4cbf559f3f4b7ceb4613719e012fc48a9f9fef99a15b165575a6e4cf0e1eec57",
+				"src/compact.ts": "faaebbef230de0c0534f80f7ce5a0d22875c94a821d36314cc8422e3cef18aea",
+				"src/context-document.ts": "dd3d4fc60ae3e8ed7eea74f324332a4ab2f97dcb7c22bde9f997729786011f17",
+				"src/continuity.ts": "02e6a774c77734168a0cc116062cc9699a72e052119fdba13860be221a63e564",
+				"src/diff.ts": "7072a0c98f0fe21ddf086a18fec1875d14685142a297f7beb6d32b669d334e9e",
+				"src/index.ts": "a6d1c464bebdcc927a0eb6d0bb1ff319c3e5cdf5bf844e03b599ec91169f7170",
+				"src/mirror-guard.ts": "9af8960a06703ea834a786e444d7c12feb1658ba8d373ca1d656e7e34da6d261",
+				"src/mirror-store.ts": "faa0f20303e91993a49ac03229e634b31bca2ca6d78cffab2914562e446d2fc6",
+				"src/observation.ts": "19e6fa6c170399d7af792a4cea6d77832f04fa208c3f5d70d0cf0fca08a96195",
+				"src/overflow.ts": "5200690976d863fb904f48712fc5342bdc2a11bf8864ab7621fdb23723be7340",
+				"src/policy.ts": "1e60a0e7f2569be07147c3b8218119c3997db37b11ff839e41724258a1fd23a6",
+				"src/presentation.ts": "32e796edb1540a3d3630fac04ff83381f45dc7203252863a4ab2eb158a55ac73",
+				"src/projection.ts": "fab19b8a132e6e6d99a579c279530bcfbe849ad01cee84209398eda6a9853fda",
+				"src/settings.ts": "5d54005c46200727e4f238a5cb14aa670d23af389a62b8d0fe560f5f2494b1d0",
+				"src/state.ts": "ff48b157bb86ef4f4fc26fcf897275c84a16fa357ab876ea89faf099cefd51ef",
+				"src/steering.ts": "553797d2d51f4039cba0d1317aabd344642fa9f4668664099f2f82ced33bcf32",
+				"src/timeline.ts": "50e38ba26333cdb630e02994b4b48ff3792fe164d91b6bb4eb20c4cff58aa19a",
+				"src/types.ts": "87eaba5c35bfa881590698974646779037fb6a82f3c32f71ade4e0091217257f",
+				"src/viewer.ts": "676ee81c317ec8b4f0c1a64e1c8f6b24f149c75b559e4a68509db7c0c21e70a6",
+				"steering/house-brief.md": "9cb60c3763ec7e850c57154f67deb309fa386e61ec0f8dfcd6384bed6c49d0a7",
+				"LICENSE": "fbbb6ea3cf5926602af07f1fd6661cd7fb50c34bc1425a134511606005129fb5"
+			}
+		},
+		{
+			"name": "pi-rewind",
+			"version": "0.5.0",
+			"license": "MIT",
+			"origin": "Installed package distribution inspected during integration; hashes identify that local input, not an independently verified publication or upstream Git revision.",
+			"files": {
+				"src/core.ts": "eeda96d582777905d74f770b345b312a1520815a0156f148d6b3e7d7c2659422",
+				"LICENSE": "9e88c3503147285d3b10f5a38b59573a9c8c9cfad0757385b71636547adeb74d"
+			}
+		}
+	],
+	"adaptations": [
+		"pi-clm core source is maintained under src/context with canonical Midnight tools/commands, gated ownership, portable defaults and erasable TypeScript.",
+		"The pi-rewind checkpoint core was redesigned for bounded asynchronous Git operations, scoped journalled restores, HEAD preservation and session-specific retention; legacy metadata is read separately.",
+		"Steering is from the attributed CLM distribution. The skills are original Midnight workflows, not copies of personal connector skills."
+	],
+	"optionalAdapter": {
+		"name": "chrome-devtools-mcp",
+		"version": "1.10.1",
+		"license": "Apache-2.0",
+		"distribution": "Normal optional npm dependency; its own license is distributed with that package. No code was copied into Midnight."
+	}
+}

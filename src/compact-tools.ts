@@ -136,7 +136,10 @@ class CompactRow implements Component {
 			this.resultContent = result.content;
 			this.resultDetails = result.details;
 			this.outcome = outcomeOf(this.name, result);
-			this.reason = triageOutcome(this.name, result.details) ?? lastLine(textOf(result));
+			this.reason =
+				questionOutcome(this.name, result.details) ??
+				triageOutcome(this.name, result.details) ??
+				lastLine(textOf(result));
 		}
 		this.cache = undefined;
 		this.normal = undefined;
@@ -334,6 +337,8 @@ function describe(name: string, args: Args): string {
 		case "edit":
 		case "write":
 			return path;
+		case "midnight_question":
+			return firstLine(str(args.question));
 		case "midnight_evidence":
 			return [str(args.action), str(args.kind), path || str(args.id)].filter(Boolean).join(" ");
 		case "grep":
@@ -367,7 +372,19 @@ function triageOutcome(name: string, details: unknown): string | undefined {
 	return `${data.mode}${issues} · ${data.requestAttempts} req · ${Math.round(data.totalMs)}ms`;
 }
 
+function questionOutcome(name: string, details: unknown): string | undefined {
+	if (name !== "midnight_question" || !details || typeof details !== "object") return undefined;
+	const data = details as Record<string, unknown>;
+	if (data.version !== 1) return undefined;
+	if (data.status === "answered" && typeof data.answer === "string") return `answered: ${firstLine(data.answer)}`;
+	if (data.status === "cancelled") return "cancelled · no answer";
+	if (data.status === "unavailable") return "unavailable · ask in chat";
+	return undefined;
+}
+
 function outcomeOf(name: string, result: AgentToolResult<unknown>): string {
+	const question = questionOutcome(name, result.details);
+	if (question) return question;
 	if (name === "midnight_evidence" && result.details && typeof result.details === "object") {
 		const details = result.details as Record<string, unknown>;
 		const summary = details.summary;

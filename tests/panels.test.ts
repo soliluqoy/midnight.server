@@ -38,7 +38,7 @@ const click = (y: number): TuiMouseEvent => ({
 	ctrl: false,
 });
 
-function explorerHarness() {
+function explorerHarness(inputBlocked: () => boolean = () => false) {
 	let theme = midnight();
 	let height = 24;
 	let changes: ReadonlySet<string> = new Set(["src/theme.ts"]);
@@ -60,6 +60,7 @@ function explorerHarness() {
 	const explorer = new FileExplorerComponent({
 		theme: () => theme,
 		keybindings: createKeybindings(),
+		inputBlocked,
 		isProjectRoot: () => true,
 		rootPath: () => path.resolve("midnight.server"),
 		sessionChanges: () => changes,
@@ -110,7 +111,7 @@ function pending(file: string, added?: number, removed?: number): PendingFile {
 	};
 }
 
-function sidebarHarness() {
+function sidebarHarness(inputBlocked: () => boolean = () => false) {
 	let theme = midnight();
 	let percent: number | undefined = 42;
 	let height = 40;
@@ -144,6 +145,8 @@ function sidebarHarness() {
 			selectedModels++;
 		},
 		() => true,
+		() => {},
+		inputBlocked,
 	);
 	sidebar.branch = "main";
 	sidebar.git = { changedFiles: 3, staged: 1, unstaged: 2, untracked: 0, conflicted: 0 };
@@ -170,6 +173,28 @@ function sidebarHarness() {
 		},
 	};
 }
+
+test("question dialogs retain mouse and keyboard ownership over both panels", (t) => {
+	let blocked = false;
+	const explorer = explorerHarness(() => blocked);
+	const sidebar = sidebarHarness(() => blocked);
+	t.after(() => sidebar.sidebar.dispose());
+	explorer.explorer.render(32);
+	const lines = plain(sidebar.sidebar.render(36));
+	const modelRow = lines.findIndex((line) => line.includes("model-name"));
+	assert.ok(modelRow >= 0);
+	blocked = true;
+	assert.deepEqual(explorer.explorer.handleMouse(click(3)), { handled: true });
+	explorer.explorer.handleInput("\r");
+	assert.deepEqual(explorer.opened, []);
+	assert.deepEqual(sidebar.sidebar.handleMouse(click(modelRow)), { handled: true });
+	assert.equal(sidebar.selectedModels, 0);
+	blocked = false;
+	explorer.explorer.handleInput("\r");
+	assert.deepEqual(explorer.opened, ["src/theme.ts"]);
+	sidebar.sidebar.handleMouse(click(modelRow));
+	assert.equal(sidebar.selectedModels, 1);
+});
 
 test("ScaleDown stays compact in the sidebar without reported cost text", (t) => {
 	const h = sidebarHarness();

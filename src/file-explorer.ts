@@ -25,6 +25,8 @@ const HEADER_ROWS = 2;
 export interface FileExplorerOptions {
 	theme: () => Theme;
 	keybindings: KeybindingsManager;
+	/** Leave focus with an active Midnight question dialog. */
+	inputBlocked?: () => boolean;
 	onExpand: (path: string) => void;
 	/** True only at the project root, not a folder inside it or elsewhere. */
 	isProjectRoot: () => boolean;
@@ -171,6 +173,7 @@ export class FileExplorerComponent implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
+		if (this.options.inputBlocked?.()) return;
 		this.invalidate();
 		const kb = this.options.keybindings;
 		const index = this.selectedIndex();
@@ -208,6 +211,7 @@ export class FileExplorerComponent implements Component, Focusable {
 	}
 
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (this.options.inputBlocked?.()) return { handled: true };
 		if (event.type === "wheel") {
 			this.invalidate();
 			const maxScroll = Math.max(0, this.rows.length - this.treeHeight());

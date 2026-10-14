@@ -3,6 +3,7 @@ import { dirname, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Component, isKeyRelease, stripTerminalSequences, type TUI } from "@earendil-works/pi-tui";
 import { compactToolRenderers } from "./compact-tools.ts";
+import { registerSuite } from "./core/suite.ts";
 import { registerEvidence } from "./evidence/index.ts";
 import type { EvidenceSummary } from "./evidence/model.ts";
 import { ExplorerLocation, resolveExplorerFolder } from "./explorer-location.ts";
@@ -11,6 +12,7 @@ import { FilePreviewComponent, type FilePreviewContent, loadFilePreview } from "
 import { createKeybindings } from "./keys.ts";
 import { focusedComponent, type PanelMode, SidebarLayout } from "./layout.ts";
 import { OPEN_PROJECT, ProjectSwitcher, SWITCH_PROJECT } from "./project-switch.ts";
+import { registerQuestion } from "./question.ts";
 import { registerScaleDown, type ScaleDownStatus } from "./scaledown/index.ts";
 import { sessionDiffSections } from "./session-diff.ts";
 import { type PendingFile, SessionPendingFiles } from "./session-pending-files.ts";
@@ -41,13 +43,22 @@ export class MidnightPanels {
 	private layoutCheckQueued = false;
 	private explorerVisible = false;
 	private folderDialogOpen = false;
+	private modelDialogOpen = false;
 	private readonly projectSwitchActive: () => boolean;
+	private readonly questionActive: () => boolean;
 
-	constructor(pi: ExtensionAPI, ctx: ExtensionContext, tui: TUI, projectSwitchActive: () => boolean = () => false) {
+	constructor(
+		pi: ExtensionAPI,
+		ctx: ExtensionContext,
+		tui: TUI,
+		projectSwitchActive: () => boolean = () => false,
+		questionActive: () => boolean = () => false,
+	) {
 		this.pi = pi;
 		this.ctx = ctx;
 		this.tui = tui;
 		this.projectSwitchActive = projectSwitchActive;
+		this.questionActive = questionActive;
 		this.prompt = focusedComponent(tui);
 		this.pendingFiles = new SessionPendingFiles(ctx.cwd);
 		this.sidebar = new Sidebar(
@@ -60,6 +71,7 @@ export class MidnightPanels {
 			() => {
 				if (!this.disposed) tui.requestRender();
 			},
+			() => this.questionActive(),
 		);
 		this.workspace = new ExplorerLocation(ctx.cwd, (reset) => {
 			this.explorer.setSnapshot(this.workspace, reset);
@@ -68,6 +80,7 @@ export class MidnightPanels {
 		this.explorer = new FileExplorerComponent({
 			theme: () => this.ctx.ui.theme,
 			keybindings: this.keys,
+			inputBlocked: () => this.questionActive(),
 			isProjectRoot: () => relative(this.workspace.projectRoot, this.workspace.root) === "",
 			rootPath: () => this.workspace.root,
 			sessionChanges: () => this.workspace.sessionChanges(this.sidebar.changedPaths),
@@ -86,31 +99,34 @@ export class MidnightPanels {
 			},
 		});
 		this.layout = new SidebarLayout(tui, this.sidebar, this.explorer, () => this.workspace.root);
-		this.unsubscribe = ctx.ui.onTerminalInput((data) => {
-			if (
-				this.disposed ||
-				this.folderDialogOpen ||
-				this.projectSwitchActive() ||
-				isKeyRelease(data) ||
-				tui.hasOverlay()
-			)
-				return;
-			this.layout.ensure();
-			if (this.explorer.focused && !this.layout.visibility().explorer) this.exitExplorer();
-			if (this.keys.matches(data, "app.sidebar.toggle")) {
-				this.toggleSidebar();
-				return { consume: true };
-			}
-			if (this.keys.matches(data, "app.explorer.toggle")) {
-				this.toggleExplorer();
-				return { consume: true };
-			}
-			return;
-		});
+		this.unsubscribe = ctx.ui.onTerminalInput((data) => this.handleTerminalInput(data));
 		this.sidebar.refresh();
 		this.layout.ensure();
 		this.explorerVisible = this.layout.visibility().explorer;
 		void this.refreshFiles();
+	}
+
+	private handleTerminalInput(data: string) {
+		if (
+			this.disposed ||
+			this.folderDialogOpen ||
+			this.questionActive() ||
+			this.projectSwitchActive() ||
+			isKeyRelease(data) ||
+			this.tui.hasOverlay()
+		)
+			return;
+		this.layout.ensure();
+		if (this.explorer.focused && !this.layout.visibility().explorer) this.exitExplorer();
+		if (this.keys.matches(data, "app.sidebar.toggle")) {
+			this.toggleSidebar();
+			return { consume: true };
+		}
+		if (this.keys.matches(data, "app.explorer.toggle")) {
+			this.toggleExplorer();
+			return { consume: true };
+		}
+		return;
 	}
 
 	update(ctx: ExtensionContext, scan: boolean): void {
@@ -177,6 +193,16 @@ export class MidnightPanels {
 			void this.refreshFiles();
 		}
 		this.tui.requestRender();
+	}
+
+	/** Close previews before Pi's native question dialog takes ownership of the editor. */
+	prepareQuestion(): boolean {
+		if (this.disposed || this.folderDialogOpen || this.modelDialogOpen || this.projectSwitchActive()) return false;
+		this.previewGeneration++;
+		this.sessionPreviewRequest++;
+		this.closePreview?.();
+		this.exitExplorer();
+		return true;
 	}
 
 	/** Browsing only changes the shown folder. Use a Pi command to switch projects. */
@@ -256,6 +282,7 @@ export class MidnightPanels {
 	}
 
 	private supported(): boolean {
+		if (this.questionActive()) return false;
 		if (this.layout.ensure()) return true;
 		this.ctx.ui.notify(
 			"Midnight panels require pi 1.2.0 fullscreen mode. Set TUI mode to fullscreen in /settings.",
@@ -277,6 +304,7 @@ export class MidnightPanels {
 	}
 
 	private async previewPending(previous: PendingFile): Promise<void> {
+		if (this.questionActive()) return;
 		const request = ++this.sessionPreviewRequest;
 		await this.refreshFiles();
 		if (this.disposed || request !== this.sessionPreviewRequest) return;
@@ -308,11 +336,12 @@ export class MidnightPanels {
 	}
 
 	private async preview(path: string, sessionContent?: FilePreviewContent): Promise<void> {
+		if (this.questionActive()) return;
 		if (!sessionContent) this.sessionPreviewRequest++;
 		const generation = ++this.previewGeneration;
 		this.closePreview?.();
 		const content = sessionContent ?? (await loadFilePreview(resolve(this.ctx.cwd, path)));
-		if (this.disposed || generation !== this.previewGeneration) return;
+		if (this.disposed || generation !== this.previewGeneration || this.questionActive()) return;
 		await this.ctx.ui.custom<void>(
 			(tui, _theme, _keys, done) => {
 				this.closePreview = () => done();
@@ -335,13 +364,19 @@ export class MidnightPanels {
 	}
 
 	private async selectModel(): Promise<void> {
-		const models = this.ctx.modelRegistry.getAvailable();
-		const labels = models.map((model) => `${model.provider}/${model.id}`);
-		const selected = await this.ctx.ui.select("Model", labels);
-		if (this.disposed || !selected) return;
-		const model = models[labels.indexOf(selected)];
-		if (model && !(await this.pi.setModel(model)))
-			this.ctx.ui.notify("Model authentication is unavailable.", "warning");
+		if (this.questionActive() || this.modelDialogOpen) return;
+		this.modelDialogOpen = true;
+		try {
+			const models = this.ctx.modelRegistry.getAvailable();
+			const labels = models.map((model) => `${model.provider}/${model.id}`);
+			const selected = await this.ctx.ui.select("Model", labels, { signal: this.controller.signal });
+			if (this.disposed || !selected) return;
+			const model = models[labels.indexOf(selected)];
+			if (model && !(await this.pi.setModel(model)))
+				this.ctx.ui.notify("Model authentication is unavailable.", "warning");
+		} finally {
+			this.modelDialogOpen = false;
+		}
 	}
 
 	refreshFiles(): Promise<void> {
@@ -400,8 +435,15 @@ export class MidnightPanels {
 }
 
 export default function midnight(pi: ExtensionAPI): void {
-	registerTokenSpeed(pi);
 	let panels: MidnightPanels | undefined;
+	// Context owns our earliest transforms; restore refreshes the same evidence and panels as normal work.
+	const suite = registerSuite(pi, async (ctx) => {
+		panels?.update(ctx, true);
+		await panels?.refreshFiles();
+		await evidence.check(ctx);
+	});
+	registerTokenSpeed(pi);
+	const question = registerQuestion(pi, () => panels?.prepareQuestion() ?? true);
 	const scaleDown = registerScaleDown(pi, { onUpdate: (status) => panels?.updateScaleDown(status) });
 	const evidence = registerEvidence(pi, (summary) => panels?.updateEvidence(summary));
 	let title: SessionTitle | undefined;
@@ -421,7 +463,13 @@ export default function midnight(pi: ExtensionAPI): void {
 		applyDefaultTheme(pi, ctx);
 		title = new SessionTitle(pi, ctx, (context) => panels?.update(context, true));
 		ctx.ui.setWidget("midnight-panels", (tui) => {
-			panels = new MidnightPanels(pi, ctx, tui, () => projectSwitcher.active);
+			panels = new MidnightPanels(
+				pi,
+				ctx,
+				tui,
+				() => projectSwitcher.active,
+				() => question.active,
+			);
 			panels.updateScaleDown(scaleDown.sidebarStatus());
 			panels.updateEvidence(evidence.summary());
 			return panels;
@@ -459,8 +507,13 @@ export default function midnight(pi: ExtensionAPI): void {
 	pi.on("session_compact", refreshTitle);
 	pi.registerCommand("midnight", {
 		description:
-			"Midnight: sidebar|explorer [auto|always|hidden], explorer go [path]|parent|project, project [path], compact on|off, title auto|off, scaledown on|off|status, evidence status|check|show [id], refresh",
+			"Midnight: status|doctor|config|context|rewind|checkpoints|browser; sidebar|explorer, project, compact, title, scaledown, evidence, refresh",
 		handler: async (args, ctx) => {
+			if (question.active) {
+				ctx.ui.notify("Answer or cancel the Midnight question before using /midnight commands.", "info");
+				return;
+			}
+			if (await suite.command(args, ctx)) return;
 			const [panel, mode] = args.trim().split(/\s+/);
 			if (panel === "scaledown") {
 				await scaleDown.command(args.trim().replace(/^scaledown(?:\s+|$)/, ""), ctx);
@@ -507,7 +560,7 @@ export default function midnight(pi: ExtensionAPI): void {
 			else if (panel === "explorer" && !mode) panels.toggleExplorer();
 			else
 				ctx.ui.notify(
-					"/midnight sidebar|explorer [auto|always|hidden], explorer go [path]|parent|project, project [path], compact on|off, title auto|off, scaledown on|off|status, evidence status|check|show [id], or refresh",
+					"/midnight status|doctor|config|context|rewind|checkpoints|browser; sidebar|explorer [auto|always|hidden], explorer go [path]|parent|project, project [path], compact on|off, title auto|off, scaledown on|off|status, evidence status|check|show [id], or refresh",
 					"info",
 				);
 		},

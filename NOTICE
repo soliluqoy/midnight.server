@@ -10,3 +10,23 @@ Source: https://github.com/soliluqoy/midnight.server
 Original MIT copyright and license are retained in LICENSE.
 Adaptations provide pi extension integration, asynchronous filesystem access,
 configurable shortcuts, cached rendering and lifecycle cleanup.
+
+Native context source is derived from @lolipopshock/pi-clm 1.0.0 (MIT),
+Copyright 2026 Emanuel Casco. The full license is retained in licenses/pi-clm.txt.
+Imports, erasable syntax, tool/command names, ownership guards, defaults and
+portable steering integration were adapted for Midnight and Pi 1.2.0.
+
+Checkpoint design is derived from pi-rewind 0.5.0 (MIT),
+Copyright (c) 2026 arpagon. The full license is retained in licenses/pi-rewind.txt.
+The core was redesigned for bounded asynchronous Git I/O, scoped journalled
+restores without resetting HEAD or cleaning unrelated paths, reachable index
+objects, explicit recovery, session-specific retention and legacy metadata import.
+
+docs/native-suite-provenance.json records hashes of installed source inputs.
+Those hashes identify the inspected distributions, not independently verified
+published artifacts or upstream Git revisions.
+
+chrome-devtools-mcp 1.10.1 is an optional Apache-2.0 npm dependency, not copied
+source. Its license and notices are distributed with that dependency.
+Bundled skills are original portable Midnight workflows. Personal connector
+skills, credentials, models, profiles and user configuration are not redistributed.

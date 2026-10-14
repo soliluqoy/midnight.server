@@ -1,7 +1,7 @@
 {
 	"name": "midnight.server",
-	"version": "0.4.0",
-	"description": "Fast session sidebar and file explorer extracted from midnight.server for pi",
+	"version": "0.5.0-beta.1",
+	"description": "Native Pi suite: context management, safe checkpoints, session panels, tools, and opt-in browser/log integrations",
 	"type": "module",
 	"license": "MIT",
 	"keywords": [
@@ -10,6 +10,11 @@
 	"files": [
 		"src",
 		"themes",
+		"steering",
+		"licenses",
+		"skills",
+		"docs/native-suite-provenance.json",
+		"docs/releases",
 		"docs/images/midnight-preview.jpg",
 		"README.md",
 		"NOTICE",
@@ -21,6 +26,9 @@
 		],
 		"themes": [
 			"./themes/midnight.json"
+		],
+		"skills": [
+			"./skills"
 		]
 	},
 	"scripts": {
@@ -32,6 +40,8 @@
 		"node": ">=22.19.0"
 	},
 	"peerDependencies": {
+		"@earendil-works/pi-ai": "1.2.0",
+		"@earendil-works/pi-agent-core": "1.2.0",
 		"@earendil-works/pi-coding-agent": "1.2.0",
 		"@earendil-works/pi-tui": "1.2.0",
 		"typebox": "*"
@@ -40,5 +50,8 @@
 		"@biomejs/biome": "2.3.5",
 		"@types/node": "22.19.19",
 		"typescript": "7.0.2"
+	},
+	"optionalDependencies": {
+		"chrome-devtools-mcp": "1.10.1"
 	}
 }

@@ -56,6 +56,7 @@ export class Sidebar implements Component {
 	private autoCompact: boolean | undefined;
 	private cache: { width: number; height: number; lines: string[] } | undefined;
 	private clicks = new Map<number, () => void>();
+	private readonly inputBlocked: () => boolean;
 
 	constructor(
 		context: () => ExtensionContext,
@@ -65,6 +66,7 @@ export class Sidebar implements Component {
 		selectModel: () => void,
 		getAutoCompact: () => boolean | undefined = () => undefined,
 		requestRender: () => void = () => {},
+		inputBlocked: () => boolean = () => false,
 	) {
 		this.context = context;
 		this.pi = pi;
@@ -73,6 +75,7 @@ export class Sidebar implements Component {
 		this.selectModel = selectModel;
 		this.getAutoCompact = getAutoCompact;
 		this.requestRender = requestRender;
+		this.inputBlocked = inputBlocked;
 	}
 
 	refresh(scan = true): void {
@@ -111,6 +114,7 @@ export class Sidebar implements Component {
 	}
 
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (this.inputBlocked()) return { handled: true };
 		if (event.button !== "left" || (event.type !== "press" && event.type !== "click")) return;
 		const action = this.clicks.get(event.y);
 		if (!action) return;

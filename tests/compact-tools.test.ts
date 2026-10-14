@@ -97,6 +97,34 @@ test("compact tools share one-line operation, target, and semantic success marks
 	assert.deepEqual(plain(bash.finish(result("done"))), ["✓ bash npm test …"]);
 });
 
+test("question rows show the decision and answer or explicit cancellation without changing results", (t) => {
+	for (const status of ["answered", "cancelled", "unavailable"]) {
+		const h = harness("midnight_question", { question: "Which database?" });
+		t.after(h.dispose);
+		const value = result("Original question and answer", {
+			version: 1,
+			status,
+			answer: status === "answered" ? "SQLite" : null,
+		});
+		const original = structuredClone(value);
+		const component = h.finish(value, status === "unavailable");
+		assert.match(plain(component).join("\n"), /Which database\?/);
+		assert.match(
+			plain(component).join("\n"),
+			status === "answered"
+				? /answered: SQLite/
+				: status === "cancelled"
+					? /cancelled · no answer/
+					: /unavailable · ask in chat/,
+		);
+		for (const width of [0, 1, 8, 24, 80])
+			assert.ok(component.render(width).every((line) => visibleWidth(line) <= width));
+		h.context.expanded = true;
+		assert.match(plain(h.call()).join("\n"), /Original question and answer/);
+		assert.deepEqual(value, original);
+	}
+});
+
 test("evidence rows show operation and review counts without changing model-facing evidence", (t) => {
 	const h = harness("midnight_evidence", { action: "add", kind: "claim" });
 	t.after(h.dispose);
