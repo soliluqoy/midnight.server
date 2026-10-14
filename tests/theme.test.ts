@@ -60,6 +60,64 @@ test("package ships a valid Midnight theme with blue accents and thinking border
 	assert.match(indexed.getFgAnsi("accent").slice(1), /^\[38;5;\d+m$/);
 });
 
+function luminance(ansi: string): number {
+	const match = ansi.slice(1).match(/^\[(?:38|48);2;(\d+);(\d+);(\d+)m$/);
+	assert.ok(match, "contrast checks require truecolor tokens");
+	const rgb = match.slice(1).map((value) => {
+		const channel = Number(value) / 255;
+		return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+	});
+	return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+}
+
+test("Midnight Signal keeps passive chrome quiet and thinking borders progressively brighter", () => {
+	const theme = loadThemeFromPath(themePath, "truecolor");
+	assert.ok(luminance(theme.getFgAnsi("borderMuted")) < luminance(theme.getFgAnsi("border")));
+	assert.ok(luminance(theme.getFgAnsi("border")) < luminance(theme.getFgAnsi("accent")));
+	assert.ok(luminance(theme.getFgAnsi("accent")) < luminance(theme.getFgAnsi("borderAccent")));
+	const thinking: ThemeColor[] = [
+		"thinkingOff",
+		"thinkingMinimal",
+		"thinkingLow",
+		"thinkingMedium",
+		"thinkingHigh",
+		"thinkingXhigh",
+		"thinkingMax",
+	];
+	for (let index = 1; index < thinking.length; index++) {
+		assert.ok(
+			luminance(theme.getFgAnsi(thinking[index])) > luminance(theme.getFgAnsi(thinking[index - 1])),
+			thinking[index],
+		);
+	}
+	assert.equal(theme.getFgAnsi("syntaxFunction"), theme.getFgAnsi("borderAccent"));
+	assert.notEqual(theme.getFgAnsi("success"), theme.getFgAnsi("warning"));
+	assert.notEqual(theme.getFgAnsi("warning"), theme.getFgAnsi("error"));
+});
+
+test("body, metadata, and dim text retain 4.5:1 contrast on every Midnight surface", () => {
+	const theme = loadThemeFromPath(themePath, "truecolor");
+	for (const background of [
+		"selectedBg",
+		"userMessageBg",
+		"customMessageBg",
+		"toolPendingBg",
+		"toolSuccessBg",
+		"toolErrorBg",
+	] as const) {
+		for (const foreground of ["text", "muted", "dim", "toolOutput"] as const) {
+			const fg = luminance(theme.getFgAnsi(foreground));
+			const bg = luminance(theme.getBgAnsi(background));
+			assert.ok((fg + 0.05) / (bg + 0.05) >= 4.5, `${foreground} on ${background}`);
+		}
+	}
+	const indexed = loadThemeFromPath(themePath, "256color");
+	for (const token of ["accent", "border", "borderAccent", "success", "warning", "error"] as const) {
+		assert.match(indexed.getFgAnsi(token).slice(1), /^\[38;5;\d+m$/);
+	}
+	assert.match(indexed.getBgAnsi("selectedBg").slice(1), /^\[48;5;\d+m$/);
+});
+
 test("installed packages and CLI package directories discover both extension and theme", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "midnight-theme-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));

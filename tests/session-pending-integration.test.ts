@@ -88,7 +88,7 @@ test("sidebar combines branding and session heading without runtime details", (t
 	sidebar.branch = "main";
 	sidebar.refresh();
 	const lines = sidebar.render(36);
-	assert.deepEqual(lines.slice(0, 2), ["│ MIDNIGHT: SESSION", "│ test"]);
+	assert.deepEqual(lines.slice(0, 2), ["│ MIDNIGHT / SESSION", "│ test"]);
 	assert.ok(!lines.includes("│ SESSION"));
 	assert.doesNotMatch(lines.join("\n"), /RUNTIME|\bidle\b|\bworking\b|project (?:un)?trusted|active tools/);
 	for (const heading of ["GIT", "CONTEXT", "MODEL"]) assert.ok(lines.includes(`│ ${heading}`));

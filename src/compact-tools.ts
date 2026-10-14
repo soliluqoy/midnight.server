@@ -11,6 +11,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+import { truncateLeftToWidth } from "./presentation.ts";
 
 type RenderCall = NonNullable<ToolRenderers["renderCall"]>;
 type RenderResult = NonNullable<ToolRenderers["renderResult"]>;
@@ -97,8 +98,7 @@ class CompactRow implements Component {
 		| undefined;
 	private outcome = "";
 	private reason = "";
-	private described = { active: "", done: "", detail: "" as string | undefined };
-	private command = "";
+	private target = "";
 	private startedAt: number | undefined;
 	private callComponent: Component | undefined;
 	private resultComponent: Component | undefined;
@@ -115,8 +115,7 @@ class CompactRow implements Component {
 
 	updateCall(args: Args, theme: Theme, context: RenderContext): void {
 		if (this.args !== args || !context.argsComplete || !this.context?.argsComplete) {
-			this.described = { detail: undefined, ...describe(this.name, args) };
-			this.command = COMMAND_TOOLS.has(this.name) ? firstLine(str(args.command)) : "";
+			this.target = describe(this.name, args);
 		}
 		this.args = args;
 		this.theme = theme;
@@ -181,19 +180,40 @@ class CompactRow implements Component {
 	private summary(width: number): string[] {
 		const theme = this.theme;
 		const context = this.context;
-		const { active, done, detail } = this.described;
-		if (context.isPartial) {
-			const elapsed = this.startedAt === undefined ? 0 : Math.floor((Date.now() - this.startedAt) / 1000);
-			const title = theme.fg("toolTitle", theme.bold(active));
-			const lines = [elapsed > 0 ? `${title}${theme.fg("dim", ` · ${elapsed}s`)}` : title];
-			if (this.command)
-				lines.push(theme.fg("dim", `  └ $ ${truncateToWidth(this.command, Math.max(1, width - 6), "…")}`));
-			return lines;
-		}
-		if (context.isError)
-			return [theme.fg("error", `✗ ${done}`) + (this.reason ? theme.fg("dim", ` · ${this.reason}`) : "")];
-		const suffix = [detail, this.outcome].filter(Boolean).join(" · ");
-		return [theme.fg("muted", done) + (suffix ? theme.fg("dim", ` · ${suffix}`) : "")];
+		const running = context.isPartial && context.executionStarted;
+		const marker = context.isPartial ? (running ? "●" : "○") : context.isError ? "!" : "✓";
+		const statusColor = context.isPartial ? (running ? "accent" : "dim") : context.isError ? "error" : "success";
+		const name = stripTerminalSequences(
+			truncateToWidth(clean(this.name).replace(/\s+/g, " "), Math.max(1, Math.min(24, Math.floor(width / 3))), "…"),
+		);
+		const label = `${theme.fg(statusColor, marker)} ${theme.fg("muted", name)}`;
+		const elapsed = this.startedAt === undefined ? 0 : Math.floor((Date.now() - this.startedAt) / 1000);
+		const suffix = context.isPartial
+			? running
+				? elapsed > 0
+					? `${elapsed}s`
+					: ""
+				: "queued"
+			: context.isError
+				? `failed${this.reason ? ` · ${this.reason}` : ""}`
+				: this.outcome;
+		// Reserve the result before clipping a long path/command, especially on failures.
+		const suffixWidth = Math.max(
+			0,
+			width - visibleWidth(label) - (this.target ? Math.min(12, visibleWidth(this.target)) + 1 : 0) - 3,
+		);
+		const metadata = stripTerminalSequences(truncateToWidth(suffix, suffixWidth, "…"));
+		const targetWidth = Math.max(0, width - visibleWidth(label) - (metadata ? visibleWidth(metadata) + 3 : 0) - 1);
+		const target = stripTerminalSequences(
+			COMMAND_TOOLS.has(this.name) || this.name === "grep" || this.name === "find"
+				? truncateToWidth(this.target, targetWidth, "…")
+				: truncateLeftToWidth(this.target, targetWidth),
+		);
+		return [
+			label +
+				(target ? ` ${theme.fg("toolTitle", target)}` : "") +
+				(metadata ? theme.fg(context.isError ? "error" : "dim", ` · ${metadata}`) : ""),
+		];
 	}
 
 	private displayResult(result: AgentToolResult<unknown>): AgentToolResult<unknown> {
@@ -299,30 +319,29 @@ function tryRenderer(render: () => Component | undefined): Component | undefined
 	}
 }
 
-function describe(name: string, args: Args): { active: string; done: string; detail?: string } {
+function describe(name: string, args: Args): string {
 	const path = clean(str(args.path) || str(args.file_path)).replace(/\s+/g, " ");
 	switch (name) {
 		case "bash":
 		case "powershell":
-			return { active: "Running shell command", done: "Ran shell command", detail: firstLine(str(args.command)) };
+			return firstLine(str(args.command));
 		case "read": {
 			const offset = num(args.offset);
 			const limit = num(args.limit);
 			const range = offset || limit ? `:${offset ?? 1}${limit ? `-${(offset ?? 1) + limit - 1}` : ""}` : "";
-			return { active: `Reading ${path}`, done: `Read ${path}${range}` };
+			return path + range;
 		}
 		case "edit":
-			return { active: `Editing ${path}`, done: `Edited ${path}` };
 		case "write":
-			return { active: `Writing ${path}`, done: `Wrote ${path}` };
+			return path;
 		case "grep":
-			return { active: "Searching", done: "Searched", detail: `/${firstLine(str(args.pattern))}/${scope(args)}` };
+			return `/${firstLine(str(args.pattern))}/${scope(args)}`;
 		case "find":
-			return { active: "Finding files", done: "Found files", detail: `${firstLine(str(args.pattern))}${scope(args)}` };
+			return `${firstLine(str(args.pattern))}${scope(args)}`;
 		case "ls":
-			return { active: `Listing ${path || "."}`, done: `Listed ${path || "."}` };
+			return path || ".";
 		default:
-			return { active: `Calling ${clean(name)}`, done: `Called ${clean(name)}` };
+			return path;
 	}
 }
 

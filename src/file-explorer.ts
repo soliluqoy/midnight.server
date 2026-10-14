@@ -10,7 +10,10 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+import { truncateLeftToWidth } from "./presentation.ts";
 import type { WorkspaceEntry, WorkspaceFileMark, WorkspaceSnapshot } from "./workspace-files.ts";
+
+export { truncateLeftToWidth } from "./presentation.ts";
 
 /** Width includes the right border. */
 export const EXPLORER_WIDTH = 32;
@@ -62,27 +65,6 @@ function markColor(mark: WorkspaceFileMark): "toolDiffAdded" | "toolDiffRemoved"
 function parentPath(path: string): string {
 	const index = path.lastIndexOf("/");
 	return index === -1 ? "" : path.slice(0, index);
-}
-
-/** Keep the end of a long path so the file or folder name stays visible. */
-export function truncateLeftToWidth(text: string, maxWidth: number, ellipsis = "…"): string {
-	if (maxWidth <= 0) return "";
-	if (visibleWidth(text) <= maxWidth) return text;
-	const ellipsisWidth = visibleWidth(ellipsis);
-	const targetWidth = maxWidth - ellipsisWidth;
-	if (targetWidth <= 0) return truncateToWidth(ellipsis, maxWidth, ellipsis);
-	const chars = Array.from(text);
-	const kept: string[] = [];
-	let width = 0;
-	for (let index = chars.length - 1; index >= 0; index--) {
-		const char = chars[index];
-		if (char === undefined) break;
-		const charWidth = visibleWidth(char);
-		if (width + charWidth > targetWidth) break;
-		width += charWidth;
-		kept.unshift(char);
-	}
-	return `${ellipsis}${kept.join("")}`;
 }
 
 /** File tree on the left. Send normal typing back to the prompt. */
@@ -262,16 +244,32 @@ export class FileExplorerComponent implements Component, Focusable {
 		if (changedBySession) suffix = `${theme.fg("accent", "●")}${suffix ? ` ${suffix}` : ""}`;
 		const suffixWidth = visibleWidth(suffix);
 		const ignored = !row.parent && (snapshot?.isIgnored(entry.path) ?? false);
-		const nameColor = row.parent ? "dim" : ignored || mark === "D" ? "dim" : "text";
-		const nameWidth = Math.max(1, width - suffixWidth - (suffixWidth > 0 ? 1 : 0));
-		const name = truncateToWidth(
-			`${theme.fg("dim", indent + icon)}${theme.fg(nameColor, stripTerminalSequences(entry.name))}`,
-			nameWidth,
-			theme.fg("dim", "…"),
+		const active = selected && this.focused;
+		const nameColor = active
+			? "borderAccent"
+			: row.parent || ignored || mark === "D"
+				? "dim"
+				: entry.directory
+					? "muted"
+					: "text";
+		// Reserve the rail even when unfocused, so focus never shifts the tree sideways.
+		const bodyWidth = Math.max(0, width - 2);
+		const nameWidth = Math.max(0, bodyWidth - suffixWidth - (suffixWidth > 0 ? 1 : 0));
+		// Clip plain text first: truncateToWidth adds SGR resets, which would punch
+		// holes in a selected row's background if embedded inside its themed label.
+		const prefix = stripTerminalSequences(truncateToWidth(indent + icon, Math.max(0, nameWidth - 1), ""));
+		const filename = stripTerminalSequences(
+			truncateToWidth(
+				stripTerminalSequences(entry.name).replace(/\p{Cc}/gu, " "),
+				Math.max(0, nameWidth - visibleWidth(prefix)),
+				"…",
+			),
 		);
-		const line = `${name}${" ".repeat(Math.max(0, width - visibleWidth(name) - suffixWidth))}${suffix}`;
-		if (!selected) return line;
-		return this.focused ? theme.bg("selectedBg", line) : theme.bold(line);
+		const label = theme.fg(nameColor, filename);
+		const name = theme.fg("dim", prefix) + (selected ? theme.bold(label) : label);
+		const rail = active ? theme.fg("accent", "▎") : " ";
+		const line = `${rail} ${name}${" ".repeat(Math.max(0, bodyWidth - visibleWidth(name) - suffixWidth))}${suffix}`;
+		return active ? theme.bg("selectedBg", line) : line;
 	}
 
 	render(width: number): string[] {
@@ -299,7 +297,7 @@ export class FileExplorerComponent implements Component, Focusable {
 		this.scrollTop = Math.max(0, Math.min(this.scrollTop, Math.max(0, this.rows.length - treeHeight)));
 
 		const lines: string[] = [];
-		const titleColor = this.focused ? "accent" : "muted";
+		const titleColor = this.focused ? "borderAccent" : "muted";
 		lines.push(
 			truncateToWidth(
 				theme.bold(theme.fg(titleColor, "EXPLORER")) +
@@ -309,7 +307,10 @@ export class FileExplorerComponent implements Component, Focusable {
 			),
 		);
 		lines.push(
-			theme.fg("dim", truncateLeftToWidth(stripTerminalSequences(this.options.rootPath()), contentWidth, "…")),
+			theme.fg(
+				"dim",
+				truncateLeftToWidth(stripTerminalSequences(this.options.rootPath()).replace(/\p{Cc}/gu, " "), contentWidth),
+			),
 		);
 		const error = this.snapshot?.error?.("");
 		for (let offset = 0; offset < treeHeight; offset++) {
@@ -326,12 +327,15 @@ export class FileExplorerComponent implements Component, Focusable {
 		while (lines.length < height - hints.length) lines.push("");
 		for (const hint of hints) lines.push(truncateToWidth(theme.fg("dim", hint), contentWidth, theme.fg("dim", "…")));
 
-		const border = theme.fg(this.focused ? "borderAccent" : "borderMuted", "│");
-		const rendered = lines
-			.slice(0, Math.max(1, this.options.getHeight()))
-			.map((line) =>
-				truncateToWidth(`${line}${" ".repeat(Math.max(0, contentWidth - visibleWidth(line)))} ${border}`, width, ""),
+		const rendered = lines.slice(0, Math.max(1, this.options.getHeight())).map((line, row) => {
+			// Light only the header edge; the selected row supplies the local focus signal.
+			const border = theme.fg(this.focused && row < HEADER_ROWS ? "borderAccent" : "borderMuted", "│");
+			return truncateToWidth(
+				`${line}${" ".repeat(Math.max(0, contentWidth - visibleWidth(line)))} ${border}`,
+				width,
+				"",
 			);
+		});
 		this.cache = { width, height: requestedHeight, focused: this.focused, changes: sessionChanges, lines: rendered };
 		return rendered;
 	}
