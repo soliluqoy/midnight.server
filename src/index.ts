@@ -525,13 +525,6 @@ export default function midnight(pi: ExtensionAPI): void {
 			}
 			if (await suite.command(args, ctx)) return;
 			const [panel, mode] = args.trim().split(/\s+/);
-			if (panel === "scaledown") {
-				ctx.ui.notify(
-					"ScaleDown was replaced by local-first chat-model triage. Old ScaleDown keys/consent are ignored. Use /midnight triage models, then model provider/id and on to authorize the selected helper.",
-					"info",
-				);
-				return;
-			}
 			if (panel === "triage") {
 				await triage.command(args.trim().replace(/^triage(?:\s+|$)/, ""), ctx);
 				return;

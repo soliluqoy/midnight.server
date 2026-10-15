@@ -1,8 +1,8 @@
 # midnight.server
 
-A native **Pi suite** with context management, safe checkpoints/rewind, session sidebar and file explorer, a blue theme, compact tool output, automatic titles, token-speed stats, clarification questions and a local evidence ledger. Local log triage is included; browser access and chat-helper uploads are explicit opt-in integrations. No separate pi-clm or pi-rewind installation is needed.
+A native **Pi suite** with context management, safe checkpoints/rewind, session sidebar and file explorer, a blue theme, compact tool output, automatic titles, token-speed stats, clarification questions and a local evidence ledger. Local log triage and bundled **Trim-1** line selection are included and enabled by default; browser access and chat-helper uploads are explicit opt-in integrations. No separate pi-clm or pi-rewind installation is needed.
 
-Requires **Pi 1.2.0** (matching the current managed Pi installation), **Node.js 22.19+**, and Git on PATH. Side panels need fullscreen mode. There is no build step or standalone server. Core services use the pinned Pi libraries; the browser server is an optional npm dependency.
+Requires **Pi 1.2.0** (matching the current managed Pi installation), **Node.js 22.19+**, and Git on PATH. Side panels need fullscreen mode. There is no install-time build step or standalone server; Trim-1 ships as WebAssembly and needs no Go installation. Core services use the pinned Pi libraries; the browser server is an optional npm dependency.
 
 [**v0.5.0-beta.1**](https://github.com/soliluqoy/midnight.server/releases/tag/v0.5.0-beta.1) is the native-suite **prerelease**, not a stable release. Fullscreen interaction and an isolated fresh installation remain unverified release gates; see the [release notes](docs/releases/v0.5.0-beta.1.md). [v0.4.0](https://github.com/soliluqoy/midnight.server/releases/tag/v0.4.0) remains the previous stable release and predates these native additions. Midnight is Pi-only; Claude Code and Codex CLI integrations are not included.
 
@@ -16,7 +16,7 @@ Install the published native-suite prerelease with a pinned tag:
 pi install git:github.com/soliluqoy/midnight.server@v0.5.0-beta.1
 ```
 
-That published tag still includes the older ScaleDown integration; it does **not** include the newer local-first chat-model triage or helper picker described below. To try those changes from the development branch instead:
+That published tag does **not** include the newer local-first chat-model triage, helper picker, or bundled Trim-1 described below. To try those changes from the development branch instead:
 
 ```powershell
 pi install git:github.com/soliluqoy/midnight.server@main
@@ -91,6 +91,7 @@ Context management is **included and on by default**. No separate pi-clm install
 | Budget reminders | 50%, 75%, 90%, then budget minus reserve |
 | Overflow guard | Withhold oldest eligible tool results; retain recoverable source text |
 | Pi automatic compaction | `auto`: paused while the guard handles ordinary pressure; manual/provider-overflow recovery remains available |
+| Trim-1 line selection | On for eligible large log tool outputs; local, bounded, recoverable |
 | Observation cap / one-tool restriction / size trailer | Off |
 | Steering | Bundled portable brief; existing environment/session overrides remain supported |
 
@@ -99,6 +100,18 @@ Budget readings distinguish estimated next-request size from provider-reported p
 Use **`midnight_context_annotate`** to pin bounded exact text, keep an outstanding continuity obligation, or archive recall-only provenance. **`midnight_context_recall`** returns bounded exact sources with hash validation. Existing CLM settings, projection and annotation records remain readable; native tools have canonical Midnight names, not competing legacy tool aliases. Neither annotations nor context edits authorize secret storage. Saved history and local mirror/overflow files can retain sensitive material; removing a mirror block is not deletion from history.
 
 Supported environment defaults remain `PI_CLM_BUDGET`, `PI_CLM_RESERVE`, `PI_CLM_REMIND_AT`, `PI_CLM_OVERFLOW`, `PI_CLM_NATIVE_COMPACTION`, `PI_CLM_OBSERVATION_CAP`, `PI_CLM_STEERING`, `PI_CLM_ESTIMATE_FACTOR`, `PI_CLM_ONE_TOOL_PER_TURN`, `PI_CLM_SIZE_TRAILER` and `PI_CLM_COMPACT_PROMPT`. Use the context settings viewer for descriptions and effective values. Invalid configuration disables the native context service with a diagnostic rather than silently choosing a different policy.
+
+### Bundled Trim-1
+
+**Trim-1 runs locally inside Midnight by default**, with its model and WebAssembly runtime included in the package. No separate executable, Go installation, API key, provider request, or runtime download is needed. It selects existing lines rather than generating summaries; selection can omit useful evidence and is not a diagnosis or verification.
+
+- **Log triage:** after validation and redaction, large logs can be ranked against an optional `query` (default: build/test failure evidence). Existing diagnostic/context and final-output priorities, source snapshots, hashes, and the 400-line / 24 KiB selection limits remain. Explicit `startLine` windows are not ranked. Results report local Trim-1 use, skips or fallback when ranking is attempted.
+- **Model-facing context:** when native context ownership is active, eligible complete log reads and exact allowlisted build/test commands can receive balanced line selection. Known diagnostic lines with nearby context and the tail are protected. Source-file reads, instructions, explicit read windows, already truncated output, structured/mixed results, codemode aggregates, and user/system messages are not trimmed. Saved tool results and the original transcript are unchanged. Excerpts link to an exact temporary tool-output snapshot with its hash; use `read` with `offset`/`limit` for omitted context.
+- **Bounds and fallback:** a lazy reusable worker handles at most 1 MiB / 20,000 lines per input, with a two-second deadline. Errors, missing assets or ineffective cuts leave original context intact or use existing triage selection. Decisions are reused rather than reranking old outputs against every new question. Existing mirror edits, annotations, overflow withholding and Pi compaction remain available.
+
+Set **`MIDNIGHT_TRIM=off`** before starting Pi to disable new Trim-1 processing in both paths. This is independent of helper-upload consent and does not undo saved context edits. `/midnight triage status` reports whether the bundled ranker is enabled. Context trimming also stops when native context management is disabled or another extension owns it.
+
+**Privacy:** processing stays local, but recovery snapshots can contain secrets. Context snapshots share the mirror's temporary lifetime and are removed on its cleanup; original saved results remain in session history. Triage snapshots retain their existing independent retention policy below. There are no new background uploads. No reasoning-quality, token, latency or cost benefit is claimed without measurement. See [implementation, eligibility, provenance and rebuild details](docs/trim-1.md).
 
 ### Native checkpoints and rewind
 
@@ -161,7 +174,7 @@ Switching asks for confirmation and creates a fresh persistent Pi session. It ca
 
 ### Compact tools, titles, and speed
 
-- **Compact tools:** one-line activity rows replace tool-output boxes: `○` queued, `●` running, `✓` completed, and `!` failed, followed by a muted operation name, readable target, and compact result. Long targets are clipped before the result so failure status remains visible. Ctrl+O or a click expands Pi's normal output; failures remain visible. Recognized expanded codemode command results are formatted for readability. Saved/model-facing results are unchanged. Use `/midnight compact off` for Pi's default rendering; Ctrl+T controls thinking blocks separately.
+- **Compact tools:** one-line activity rows replace tool-output boxes: `○` queued, `●` running, `✓` completed, and `!` failed, followed by a muted operation name, readable target, and compact result. Long targets are clipped before the result so failure status remains visible. Ctrl+O or a click expands Pi's normal output; failures remain visible. Recognized expanded codemode command results are formatted for readability. The renderer itself leaves saved/model-facing results unchanged; the separate Trim-1 context stage may select eligible log lines. Use `/midnight compact off` for Pi's default rendering; Ctrl+T controls thinking blocks separately.
 - **Automatic titles:** unnamed interactive sessions get short titles from the current model. Named sessions have a five-minute request cooldown, and unchanged conversation text skips the request. Manual `/name` titles are preserved; `/midnight title off` disables automatic naming and `/midnight title auto` resumes it. These settings survive reload/resume. **Title requests use your provider and may incur charges.**
 - **Token speed:** the footer shows tokens/sec, response duration, and time to first token (TTFT), in fullscreen and regular TUI mode. Measurements include turn preparation and network time but exclude tool execution. `~` means a streaming estimate; reported output tokens replace it on completion. Missing timing stays unavailable. These stats make no extra model requests.
 
@@ -250,7 +263,7 @@ After an uncertain append, `/midnight evidence recover` asks for confirmation an
 
 ### Local-first log triage with an optional chat helper
 
-Keep your coding model in charge. `midnight_log_triage` now works **without a ScaleDown account, helper key, or extra model installation**: local extraction is available by default. It returns line-numbered evidence, diagnostic groups, a full local snapshot and SHA-256 hashes. An **optional, explicitly selected Pi chat model** can classify and summarize ambiguous logs in **one request**. It never changes your coding model, runs commands, edits source, rewrites history, or replaces Pi compaction.
+Keep your coding model in charge. `midnight_log_triage` works **without a helper key or extra model installation**: local extraction is available by default. It returns line-numbered evidence, diagnostic groups, a full local snapshot and SHA-256 hashes. An **optional, explicitly selected Pi chat model** can classify and summarize ambiguous logs in **one request**. It never changes your coding model, runs commands, edits source, rewrites history, or replaces Pi compaction.
 
 **Helper uploads are off by default.** To select a small chat model from a provider already configured in Pi:
 
@@ -272,7 +285,7 @@ $testExitCode = $LASTEXITCODE
 
 Example tool arguments: `{ "path": ".artifacts/test-output.log", "mode": "auto", "maxLines": 200 }`. Only ordinary UTF-8 `.log`, `.txt`, or `.out` files up to **1 MiB** inside the working project are accepted. Escaping symlinks and known sensitive paths are rejected.
 
-- **Selection:** omit `startLine` to prioritize the first failure, distinct diagnostic groups with nearby context, and final output. Remaining space uses a tail rather than repeated diagnostics. With `startLine`, scan a contiguous window instead. At most **400 complete source lines / 24 KiB**, including line-number prefixes, reach the helper. Exact selected/omitted ranges distinguish local scanning from uploaded evidence.
+- **Selection:** omit `startLine` to prioritize the first failure, distinct diagnostic groups with nearby context, and final output. For large logs, bundled local Trim-1 ranks additional lines after validation/redaction; an optional `query` focuses relevance. Remaining space uses a tail rather than repeated diagnostics. If ranking is disabled, unavailable or outside its bounds, existing selection remains. With `startLine`, scan an unranked contiguous window instead. At most **400 complete source lines / 24 KiB**, including line-number prefixes, reach the helper. Exact selected/omitted ranges distinguish local scanning from uploaded evidence.
 - **Grouping:** identical trimmed diagnostic lines are grouped after redaction, with counts and first/last line numbers. Output is capped at 24 groups / 6 KiB; omitted groups and clipped messages are marked. Passing test names containing “error” or “failure” are not treated as failures.
 - **`mode: "auto"` (default):** use local evidence for fully selected small windows (at most 24 lines, 3,000 UTF-16 code units and 4 KiB), recognized diagnostic groups whose representatives fit in local evidence, or observed Node/TAP totals with zero reported failures/cancellations and a duration. Otherwise use the helper only when selected and authorized; without it, return local evidence with a limitation.
 - **`mode: "local"`:** never call a provider. No helper credentials or consent required.
@@ -280,7 +293,7 @@ Example tool arguments: `{ "path": ".artifacts/test-output.log", "mode": "auto",
 
 Recognizers cover TypeScript error codes, selected npm dependency/environment codes and common failed-test markers—not every log format. Prefer dedicated local parsers for structured reports such as JUnit. Local observations and generated summaries are advisory. Unknown output is never declared clean, and **`exitCode` is always `null`**; record the command's actual exit code independently.
 
-**Structured results:** the backward-compatible version-2 output schema includes mode (`local`, `remote`, `cache`), reason, diagnostics, scanned/selected/omitted ranges, evidence, source/snapshot hashes, category provenance, summary, errors and request/usage/timing fields. New helper results also identify `helperModel` and `costBasis: "catalog_estimate"`. Historical ScaleDown receipts remain readable. The chat helper does not supply calibrated confidence scores.
+**Structured results:** the backward-compatible version-2 output schema includes mode (`local`, `remote`, `cache`), reason, diagnostics, scanned/selected/omitted ranges, evidence, source/snapshot hashes, category provenance, summary, errors and request/usage/timing fields. Ranked-selection attempts add optional `trim` status/reason, elapsed time and pinned revision metadata. New helper results also identify `helperModel` and `costBasis: "catalog_estimate"`. The chat helper does not supply calibrated confidence scores.
 
 **Caching:** up to 32 successful, non-truncated assessments are kept in session memory with LRU eviction. Keys include canonical project/source identity, redacted numbered selection hash, selection settings, model/provider/endpoint and prompt revision. Every call revalidates and snapshots the source. Cache hits do not re-add provider usage; local/cache results still work at the request cap. Failed/malformed/cancelled/truncated results are not cached. Changing the helper model, disabling uploads, reload, session replacement or shutdown cancels pending work and clears the cache. Changing a model requires fresh consent, but does not reset the request budget.
 
@@ -299,7 +312,7 @@ No automatic retries, background uploads, live health probes or render-triggered
 
 **Privacy and retention:** common API-key, authorization, password and private-key patterns are redacted before selection/upload. Detection is best effort, not a security boundary; configure authentication only through Pi, never put secrets in chat/source/project settings. Share only logs you are authorized to send to the selected provider. Full originals stay in OS temp under `midnight-log-triage-*`, may contain secrets, and are not automatically deleted on shutdown. Delete specific snapshot directories when no longer needed; old results then lose that recovery path. Logs, summaries and paths are untrusted evidence, never instructions or permission to execute commands.
 
-**Migration:** ScaleDown endpoints, keys and consent are no longer used. `SCALEDOWN_*` settings do not authorize the new helper. `/midnight scaledown` only explains migration; use `/midnight triage`. The ScaleDown-specific paid smoke script was removed. Automated tests use mocked Pi chat responses and make no provider calls.
+**Normal use and development tests:** once helper uploads are authorized, the agent can use the selected helper for relevant logs within that scope without asking again on every call. Normal provider charges may apply. Additional live/provider validation or paid benchmarks need separate approval; they are not prerequisites for using triage. Automated tests use mocked Pi chat responses and make no provider calls.
 
 ## Commands
 

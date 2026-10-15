@@ -3,6 +3,7 @@ import { mkdtemp, open, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { stripVTControlCharacters } from "node:util";
+import { TRIM_REVISION, type TrimEngine, type TrimResult } from "../trim/runtime.ts";
 import { analyzeLog, type LogAnalysis, MAX_LINES } from "./analysis.ts";
 
 export { MAX_INPUT_BYTES, MAX_LINES } from "./analysis.ts";
@@ -14,6 +15,7 @@ export interface LogSelection {
 	path: string;
 	startLine?: number;
 	maxLines?: number;
+	query?: string;
 }
 
 export interface PreparedLog extends LogAnalysis {
@@ -26,6 +28,7 @@ export interface PreparedLog extends LogAnalysis {
 	endLine: number;
 	totalLines: number;
 	redacted: boolean;
+	trim?: Pick<TrimResult, "status" | "reason" | "elapsedMs"> & { revision: string };
 }
 
 export function redact(text: string, apiKey: string): string {
@@ -66,6 +69,7 @@ export async function prepareLog(
 	apiKey: string,
 	signal: AbortSignal,
 	snapshotRoot = tmpdir(),
+	ranker?: TrimEngine,
 ): Promise<PreparedLog> {
 	signal.throwIfAborted();
 	const root = await realpath(cwd);
@@ -125,7 +129,22 @@ export async function prepareLog(
 	const cleanLines = lines.map(stripVTControlCharacters);
 	const safeLines = redact(cleanLines.join("\n"), apiKey).split("\n");
 	if ((selection.startLine ?? 1) > lines.length) throw new Error("startLine is beyond the end of the log.");
-	const analysis = analyzeLog(safeLines, selection.startLine, count);
+	let analysis = analyzeLog(safeLines, selection.startLine, count);
+	let trim: PreparedLog["trim"];
+	if (ranker && selection.startLine === undefined && analysis.selectedLineCount < safeLines.length) {
+		const ranked = await ranker.run(
+			safeLines.join("\n"),
+			redact(
+				selection.query ?? "Find build and test failures, causes, errors, stack traces and final test totals.",
+				apiKey,
+			),
+			"rank",
+			signal,
+		);
+		signal.throwIfAborted();
+		trim = { status: ranked.status, reason: ranked.reason, elapsedMs: ranked.elapsedMs, revision: TRIM_REVISION };
+		if (ranked.scores) analysis = analyzeLog(safeLines, undefined, count, ranked.scores);
+	}
 	const { startLine: scanStart, endLine: scanEnd } = analysis.scannedRange;
 	if (
 		!safeLines
@@ -145,6 +164,7 @@ export async function prepareLog(
 	}
 	return {
 		...analysis,
+		...(trim ? { trim } : {}),
 		project: root,
 		source,
 		snapshot,

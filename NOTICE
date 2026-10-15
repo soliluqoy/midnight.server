@@ -29,4 +29,15 @@ published artifacts or upstream Git revisions.
 chrome-devtools-mcp 1.10.1 is an optional Apache-2.0 npm dependency, not copied
 source. Its license and notices are distributed with that dependency.
 Bundled skills are original portable Midnight workflows. Personal connector
-skills, credentials, models, profiles and user configuration are not redistributed.
+skills, credentials, personal models, profiles and user configuration are not redistributed.
+
+Trim-1 source and model are vendored from caveman-ai/trim-1, commit
+f16ff28a9a84bfa7ffa89c12b7e20ad9e4a21c6a (Apache-2.0).
+Source: https://github.com/caveman-ai/trim-1
+The upstream implementation/model are unmodified; Midnight adds a js/wasm bridge,
+bounded worker integration, diagnostic protection and provenance rendering.
+The Apache license is retained in licenses/trim-1.txt and vendor/trim-1/LICENSE.
+model.go incorporates Go math code under vendor/trim-1/LICENSE-go (BSD-3-Clause).
+The bundled WebAssembly module and src/trim/wasm_exec.cjs include Go 1.27.2
+runtime code, Copyright The Go Authors, under licenses/go.txt (BSD-3-Clause).
+See docs/trim-1.md for model hash, build instructions and distribution details.

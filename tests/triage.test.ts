@@ -345,8 +345,8 @@ test("multi-range evidence redacts secrets before selection and hashes the exact
 	assert.equal(await readFile(log.snapshot, "utf8"), text);
 });
 
-test("local triage needs no key, upload opt-in, or configured provider; old ScaleDown consent is ignored", async () => {
-	const h = harness({ env: { SCALEDOWN_ENABLED: "1", SCALEDOWN_API_KEY: KEY }, log: triageCorpus[4].lines.join("\n") });
+test("local triage needs no key, upload opt-in, or configured provider", async () => {
+	const h = harness({ env: {}, models: [], auth: false, log: triageCorpus[4].lines.join("\n") });
 	assert.ok(h.active().includes(TOOL_NAME));
 	assert.equal(h.tool().defaultActive, true);
 	for (const mode of ["auto", "local", "remote"] as const) {

@@ -9,6 +9,9 @@
 	],
 	"files": [
 		"src",
+		"vendor/trim-1",
+		"scripts/build-trim.mjs",
+		"docs/trim-1.md",
 		"themes",
 		"steering",
 		"licenses",

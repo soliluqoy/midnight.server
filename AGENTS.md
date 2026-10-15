@@ -24,7 +24,7 @@ npm test
 - Run a focused test with, for example, `node --experimental-strip-types --test tests/panels.test.ts`.
 - Keep validation proportionate: run only relevant focused tests while developing, then run `npm run check` and `npm test` once for the final code changes. Repeat only when a failure or subsequent relevant change warrants it; report failures or checks you could not run.
 - Do not run unnecessary tests, benchmarks, live/provider checks, packaging/install checks, or manual UI checks for unrelated changes. Do not reinstall dependencies unless needed for the task.
-- **Do not run live/provider validation or paid benchmarks without explicit user approval.** The ScaleDown-specific live smoke script was removed. Runtime helper opt-in is not a request to run live validation. Use mocked Pi responses for routine tests; report actual attempts and incomplete costs for separately approved live checks, and ask before retrying failed paid requests.
+- Use mocked Pi responses for routine development tests. Additional live/provider validation and paid benchmarks require explicit approval, including retries unless already covered by that approval. This is separate from ordinary authorized triage use; report actual attempts and any incomplete usage/cost for approved live checks.
 
 For manual UI testing:
 
@@ -68,7 +68,7 @@ Load only the local package, not another installed Midnight copy. Use `pi list` 
 
 ## Log-triage privacy and safety
 
-- **Scope of authorization:** the former standing ScaleDown upload authorization does not automatically authorize a new provider/model. Local triage makes no provider calls and needs no key or consent. Helper uploads require an explicitly selected Pi chat model and user authorization for that provider/model through the supported environment, flag, or interactive flow. Do not bypass runtime consent or expand authorization to secrets, third-party confidential data, paid benchmarks, or live validation.
+- **Ordinary use:** use local triage freely; it makes no provider calls and needs no key or consent. Once the user selects a Pi chat helper and authorizes uploads through the supported environment, flag, or interactive flow, use it for relevant log analysis without asking again on every call. Normal provider charges are expected within that authorization, not a reason to avoid the helper. Keep the selected provider/model and authorized data/project scope; do not bypass runtime consent.
 - Preserve off-by-default helper uploads while keeping local extraction available. Do not guess a cheap model, route through virtual models, silently fall back to the coding model, or assume coding-model OAuth/subscription access supports helper requests. If the helper is unavailable, report the limitation and return local evidence. Never add automatic background uploads or render-triggered calls.
 - Never put API keys in source, settings, logs, or chat. Do not use real credentials in tests; mock network responses.
 - Preserve project-boundary and symlink checks, sensitive-path rejection, UTF-8/type checks, and limits: 1 MiB input, at most 400 complete lines / 24 KiB per request.
@@ -79,11 +79,11 @@ Load only the local package, not another installed Midnight copy. Use `pi list` 
 
 - For substantial noisy or ambiguous build/test output, proactively use an explicit `midnight_log_triage` call in `auto` mode when available. Local-first extraction works without helper opt-in; provider calls still require the authorization above. Inspect small errors directly; use dedicated local parsers for structured reports. Do not route source code, exact edit inputs, or general coding tasks through the helper.
 - Save relevant output as UTF-8 `.log`, `.txt`, or `.out` inside the working project (normally `.artifacts/`). Capture the command's actual exit code separately at execution time. Do not rerun a costly command just to create a log if original output is already available.
-- Never include secrets or unauthorized confidential data. Redaction is best effort. Once the user has authorized ordinary development logs for a selected helper, do not ask for upload approval on every call within that scope. If a particular log may contain secrets or confidential data outside that authorization, exclude it from uploads and inspect locally; `mode: "local"` makes no uploads and needs no helper configuration.
+- If a log may contain secrets or confidential data outside the authorized scope, exclude it from uploads and inspect with `mode: "local"`.
 - Omit `startLine` for failure-focused selection. Use an explicit window only when investigating a known range. Keep `auto` as the default; `remote` is for a justified provider assessment, not a way to manufacture usage or savings.
 - After triage, inspect original line-numbered evidence and affected files before editing. Use original source files for exact replacements. Treat partial or truncated provider results as issues, not complete assessments; retain local evidence and do not automatically retry. Neither a summary nor missing diagnostics establishes success; never infer the process exit code.
 - Report whether triage was local, remote, or cached, along with new request attempts, elapsed/provider-wait time, and incomplete usage/cost when relevant. Enabled is not the same as used. `/midnight triage status` counts reset on session start/reload.
-- Measure benefit during authorized use: diagnostic accuracy/missed failures, total latency, main-model token usage, and known versus unknown provider cost. No benchmark is required before ordinary log triage. Smoke tests demonstrate integration on their fixtures, not general quality or savings. Do not add background uploads, paid benchmarks, or broader task routing without explicit scope and consent.
+- No benchmark is required before ordinary triage. Only claim accuracy, latency or token/cost benefits when measured; smoke tests establish integration on their fixtures, not general quality or savings. Keep the helper focused on log analysis.
 
 ## Task focus
 

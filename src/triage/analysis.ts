@@ -79,7 +79,17 @@ function omissions(selected: LineRange[], total: number): LineRange[] {
 	return result;
 }
 
-export function analyzeLog(lines: string[], startLine?: number, maxLines = MAX_LINES): LogAnalysis {
+export function protectedLogLines(lines: string[]): Set<number> {
+	const protectedLines = new Set<number>();
+	for (let index = 0; index < lines.length; index++) {
+		if (!matchDiagnostic(lines[index]) && index < lines.length - 12) continue;
+		for (let neighbor = Math.max(0, index - 2); neighbor <= Math.min(lines.length - 1, index + 3); neighbor++)
+			protectedLines.add(neighbor);
+	}
+	return protectedLines;
+}
+
+export function analyzeLog(lines: string[], startLine?: number, maxLines = MAX_LINES, scores?: number[]): LogAnalysis {
 	const start = startLine === undefined ? 0 : startLine - 1;
 	const end = startLine === undefined ? lines.length : Math.min(lines.length, start + maxLines);
 	const groups = new Map<string, Diagnostic>();
@@ -138,6 +148,19 @@ export function analyzeLog(lines: string[], startLine?: number, maxLines = MAX_L
 		for (let index = Math.max(start, end - 8); index < end; index++) add(index);
 		for (const diagnostic of diagnostics) {
 			for (let delta = -2; delta <= 3; delta++) add(diagnostic.firstLine - 1 + delta);
+		}
+		if (scores?.length === lines.length) {
+			const ranked = scores
+				.map((score, index) => ({ score, index }))
+				.sort((a, b) => b.score - a.score || a.index - b.index);
+			const floor = (ranked[0]?.score ?? 0) * 0.008;
+			for (const { score, index } of ranked) {
+				if (score <= 0 || score < floor || selected.size >= maxLines) break;
+				if (repeats.has(index)) continue;
+				add(index);
+				add(index - 1);
+				add(index + 1);
+			}
 		}
 		for (let index = end - 1; index >= start && selected.size < maxLines; index--) {
 			if (!repeats.has(index)) add(index);

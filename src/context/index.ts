@@ -98,6 +98,7 @@ import {
 	toOutcomeEntry,
 } from "./state.ts";
 import { loadSteeringDocument, type SteeringDocument, steeringPromptSection } from "./steering.ts";
+import { ContextTrimmer } from "./trim.ts";
 import type { LiveContextMessage, TurnBaseline } from "./types.ts";
 import {
 	buildLiveContextViewModel,
@@ -206,6 +207,7 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 	let store: MirrorStore | undefined;
 	let turnBaseline: TurnBaseline | undefined;
 	let lifecycleEpoch = 0;
+	const trimmer = new ContextTrimmer();
 	let compactPending = false;
 	let pendingNotice: string | undefined;
 	let mirrorMutationSeen = false;
@@ -633,6 +635,7 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 
 	function restore(ctx: ExtensionContext): void {
 		lifecycleEpoch++;
+		trimmer.reset();
 		const branch = ctx.sessionManager.getBranch() as ContinuitySessionEntryLike[];
 		state = reconstructLiveContextState(branch);
 		checkpointHistory = reconstructLiveContextHistory(branch)
@@ -1307,7 +1310,20 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		}
 		const visibleRawMessages = selectContextVisibleMessages(rawMessages);
 		effectiveMessages = selectContextVisibleMessages(effectiveMessages);
-		if (editingMode === "clm") effectiveMessages = capObservations(effectiveMessages, observationCap);
+		if (editingMode === "clm") {
+			const epoch = lifecycleEpoch;
+			effectiveMessages = await trimmer.apply(
+				effectiveMessages,
+				store.directory,
+				state.checkpoint
+					? Math.max(0, effectiveMessages.length - selectContextVisibleMessages(suffixMessages).length)
+					: 0,
+				ctx.signal,
+			);
+			if (epoch !== lifecycleEpoch) return;
+			ctx.signal?.throwIfAborted();
+			effectiveMessages = capObservations(effectiveMessages, observationCap);
+		}
 		pendingOverflowNotice = undefined;
 		if (editingMode === "clm") calibrator.observe(lastProviderReportedTokens(rawMessages));
 		if (editingMode === "clm" && overflowGuard.mode === "withhold") {
@@ -1649,6 +1665,7 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 	pi.on("session_compact", async (_event, ctx) => {
 		persist(resetProjectionState(state, "Projection reset after native Pi compaction."));
 		lifecycleEpoch++;
+		trimmer.reset();
 		turnBaseline = undefined;
 		currentContextView = undefined;
 		lastBudgetReading = undefined;
@@ -1659,6 +1676,7 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		lifecycleEpoch++;
+		trimmer.reset();
 		turnBaseline = undefined;
 		currentContextView = undefined;
 		ctx.ui.setStatus(STATUS_KEY, undefined);

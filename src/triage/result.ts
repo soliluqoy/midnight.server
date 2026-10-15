@@ -12,6 +12,14 @@ export const TriageSchema = Type.Object({
 	reason: NullableString,
 	helperModel: Type.Optional(Type.String()),
 	costBasis: Type.Optional(Type.Literal("catalog_estimate")),
+	trim: Type.Optional(
+		Type.Object({
+			status: Type.Union([Type.Literal("used"), Type.Literal("skipped"), Type.Literal("fallback")]),
+			reason: Type.String(),
+			elapsedMs: Type.Number(),
+			revision: Type.String(),
+		}),
+	),
 	source: Type.String(),
 	snapshot: Type.String(),
 	sha256: Type.String(),
@@ -52,6 +60,11 @@ export function renderTriage(data: TriageData): string {
 		`Midnight log triage — ${data.warning}`,
 		`Mode: ${data.mode}${data.reason ? ` (${data.reason})` : ""}; ${data.requestAttempts} new request attempts.`,
 		...(data.helperModel ? [`Selected chat helper: ${data.helperModel}; coding model unchanged.`] : []),
+		...(data.trim
+			? [
+					`Local Trim-1: ${data.trim.status} (${data.trim.reason}); ${data.trim.elapsedMs} ms. Ranking is not a diagnosis or a savings measurement.`,
+				]
+			: []),
 		`Source: ${data.source}`,
 		`Local full snapshot (may contain secrets; do not upload): ${data.snapshot}\nSnapshot SHA-256: ${data.sha256}`,
 		`Locally scanned lines ${formatRanges([data.scannedRange])} of ${data.totalLines}. Selected evidence/upload lines: ${formatRanges(data.selectedRanges)}. Omitted from selection: ${formatRanges(data.omittedRanges)}. Only selected lines reach the provider; a local scan is not exhaustive diagnosis. Exit code is unknown unless independently recorded.`,
