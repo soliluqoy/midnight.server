@@ -89,6 +89,18 @@ Load only the local package, not another installed Midnight copy. Use `pi list` 
 
 - Stay focused on the user's actual task and approved scope. Do not drift into unrelated research, refactors, tooling changes, or speculative features.
 - Read only documentation and files needed to implement or verify the task. Defer optional follow-ups instead of expanding the task silently.
+- Build the smallest coherent change that meets the approved acceptance criteria. Reuse existing modules and public APIs; do not add abstractions, infrastructure, dependencies, or speculative optimizations without a demonstrated task requirement.
+- Extend existing tests first. Add regression cases only for changed behavior, a reproduced defect, or a consequential compatibility/safety boundary. Do not duplicate established coverage, create broad new harnesses unnecessarily, or treat test count as progress.
+- For documentation-only changes, inspect the diff and links/commands as needed; do not rerun code tests. For code changes, follow the proportionate focused-then-final validation discipline above and avoid rerunning unchanged successful suites.
+
+### Evidence milestone execution
+
+- Use `EVIDENCE_BUILD_PLAN.md` as the task checklist and handoff record. Its historical handoffs are not fresh verification; distinguish implementation completion from release readiness.
+- Capacity-recovery development controls are implemented through Handoff 010. Preserve user-confirmed command-only commit/recovery, bounded carry/archive behavior, and old-writer restrictions. Do not expand this infrastructure unless a concrete defect or the next approved contract requires it.
+- Structured review reasons and minimum support/concern/resolution semantics are live for explicitly new sessions through Handoff 013. Preserve versioned initialization, persistence, replay/results and carry-forward. Handoff 014 adds the explicit-only `midnight-evidence` skill and read-only selected-claim `audit`. The selected milestone's development implementation is complete; do not expand it into optional features. Audit bypasses lifecycle writes, reports limitations and never claims truth verification. Remaining manual release gates and unmeasured workflow benefit must stay explicit. Retain uncertain legacy meaning rather than inventing precise reasons or relationships. The user selected new-session-only semantics: existing v1/v2 sessions must keep their replay behavior and hashes; no upgrade path is currently authorized. An empty evidence ledger alone does not establish a fresh session.
+- Keep manual fullscreen/reload compatibility explicitly release-blocking until validated with authorization. This does not require unrelated infrastructure work or silently block independent implementation of the remaining approved milestone.
+- Defer claim-maturity UI, dedicated test-evidence types, rich relationship browsing, excerpt-aware freshness, strict mode, and live model evaluation. Do not silently add them to this milestone.
+- Stop implementation when the selected milestone's behavior, targeted regressions, compatibility handling, and documentation meet their gates. If manual/runtime checks remain, report implementation readiness with explicit release blockers—not release completion. Do not claim measured reasoning or cost benefits without evidence.
 
 ## Change hygiene
 

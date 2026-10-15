@@ -63,6 +63,8 @@ export interface CaptureOptions {
 	trigger?: Checkpoint["trigger"];
 	scope?: readonly string[];
 	previous?: StoredCheckpoint;
+	/** Reuse an unchanged ordinary snapshot before writing commits or refs; recovery backups are always fresh. */
+	deduplicate?: boolean;
 	signal?: AbortSignal;
 	/** Exact failure-journal fingerprint, supplied only after an explicit recovery preview. */
 	recovery?: string;
@@ -332,7 +334,7 @@ async function captureUnlocked(root: string, options: CaptureOptions): Promise<S
 			}
 			covered.push(path);
 			if (!file) {
-				records.push(indexRecord(path, undefined, "0".repeat(stagedTree.length)));
+				if (staged.has(path)) records.push(indexRecord(path, undefined, "0".repeat(stagedTree.length)));
 				continue;
 			}
 			const digest = createHash(stagedTree.length === 64 ? "sha256" : "sha1")
@@ -352,7 +354,8 @@ async function captureUnlocked(root: string, options: CaptureOptions): Promise<S
 						.trim();
 			const fileMode =
 				process.platform === "win32" ? (staged.get(path)?.mode ?? committed.get(path)?.mode ?? file.mode) : file.mode;
-			records.push(indexRecord(path, { mode: fileMode, sha: oid }));
+			if (staged.get(path)?.sha !== oid || staged.get(path)?.mode !== fileMode)
+				records.push(indexRecord(path, { mode: fileMode, sha: oid }));
 		}
 		if (records.length)
 			await git(root, ["update-index", "-z", "--index-info"], {
@@ -360,7 +363,9 @@ async function captureUnlocked(root: string, options: CaptureOptions): Promise<S
 				input: records.join(""),
 				signal: options.signal,
 			});
-		const worktreeTree = await indexTree(root, temp.env, options.signal);
+		const worktreeTree = records.length
+			? (await git(root, ["write-tree"], { env: temp.env, signal: options.signal })).toString("utf8").trim()
+			: stagedTree;
 		const after = await head(root, options.signal);
 		if (JSON.stringify(before) !== JSON.stringify(after))
 			throw new Error("HEAD changed while capturing the checkpoint.");
@@ -371,24 +376,22 @@ async function captureUnlocked(root: string, options: CaptureOptions): Promise<S
 		} finally {
 			await rm(verify.dir, { recursive: true, force: true });
 		}
-		const observed = options.previous
-			? [
-					...nul(
-						await git(
-							root,
-							["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", options.previous.worktreeTree, worktreeTree],
-							{ signal: options.signal },
+		const observed: string[] = [];
+		if (options.previous) {
+			for (const [from, to] of [
+				[options.previous.worktreeTree, worktreeTree],
+				[options.previous.indexTree, stagedTree],
+			]) {
+				if (from !== to)
+					observed.push(
+						...nul(
+							await git(root, ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", from, to], {
+								signal: options.signal,
+							}),
 						),
-					),
-					...nul(
-						await git(
-							root,
-							["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", options.previous.indexTree, stagedTree],
-							{ signal: options.signal },
-						),
-					),
-				]
-			: [];
+					);
+			}
+		}
 		const cp: Checkpoint = {
 			version: 1,
 			id: randomUUID(),
@@ -406,6 +409,30 @@ async function captureUnlocked(root: string, options: CaptureOptions): Promise<S
 				(path) => !exclusion(path) && !excluded.some((e) => e.path === path),
 			),
 		};
+		const previous = options.previous;
+		if (
+			options.deduplicate &&
+			previous &&
+			cp.trigger !== "before-restore" &&
+			previous.trigger !== "before-restore" &&
+			previous.sessionId === cp.sessionId &&
+			previous.head === cp.head &&
+			previous.branch === cp.branch &&
+			previous.indexTree === cp.indexTree &&
+			previous.worktreeTree === cp.worktreeTree &&
+			JSON.stringify(previous.scope) === JSON.stringify(cp.scope) &&
+			JSON.stringify(previous.covered) === JSON.stringify(cp.covered) &&
+			JSON.stringify(previous.excluded) === JSON.stringify(cp.excluded)
+		) {
+			// A retained in-memory snapshot is not proof that its ref still exists.
+			const commit = await text(root, ["rev-parse", "--verify", "--quiet", previous.ref], options.signal).catch(
+				(error: unknown) => {
+					if (error instanceof CheckpointGitError && error.exitCode === 1) return null;
+					throw error;
+				},
+			);
+			if (commit === previous.commit) return previous;
+		}
 		return await persistCheckpoint(root, cp, options.signal);
 	} finally {
 		await rm(temp.dir, { recursive: true, force: true });
@@ -482,38 +509,119 @@ function validCheckpoint(value: unknown): value is Checkpoint {
 		cp.excluded.every((e) => e && typeof e.path === "string" && typeof e.reason === "string")
 	);
 }
-export async function loadCheckpoint(root: string, ref: string): Promise<StoredCheckpoint> {
-	if (!/^refs\/midnight\/checkpoints\/[a-f0-9]{24}\/[a-f0-9-]{36}$/.test(ref))
-		throw new Error("Invalid checkpoint reference.");
-	const commit = await text(root, ["rev-parse", "--verify", ref]);
-	const raw = await git(root, ["show", "-s", "--format=%B", commit]);
-	if (raw.length > 1024 * 1024) throw new Error("Checkpoint metadata exceeds 1 MiB.");
-	const cp: unknown = JSON.parse(raw.toString("utf8"));
-	if (!validCheckpoint(cp) || ref !== `${namespace(cp.sessionId)}/${cp.id}`)
-		throw new Error("Invalid checkpoint metadata.");
-	if (
-		(await text(root, ["rev-parse", `${commit}^{tree}`])) !== cp.worktreeTree ||
-		(await text(root, ["cat-file", "-t", cp.indexTree])) !== "tree" ||
-		(await text(root, ["rev-parse", `${commit}^1^{tree}`])) !== cp.indexTree
-	)
-		throw new Error("Checkpoint object mismatch.");
-	return { ...cp, ref, commit };
+/** Call-local batching only: a restore always reloads and validates its target, never trusts a listing cache. */
+export async function loadCheckpoints(
+	root: string,
+	refs: readonly string[],
+	signal?: AbortSignal,
+): Promise<Map<string, StoredCheckpoint | Error>> {
+	signal?.throwIfAborted();
+	const result = new Map<string, StoredCheckpoint | Error>();
+	const valid: string[] = [];
+	for (const ref of new Set(refs)) {
+		if (/^refs\/midnight\/checkpoints\/[a-f0-9]{24}\/[a-f0-9-]{36}$/.test(ref)) valid.push(ref);
+		else result.set(ref, new Error("Invalid checkpoint reference."));
+	}
+	// Eight maximum-size metadata records fit below git()'s 16 MiB output bound.
+	for (let start = 0; start < valid.length; start += 8) {
+		const batch = valid.slice(start, start + 8);
+		const raw = await git(root, ["cat-file", "--batch"], { input: `${batch.join("\n")}\n`, signal });
+		const pending: { cp: StoredCheckpoint; parent: string }[] = [];
+		let offset = 0;
+		for (const ref of batch) {
+			signal?.throwIfAborted();
+			const end = raw.indexOf(10, offset);
+			if (end < 0) throw new Error("Incomplete checkpoint batch header.");
+			const header = raw.toString("utf8", offset, end);
+			offset = end + 1;
+			if (header === `${ref} missing`) {
+				result.set(ref, new Error("Checkpoint reference is unavailable or pruned."));
+				continue;
+			}
+			const [commit, type, sizeText] = header.split(" ");
+			const size = Number(sizeText);
+			if (!SHA.test(commit) || !Number.isSafeInteger(size) || size < 0 || raw[offset + size] !== 10)
+				throw new Error("Invalid checkpoint batch framing.");
+			const content = raw.subarray(offset, offset + size);
+			offset += size + 1;
+			try {
+				if (type !== "commit") throw new Error("Checkpoint reference is not a commit.");
+				const separator = content.indexOf("\n\n");
+				if (separator < 0) throw new Error("Invalid checkpoint commit.");
+				const body = content.subarray(separator + 2);
+				if (body.length > 1024 * 1024) throw new Error("Checkpoint metadata exceeds 1 MiB.");
+				const cp: unknown = JSON.parse(body.toString("utf8"));
+				if (!validCheckpoint(cp) || ref !== `${namespace(cp.sessionId)}/${cp.id}`)
+					throw new Error("Invalid checkpoint metadata.");
+				const headers = content.toString("utf8", 0, separator);
+				const graph = /^tree ([a-f0-9]+)\nparent ([a-f0-9]+)(?:\n|$)/.exec(headers);
+				if (!graph || graph[1] !== cp.worktreeTree || !SHA.test(graph[2]))
+					throw new Error("Checkpoint object mismatch.");
+				pending.push({ cp: { ...cp, ref, commit }, parent: graph[2] });
+			} catch (error) {
+				result.set(ref, error instanceof Error ? error : new Error(String(error)));
+			}
+		}
+		if (offset !== raw.length) throw new Error("Unexpected checkpoint batch data.");
+		if (!pending.length) continue;
+		// Validate both real trees and the staged tree's reachability through the first parent.
+		const queries = pending.flatMap(({ cp, parent }) => [cp.worktreeTree, cp.indexTree, `${parent}^{tree}`]);
+		const checked = (
+			await git(root, ["cat-file", "--batch-check=%(objectname) %(objecttype)"], {
+				input: `${queries.join("\n")}\n`,
+				signal,
+			})
+		)
+			.toString("utf8")
+			.trimEnd()
+			.split("\n");
+		if (checked.length !== queries.length) throw new Error("Incomplete checkpoint tree validation.");
+		pending.forEach(({ cp }, i) => {
+			const expected = [cp.worktreeTree, cp.indexTree, cp.indexTree];
+			result.set(
+				cp.ref,
+				expected.every((sha, j) => checked[i * 3 + j] === `${sha} tree`)
+					? cp
+					: new Error("Checkpoint object mismatch."),
+			);
+		});
+	}
+	signal?.throwIfAborted();
+	return result;
 }
-export async function listCheckpoints(root: string, sessionId: string): Promise<StoredCheckpoint[]> {
-	const refs = (await text(root, ["for-each-ref", "--format=%(refname)", `${namespace(sessionId)}/`]))
+export async function loadCheckpoint(root: string, ref: string, signal?: AbortSignal): Promise<StoredCheckpoint> {
+	const cp = (await loadCheckpoints(root, [ref], signal)).get(ref);
+	if (!cp || cp instanceof Error) throw cp ?? new Error("Checkpoint is unavailable.");
+	return cp;
+}
+export async function listCheckpoints(
+	root: string,
+	sessionId: string,
+	signal?: AbortSignal,
+): Promise<StoredCheckpoint[]> {
+	const refs = (await text(root, ["for-each-ref", "--format=%(refname)", `${namespace(sessionId)}/`], signal))
 		.split("\n")
 		.filter(Boolean);
 	if (refs.length > 1000) throw new Error("Too many checkpoint references; inspect retention manually.");
-	const result: StoredCheckpoint[] = [];
-	for (const ref of refs) result.push(await loadCheckpoint(root, ref));
+	const loaded = await loadCheckpoints(root, refs, signal);
+	const result = refs.map((ref) => {
+		const cp = loaded.get(ref);
+		if (!cp || cp instanceof Error) throw cp ?? new Error("Checkpoint is unavailable.");
+		return cp;
+	});
 	return result.sort((a, b) => a.timestamp - b.timestamp);
 }
-export async function pruneCheckpoints(root: string, sessionId: string, keep = 50): Promise<void> {
+export async function pruneCheckpoints(
+	root: string,
+	sessionId: string,
+	keep = 50,
+	signal?: AbortSignal,
+): Promise<void> {
 	if (!Number.isSafeInteger(keep) || keep < 1) throw new Error("Invalid checkpoint retention.");
 	await lock(root, async () => {
-		const snapshots = await listCheckpoints(root, sessionId);
+		const snapshots = await listCheckpoints(root, sessionId, signal);
 		for (const cp of snapshots.filter((cp) => cp.trigger !== "before-restore").slice(0, -keep))
-			await git(root, ["update-ref", "-d", cp.ref, cp.commit]);
+			await git(root, ["update-ref", "-d", cp.ref, cp.commit], { signal });
 	});
 }
 async function currentFingerprint(

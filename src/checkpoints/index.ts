@@ -2,8 +2,7 @@ import { relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	captureCheckpoint,
-	git,
-	loadCheckpoint,
+	loadCheckpoints,
 	prepareRestore,
 	pruneCheckpoints,
 	type RestoreRecovery,
@@ -65,14 +64,14 @@ export function registerCheckpoints(
 	const record = (cp: StoredCheckpoint) => pi.appendEntry(ENTRY, { version: 1, ref: cp.ref });
 	const recordRedo = () =>
 		pi.appendEntry(REDO, { version: 1, steps: redo.map((step) => ({ ref: step.checkpoint.ref, paths: step.paths })) });
-	async function loadRedo(project: string, ctx: ExtensionContext) {
+	async function loadRedo(project: string, ctx: ExtensionContext, signal: AbortSignal) {
 		const entry = [...ctx.sessionManager.getEntries()]
 			.reverse()
 			.find((entry) => entry.type === "custom" && entry.customType === REDO);
 		if (!entry || entry.type !== "custom" || !entry.data || typeof entry.data !== "object") return [];
 		const data = entry.data as { version?: unknown; steps?: unknown };
 		if (data.version !== 1 || !Array.isArray(data.steps) || data.steps.length > 50) return [];
-		const result: typeof redo = [];
+		const steps: { ref: string; paths: string[] }[] = [];
 		for (const step of data.steps) {
 			if (!step || typeof step !== "object") throw new Error("Invalid saved redo state.");
 			const value = step as { ref?: unknown; paths?: unknown };
@@ -83,9 +82,18 @@ export function registerCheckpoints(
 				!value.paths.every((p) => typeof p === "string" && safePath(p))
 			)
 				throw new Error("Invalid saved redo paths.");
-			result.push({ checkpoint: await loadCheckpoint(project, value.ref), paths: value.paths });
+			steps.push({ ref: value.ref, paths: value.paths });
 		}
-		return result;
+		const loaded = await loadCheckpoints(
+			project,
+			steps.map((step) => step.ref),
+			signal,
+		);
+		return steps.map((step) => {
+			const checkpoint = loaded.get(step.ref);
+			if (!checkpoint || checkpoint instanceof Error) throw checkpoint ?? new Error("Saved redo is unavailable.");
+			return { checkpoint, paths: step.paths };
+		});
 	}
 	function cancel() {
 		generation++;
@@ -107,16 +115,17 @@ export function registerCheckpoints(
 		const signal = controller.signal;
 		try {
 			const project = await repositoryRoot(ctx.cwd, signal);
+			const refs = branchRefs(ctx);
+			const loaded = await loadCheckpoints(project, refs, signal);
+			if (epoch !== generation) return;
 			const branch: StoredCheckpoint[] = [];
-			for (const ref of branchRefs(ctx)) {
-				try {
-					branch.push(await loadCheckpoint(project, ref));
-				} catch {
+			for (const ref of refs) {
+				const cp = loaded.get(ref);
+				if (!cp || cp instanceof Error)
 					warning = "Some recorded checkpoints are unavailable or pruned; they are not treated as clean.";
-				}
-				signal.throwIfAborted();
+				else branch.push(cp);
 			}
-			const savedRedo = await loadRedo(project, ctx);
+			const savedRedo = await loadRedo(project, ctx, signal);
 			const pending = await readRestoreRecovery(project);
 			if (epoch !== generation) return;
 			root = project;
@@ -145,25 +154,16 @@ export function registerCheckpoints(
 			trigger,
 			scope: [...scope],
 			previous,
+			deduplicate: true,
 			signal,
 		});
 		if (epoch !== generation || signal.aborted) return;
 		scope = new Set(cp.scope);
-		if (
-			previous &&
-			previous.head === cp.head &&
-			previous.branch === cp.branch &&
-			previous.indexTree === cp.indexTree &&
-			previous.worktreeTree === cp.worktreeTree &&
-			JSON.stringify(previous.scope) === JSON.stringify(cp.scope)
-		) {
-			await git(project, ["update-ref", "-d", cp.ref, cp.commit], { signal });
-			return;
-		}
+		if (cp.ref === previous?.ref) return;
 		checkpoints.push(cp);
 		record(cp);
 		warning = undefined;
-		await pruneCheckpoints(project, ctx.sessionManager.getSessionId());
+		await pruneCheckpoints(project, ctx.sessionManager.getSessionId(), 50, signal);
 	}
 	const refresh = async (_event: unknown, ctx: ExtensionContext) => {
 		const current = load(ctx);

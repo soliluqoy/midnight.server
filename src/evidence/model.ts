@@ -72,6 +72,8 @@ export const SummarySchema = Type.Object({
 	invalidEvents: Type.Integer(),
 });
 export type EvidenceSummary = Static<typeof SummarySchema>;
+/** Presentation state only; never persisted as a ledger summary. */
+export type EvidenceDisplaySummary = EvidenceSummary & { unavailable?: string };
 export const ResultSchema = Type.Object({
 	version: Type.Literal(1),
 	warning: Type.String(),

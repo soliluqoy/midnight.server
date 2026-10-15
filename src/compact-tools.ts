@@ -11,6 +11,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+import { formatEvidenceResult } from "./evidence/format-result.ts";
 import { truncateLeftToWidth } from "./presentation.ts";
 
 type RenderCall = NonNullable<ToolRenderers["renderCall"]>;
@@ -138,6 +139,7 @@ class CompactRow implements Component {
 			this.outcome = outcomeOf(this.name, result);
 			this.reason =
 				questionOutcome(this.name, result.details) ??
+				(this.name === "midnight_evidence" ? formatEvidenceResult(result.details) : undefined) ??
 				triageOutcome(this.name, result.details) ??
 				lastLine(textOf(result));
 		}
@@ -385,21 +387,9 @@ function questionOutcome(name: string, details: unknown): string | undefined {
 function outcomeOf(name: string, result: AgentToolResult<unknown>): string {
 	const question = questionOutcome(name, result.details);
 	if (question) return question;
-	if (name === "midnight_evidence" && result.details && typeof result.details === "object") {
-		const details = result.details as Record<string, unknown>;
-		const summary = details.summary;
-		if (details.version === 1 && summary && typeof summary === "object") {
-			const { review, gaps } = summary as Record<string, unknown>;
-			if (
-				typeof review === "number" &&
-				Number.isSafeInteger(review) &&
-				review >= 0 &&
-				typeof gaps === "number" &&
-				Number.isSafeInteger(gaps) &&
-				gaps >= 0
-			)
-				return `${review} review · ${gaps} gaps`;
-		}
+	if (name === "midnight_evidence") {
+		const evidence = formatEvidenceResult(result.details);
+		if (evidence) return evidence;
 	}
 	const triage = triageOutcome(name, result.details);
 	if (triage) return triage;

@@ -274,6 +274,16 @@ test("evidence sidebar stays local, width-safe, and visible when only review ite
 	h.sidebar.evidence.invalidEvents = 1;
 	h.sidebar.invalidate();
 	assert.match(plain(h.sidebar.render(36)).join("\n"), /Stored events need inspection/);
+	h.sidebar.evidence = {
+		...h.sidebar.evidence,
+		review: 0,
+		capacityReached: false,
+		invalidEvents: 0,
+		unavailable: "History read-only; inspect status",
+	};
+	h.sidebar.invalidate();
+	assert.match(plain(h.sidebar.render(36)).join("\n"), /EVIDENCE[\s\S]*History read-only/);
+	assert.doesNotMatch(plain(h.sidebar.render(36)).join("\n"), /0 sources|0 claims|0 review/);
 });
 
 test("Explorer uses a local rail and ice-blue name, not a full-height bright border", () => {

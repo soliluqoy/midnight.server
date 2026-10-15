@@ -1,19 +1,24 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	captureCheckpoint,
 	git,
 	listCheckpoints,
 	loadCheckpoint,
+	loadCheckpoints,
 	prepareRestore,
 	pruneCheckpoints,
 	readRestoreRecovery,
 	restoreCheckpoint,
 	safePath,
+	storeImportedCheckpoint,
 } from "../src/checkpoints/core.ts";
+import { registerCheckpoints } from "../src/checkpoints/index.ts";
 
 import { importLegacyCheckpoint, readLegacyCheckpoint } from "../src/checkpoints/legacy.ts";
 
@@ -34,6 +39,226 @@ async function fixture(t: test.TestContext, commit = true) {
 }
 const options = { sessionId: "test-session", trigger: "manual" as const };
 const out = async (root: string, args: string[]) => (await git(root, args)).toString("utf8");
+
+async function traceGit<T>(root: string, operation: () => Promise<T>) {
+	const path = join(root, ".git", "checkpoint-trace.json");
+	await writeFile(path, "");
+	const previous = process.env.GIT_TRACE2_EVENT;
+	process.env.GIT_TRACE2_EVENT = path;
+	let value: T;
+	try {
+		value = await operation();
+	} finally {
+		if (previous === undefined) delete process.env.GIT_TRACE2_EVENT;
+		else process.env.GIT_TRACE2_EVENT = previous;
+	}
+	const commands = (await readFile(path, "utf8"))
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => JSON.parse(line) as { event: string; argv?: string[] })
+		.filter((event) => event.event === "start")
+		.map((event) => event.argv ?? []);
+	return { value, commands };
+}
+
+test("history loads in bounded batches, preserving metadata without a cross-call cache", async (t) => {
+	const root = await fixture(t);
+	const first = await captureCheckpoint(root, options);
+	const snapshots = [first];
+	for (let i = 1; i < 10; i++)
+		snapshots.push(await storeImportedCheckpoint(root, { ...first, id: randomUUID(), timestamp: first.timestamp + i }));
+	const { value, commands } = await traceGit(root, () => listCheckpoints(root, options.sessionId));
+	assert.deepEqual(value, snapshots);
+	assert.equal(commands.length, 5, "one ref listing plus two processes per eight-checkpoint batch");
+	assert.equal(commands.filter((argv) => argv.includes("cat-file")).length, 4);
+	const missing = first.ref.replace(first.id, randomUUID());
+	const partial = await loadCheckpoints(root, [first.ref, missing, "HEAD", first.ref]);
+	assert.deepEqual(partial.get(first.ref), first);
+	assert.ok(partial.get(missing) instanceof Error);
+	assert.ok(partial.get("HEAD") instanceof Error);
+	assert.equal(partial.size, 3);
+	await git(root, ["update-ref", "-d", first.ref, first.commit]);
+	await assert.rejects(loadCheckpoint(root, first.ref), /unavailable|pruned/);
+	await assert.rejects(prepareRestore(root, first, ["file.txt"]), /unavailable|pruned/);
+	const abort = new AbortController();
+	abort.abort();
+	await assert.rejects(loadCheckpoints(root, [snapshots[1].ref], abort.signal), { name: "AbortError" });
+});
+
+test("batch validation rejects corrupt metadata, non-commits and mismatched tree reachability independently", async (t) => {
+	const root = await fixture(t);
+	const cp = await captureCheckpoint(root, options);
+	const parent = (await out(root, ["rev-parse", `${cp.commit}^1`])).trim();
+	const blob = (await out(root, ["rev-parse", "HEAD:file.txt"])).trim();
+	const bad: string[] = [];
+	for (const change of [
+		{ sessionId: "wrong-session" },
+		{ worktreeTree: blob },
+		{ indexTree: blob },
+		{ padding: "x".repeat(1024 * 1024) },
+	]) {
+		const id = randomUUID();
+		const ref = cp.ref.replace(cp.id, id);
+		const commit = (
+			await git(root, ["commit-tree", cp.worktreeTree, "-p", parent], {
+				input: JSON.stringify({ ...cp, id, ...change }),
+			})
+		)
+			.toString("utf8")
+			.trim();
+		await git(root, ["update-ref", ref, commit]);
+		bad.push(ref);
+	}
+	const nonCommit = cp.ref.replace(cp.id, randomUUID());
+	await git(root, ["update-ref", nonCommit, blob]);
+	bad.push(nonCommit);
+	// A real but different staged tree must not pass simply because its type is correct.
+	await writeFile(join(root, "file.txt"), "different staged tree\n");
+	await git(root, ["add", "--", "file.txt"]);
+	const stagedTree = (await out(root, ["write-tree"])).trim();
+	const id = randomUUID();
+	const wrongParent = cp.ref.replace(cp.id, id);
+	const forged = (
+		await git(root, ["commit-tree", cp.worktreeTree, "-p", parent], {
+			input: JSON.stringify({ ...cp, id, indexTree: stagedTree }),
+		})
+	)
+		.toString("utf8")
+		.trim();
+	await git(root, ["update-ref", wrongParent, forged]);
+	bad.push(wrongParent);
+	const loaded = await loadCheckpoints(root, [cp.ref, ...bad]);
+	assert.deepEqual(loaded.get(cp.ref), cp);
+	for (const ref of bad) assert.ok(loaded.get(ref) instanceof Error, ref);
+	await assert.rejects(listCheckpoints(root, options.sessionId));
+});
+
+test("unchanged captures deduplicate before commit/ref writes but retain coverage changes and fresh recovery backups", async (t) => {
+	const root = await fixture(t);
+	const first = await captureCheckpoint(root, options);
+	const { value, commands } = await traceGit(root, () =>
+		captureCheckpoint(root, { ...options, previous: first, deduplicate: true }),
+	);
+	assert.deepEqual(value, first);
+	assert.equal(
+		commands.some((argv) => argv.includes("commit-tree") || argv.includes("update-ref")),
+		false,
+	);
+	assert.equal(
+		commands.some((argv) => argv.includes("diff-tree") || argv.includes("update-index")),
+		false,
+	);
+	await writeFile(join(root, ".env"), "TEST=fixture-not-a-secret\n");
+	const excluded = await captureCheckpoint(root, { ...options, previous: first, deduplicate: true });
+	assert.notEqual(excluded.ref, first.ref);
+	assert.equal(excluded.worktreeTree, first.worktreeTree);
+	assert.ok(excluded.excluded.some((entry) => entry.path === ".env"));
+	const scoped = await captureCheckpoint(root, {
+		...options,
+		previous: excluded,
+		deduplicate: true,
+		scope: ["absent.txt"],
+	});
+	assert.notEqual(scoped.ref, excluded.ref);
+	assert.ok(scoped.covered.includes("absent.txt"));
+	assert.ok(scoped.scope.includes("absent.txt"));
+	const backup = await captureCheckpoint(root, {
+		...options,
+		trigger: "before-restore",
+		previous: scoped,
+		deduplicate: true,
+		scope: scoped.scope,
+	});
+	assert.notEqual(backup.ref, scoped.ref);
+	const ordinary = await captureCheckpoint(root, {
+		...options,
+		previous: backup,
+		deduplicate: true,
+		scope: backup.scope,
+	});
+	assert.notEqual(ordinary.ref, backup.ref);
+	await git(root, ["update-ref", "-d", ordinary.ref, ordinary.commit]);
+	const replacement = await captureCheckpoint(root, {
+		...options,
+		previous: ordinary,
+		deduplicate: true,
+		scope: ordinary.scope,
+	});
+	assert.notEqual(replacement.ref, ordinary.ref);
+	assert.deepEqual(await loadCheckpoint(root, replacement.ref), replacement);
+	await writeFile(join(root, "file.txt"), "changed raw working bytes\n");
+	const changed = await captureCheckpoint(root, {
+		...options,
+		previous: replacement,
+		deduplicate: true,
+		scope: replacement.scope,
+	});
+	assert.notEqual(changed.worktreeTree, replacement.worktreeTree);
+	await git(root, ["add", "--", "file.txt"]);
+	const staged = await captureCheckpoint(root, {
+		...options,
+		previous: changed,
+		deduplicate: true,
+		scope: changed.scope,
+	});
+	assert.equal(staged.worktreeTree, changed.worktreeTree);
+	assert.notEqual(staged.indexTree, changed.indexTree);
+	const otherSession = await captureCheckpoint(root, {
+		...options,
+		sessionId: "other-session",
+		previous: staged,
+		deduplicate: true,
+		scope: staged.scope,
+	});
+	assert.notEqual(otherSession.ref, staged.ref);
+	assert.equal(otherSession.sessionId, "other-session");
+});
+
+test("controller resumes branch/redo snapshots in batches and reuses unchanged captures; cancellation drops stale startup", async (t) => {
+	const root = await fixture(t);
+	const cp = await captureCheckpoint(root, options);
+	const entries = [
+		{ type: "custom", customType: "midnight-checkpoint", data: { version: 1, ref: cp.ref } },
+		{
+			type: "custom",
+			customType: "midnight-checkpoint-redo",
+			data: { version: 1, steps: [{ ref: cp.ref, paths: ["file.txt"] }] },
+		},
+	];
+	const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+	const records: unknown[] = [];
+	const pi = {
+		on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => handlers.set(name, handler),
+		registerCommand: () => {},
+		appendEntry: (...args: unknown[]) => records.push(args),
+	} as unknown as ExtensionAPI;
+	const ctx = {
+		cwd: root,
+		sessionManager: {
+			getBranch: () => entries,
+			getEntries: () => entries,
+			getSessionId: () => options.sessionId,
+			getLeafId: () => null,
+		},
+	} as unknown as ExtensionContext;
+	const controller = registerCheckpoints(
+		pi,
+		() => true,
+		() => {},
+	);
+	await handlers.get("session_start")?.({}, ctx);
+	assert.match(controller.status(), /Checkpoints: 1 .* 1 redo steps/);
+	assert.equal(records.length, 0, "unchanged resume must not record a replacement snapshot");
+	await handlers.get("tool_result")?.({ toolName: "bash", input: {}, isError: false }, ctx);
+	await handlers.get("turn_end")?.({}, ctx);
+	assert.equal(records.length, 0, "read-only shell still verifies files but does not write another snapshot");
+	const startup = handlers.get("session_start")?.({}, ctx);
+	controller.cancel();
+	await startup;
+	assert.match(controller.status(), /Checkpoints: unavailable/);
+	assert.equal(records.length, 0);
+});
 
 test("capture does not mutate HEAD or the real index and preserves staged versus unstaged layers", async (t) => {
 	const root = await fixture(t);

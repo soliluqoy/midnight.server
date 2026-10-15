@@ -104,6 +104,8 @@ Supported environment defaults remain `PI_CLM_BUDGET`, `PI_CLM_RESERVE`, `PI_CLM
 
 Checkpoints are **included and on by default when a Git worktree is available**; no separate pi-rewind installation is needed. Midnight records startup/manual snapshots and changed pending state after observed mutating tool activity, including nested codemode activity. It never initializes Git silently. Captures store raw covered file bytes and distinct index/worktree trees in local Git objects without committing your work or moving HEAD.
 
+Checkpoint history is loaded and validated in bounded Git batches rather than launching several Git processes per snapshot. Restore targets are reloaded before use; there is no persistent validation cache. Unchanged ordinary captures reuse an existing retained snapshot before writing new commits or refs, including comparisons of scope, coverage and exclusions. Recovery backups are always fresh. Shell/codemode activity still triggers conservative file verification—even for a read-only command—rather than guessing which commands can change files.
+
 `/midnight rewind` opens the checkpoint picker. Choose **files and conversation**, **files only**, or **conversation only**. Conversation navigation alone never restores files. File restoration requires a scrollable read-only preview and explicit confirmation; it preserves unrelated paths and staged/unstaged layers, refuses changed HEAD/branch, and never uses blanket `git clean` or resets HEAD. After a file restore, Midnight refreshes evidence and panel/file state; tree navigation rebuilds branch-specific context.
 
 - `/midnight checkpoints capture`: manual capture; unchanged snapshots are deduplicated.
@@ -129,7 +131,7 @@ Connection requires an idle interactive session and confirmation. Only loopback 
 
 `/midnight browser status` reports registration, **not verified connection health**; inspect Pi's `/mcp` for that. `disconnect` removes Midnight's registration, not user-configured servers. Session replacement/reload/shutdown clears the native registration. An existing user MCP entry named `chrome_devtools` takes precedence; Midnight never rewrites `mcp.json`. If optional dependencies were omitted during installation, browser connection reports unavailable while the core suite still works.
 
-Two original portable workflow skills ship with the package: **midnight-context** and **midnight-checkpoints**. Personal desktop/document/research connector skills are not copied or advertised as operational. Pi's own models, codemode, authentication and other host capabilities are reused, not bundled as another Pi runtime.
+Three original portable workflow skills ship with the package: **midnight-context**, **midnight-checkpoints**, and explicit-only **midnight-evidence** (`/skill:midnight-evidence`). Personal desktop/document/research connector skills are not copied or advertised as operational. Pi's own models, codemode, authentication and other host capabilities are reused, not bundled as another Pi runtime.
 
 ### Session sidebar
 
@@ -205,6 +207,46 @@ The sidebar shows **EVIDENCE / local**, active sources, claims without review fl
 **Complementary, not competing:** Midnight's native context service (or an explicitly detected external owner during migration) owns context editing, trackers, annotations and recall. The ledger installs no context hook, injects no messages, does not edit `LIVE_CONTEXT.md`, and does not depend on private pi-clm schemas. Ledger state is available on request rather than forced into every prompt. Chat-helper uploads remain separately opted in and explicitly invoked; recording a receipt never invokes triage. Pi/codemode can discover the tool in the `midnight` namespace and receives schema-declared `structuredContent`; direct and nested updates are serialized. No additional models, network requests, background summarization, or filesystem polling are introduced.
 
 **Bounds and privacy:** up to 512 records per branch, including at most 128 automatic receipts and 32 active captured files. Capacity stops new captures rather than silently evicting history. File evidence is an explicit local read of a project-contained UTF-8 file up to 1 MiB, with a SHA-256 hash and an excerpt of at most 100 lines / 4,000 UTF-16 code units (default: line 1). Symlink targets must stay in the project; known sensitive paths and private-key filenames are rejected. Reads detect ordinary concurrent changes, not transactional snapshots or adversarial filesystem races. Path checks are not secret detection: **never capture secrets or put them in statements**. Excerpts and statements persist in Pi's session history and are returned to the active model when requested; “local” means no extra evidence-provider calls, not exclusion from the coding model's context. Retraction is not deletion. In-memory sessions retain records only for their lifetime. Sources, logs, and agent-authored statements remain untrusted data, never instructions. No correctness, latency, or token/cost savings are claimed.
+
+**Evidence development status:** the development extension now connects the shared queued runtime to existing lifecycle hooks, tool actions, and `status|check|show` commands. Legacy-session tool results use version 2; fresh v3 sessions use version 3. Record pages contain `{ record, origin?, replacement? }` entries, with mode/writable/append-lock metadata; saved v1 results remain readable. Legacy branches keep v1 storage envelopes until explicit migration. There is **no automatic migration or model-callable commit**. The 512-retained-record limit remains, but a user-confirmed rollover can free space: retraction alone does not free slots, and supersession needs a new slot. Source checks, passive receipts, and navigation review share the queue; cancellation after a verified append does not undo it. Cancelled checks may report only a committed prefix. The sidebar marks loading, unavailable checks and read-only state explicitly instead of showing zero-clean counts.
+
+Do **not** open a v2-migrated branch with an older/v1 Midnight writer, including builds before this queued-runtime bridge. Old binaries ignore v2 entries and may append incompatible v1 events, even through passive observations. Use only a v2-capable reader/writer once released; until then keep experimental migrated sessions away from ordinary runtime use. Preserve the original session before any downgrade. For inspection, use saved raw results without loading an old writer; the development v2 reader detects mixed/future/malformed history and refuses writes. It does not automatically merge, repair, or convert that history back to v1. Explicit uncertain-append recovery only replays and validates history—it does not undo or retry a write. See [unreleased compatibility notes](docs/releases/unreleased.md).
+
+#### Opt-in investigation workflow and advisory audit
+
+Invoke **`/skill:midnight-evidence <question>`** for a substantial evidence-led investigation. The skill is explicit-only, not automatically selected or injected. It guides gap prioritization, original-source inspection, supported claims, revision, and honest qualified stopping. It does not make routine small edits require ledger administration or authorize extra commands, provider calls, or paid evaluations.
+
+Before a substantial answer, explicitly select the relevant claims:
+
+```json
+{ "action": "audit", "selected": ["<claim-id>"], "limit": 20 }
+```
+
+Audit is **read-only and advisory**. It replays only active-branch evidence, checks selected claims/support plus recorded linked concerns and resolution support, and attempts bounded hashes for at most **32 distinct file paths**. It shares the runtime queue but does **not** initialize sessions, append review events, publish sidebar updates, clear review, run proposed checks, or call a provider. Cancellation, branch movement, and session replacement discard stale work.
+
+Inputs allow **1–20 unique claim IDs**. Findings are paginated (default/max 20); use `nextOffset` and inspect `total`, not just the current page. Each call reassesses the current state; pages are not a frozen transaction. Results include availability, selected claim applicability, file paths attempted (`filesChecked`, including failed reads), legacy relationship uncertainty, invalid stored events, capacity and pending navigation review. Read-only or append-locked history is unavailable, not clean. Missing/inactive support, review flags, open/reviewed concerns, receipt-only observations, and changed/unavailable/unchecked files remain explicit. Unrelated gaps are excluded.
+
+**No findings does not mean verified.** The audit cannot judge whether evidence actually supports a conclusion, detect unrecorded gaps, or check untracked external state. Legacy resolved-gap concerns may be lost; `legacyRelationships` discloses incomplete coverage without inventing links. Tool receipts, hashes and exit codes are observations—not proof. Sidebar source counts include receipts and must not be read as substantive-support coverage. Inspect material findings, then investigate or qualify the answer; provisional answers are permitted. No reasoning-quality or token/cost benefit has been measured.
+
+#### Structured review and relationships in new sessions
+
+Run **`/new`** with this development extension loaded to enable v3 evidence semantics. Activation requires Pi's explicit `new` session event and no preexisting conversation entries. Ordinary process startup, `/reload`, resume, fork, and an empty evidence ledger are not proof of freshness and never upgrade old sessions. Forks/reloads of an already initialized v3 branch retain its persisted semantics. Existing v1/v2 sessions keep their original replay and hashes; even rollover does not upgrade them.
+
+In v3 sessions, use `concerns: ["<claim-or-record-id>"]` when adding a gap and `resolvedBy: ["<evidence-id>"]` when resolving it. Claim `refs` remain evidence support. For compatibility, gap-add `refs` aliases concerns and resolve `refs` aliases resolution support; do not combine an explicit relationship with `refs`. Existing sessions reject the new fields. Gap records retain separate concerns and resolution support; their returned `refs` is the dependency union (at most 16 distinct IDs). Rollover carries both relationships. Resolution/reopening preserves concerns, and resolution never clears earlier review.
+
+V3 `reviewReasons` stores up to eight distinct structured causes with explanations and dependency IDs where applicable: source changed/unavailable, dependency superseded/retracted/review, possible worktree change, session reload, and branch change. `reviewOverflow` is sticky when additional causes cannot be retained; it never means clean. `/midnight evidence show <id>` displays reasons and relationships. Matching/restored sources do not clear review. Legacy prose is not reclassified by guessing its meaning.
+
+V3 history uses `midnight-evidence-v3` entries. **Do not open it with a v1/v2-only writer**, even for passive observation. Initialization failure never retries or falls back to legacy writes within the active runtime. If no initialization entry was recorded, start a new session; recovery does not create it. If the entry became visible before an uncertain append failure, confirmed recovery validates it without retrying. No existing-session upgrade path is included.
+
+#### Explicit evidence capacity recovery (development)
+
+1. Ask the tool for `{ "action": "preview", "selected": ["<record-id>"] }`, or run `/midnight evidence preview <id> ...`. Use `selected: []` or `preview --empty` only to deliberately carry nothing. Dependencies are included automatically; preview refuses more than **256 carried records / 2 MiB**.
+2. Inspect the paginated carried records, omitted-active IDs, review IDs and warnings. Repeat the same selection with `offset`/`limit` for more pages; an unchanged preview retains its token. Omitted records remain historical, **not resolved**. Carried evidence is not recaptured and review flags remain.
+3. Run `/midnight evidence commit <token>` yourself. An **idle interactive TUI** must confirm the carry/omission counts and old-writer warning. Declining, noninteractive mode, a replaced session or changed branch cannot authorize a commit. New evidence writes invalidate a stale preview; prepare another rather than silently recomputing the confirmed selection.
+
+For historical inspection, use `{ "action": "archive", "locator": <preview.predecessor>, "limit": 20 }`. The locator contains `setId`, `anchor`, and `digest`. Continue a scan using its returned cursor as `locator`; pages use `offset`/`limit`. Each call inspects at most 2,048 entries; incomplete/unavailable totals stay unknown. Cursors are session-local and expire on branch movement. Save the predecessor locator from the preview for later lookup; an origin record ID alone is not a complete archive locator. Historical results do not establish current source freshness.
+
+After an uncertain append, `/midnight evidence recover` asks for confirmation and replays the current branch before unlocking it if valid. It never retries or undoes the append, repairs incompatible history, or clears review. Commit and recovery are unavailable through the model tool and in print/JSON/RPC modes. Confirmation dialogs retain input ownership and close file previews. These are development controls: manual fullscreen/reload compatibility remains an unverified release gate; automated tests are not a substitute.
 
 ### Local-first log triage with an optional chat helper
 
@@ -287,6 +329,8 @@ Angle brackets describe an argument; omit the brackets when typing a command.
 | `/midnight triage model [provider/model-id]` | Open the helper-model picker, or select an exact chat helper; leaves uploads off until consent |
 | `/midnight triage <models\|on\|off\|status>` | List configured chat helpers, authorize uploads, disable/cancel uploads, or inspect usage |
 | `/midnight evidence <status\|check\|show> [id]` | Inspect local evidence counts/records or recheck tracked sources |
+| `/midnight evidence preview <ids...>` / `preview --empty` | Prepare an explicit bounded carry-forward preview |
+| `/midnight evidence commit <token>` / `recover` | User-confirmed rollover or append-lock recovery; idle interactive TUI only |
 | `/midnight refresh` | Refresh Git and file state |
 
 Panel modes reset on reload/session replacement; the compact setting lasts for the current extension instance. Refresh also runs on initialization, agent completion, conversation navigation, compaction, and Explorer focus. External changes are not polled; use `/midnight refresh` when needed.

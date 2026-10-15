@@ -4,8 +4,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { type Component, isKeyRelease, stripTerminalSequences, type TUI } from "@earendil-works/pi-tui";
 import { compactToolRenderers } from "./compact-tools.ts";
 import { registerSuite } from "./core/suite.ts";
-import { registerEvidence } from "./evidence/index.ts";
-import type { EvidenceSummary } from "./evidence/model.ts";
+import type { EvidenceDisplaySummary } from "./evidence/model.ts";
+import { registerEvidence } from "./evidence/register.ts";
 import { ExplorerLocation, resolveExplorerFolder } from "./explorer-location.ts";
 import { FileExplorerComponent } from "./file-explorer.ts";
 import { FilePreviewComponent, type FilePreviewContent, loadFilePreview } from "./file-preview.ts";
@@ -142,7 +142,7 @@ export class MidnightPanels {
 		this.tui.requestRender();
 	}
 
-	updateEvidence(summary: EvidenceSummary): void {
+	updateEvidence(summary: EvidenceDisplaySummary): void {
 		if (this.disposed) return;
 		this.sidebar.evidence = summary;
 		this.sidebar.invalidate();
@@ -443,12 +443,19 @@ export default function midnight(pi: ExtensionAPI): void {
 		await evidence.check(ctx);
 	});
 	registerTokenSpeed(pi);
-	const question = registerQuestion(pi, () => !triage.active && (panels?.prepareQuestion() ?? true));
+	const question = registerQuestion(
+		pi,
+		() => !triage.active && !evidence.active && (panels?.prepareQuestion() ?? true),
+	);
 	const triage = registerTriage(pi, {
 		onUpdate: (status) => panels?.updateTriage(status),
-		beforeDialog: () => !question.active && (panels?.prepareQuestion() ?? true),
+		beforeDialog: () => !question.active && !evidence.active && (panels?.prepareQuestion() ?? true),
 	});
-	const evidence = registerEvidence(pi, (summary) => panels?.updateEvidence(summary));
+	const evidence = registerEvidence(
+		pi,
+		(summary) => panels?.updateEvidence(summary),
+		() => !question.active && !triage.active && (panels?.prepareQuestion() ?? true),
+	);
 	let title: SessionTitle | undefined;
 	let projectSwitcher = new ProjectSwitcher();
 	let compactTools = true;
@@ -471,7 +478,7 @@ export default function midnight(pi: ExtensionAPI): void {
 				ctx,
 				tui,
 				() => projectSwitcher.active,
-				() => question.active || triage.active,
+				() => question.active || triage.active || evidence.active,
 			);
 			panels.updateTriage(triage.sidebarStatus());
 			panels.updateEvidence(evidence.summary());
@@ -512,7 +519,7 @@ export default function midnight(pi: ExtensionAPI): void {
 		description:
 			"Midnight: status|doctor|config|context|rewind|checkpoints|browser; sidebar|explorer, project, compact, title, triage, evidence, refresh",
 		handler: async (args, ctx) => {
-			if (question.active || triage.active) {
+			if (question.active || triage.active || evidence.active) {
 				ctx.ui.notify("Finish or cancel the Midnight dialog before using /midnight commands.", "info");
 				return;
 			}

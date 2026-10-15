@@ -8,7 +8,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import type { EvidenceSummary } from "./evidence/model.ts";
+import type { EvidenceDisplaySummary } from "./evidence/model.ts";
 import type { GitStatusSummary } from "./git-status.ts";
 import { alignColumns, truncateLeftToWidth } from "./presentation.ts";
 import { SessionAnalysis, sessionEntryCount } from "./session-analysis.ts";
@@ -29,7 +29,7 @@ export class Sidebar implements Component {
 	private rows: PendingFile[] = [];
 	updating = false;
 	triage: TriageStatus | undefined;
-	evidence: EvidenceSummary | undefined;
+	evidence: EvidenceDisplaySummary | undefined;
 	get candidates() {
 		return this.analysis.changes;
 	}
@@ -240,7 +240,8 @@ export class Sidebar implements Component {
 		}
 		if (
 			this.evidence &&
-			(this.evidence.evidence ||
+			(this.evidence.unavailable ||
+				this.evidence.evidence ||
 				this.evidence.claims ||
 				this.evidence.review ||
 				this.evidence.gaps ||
@@ -249,8 +250,11 @@ export class Sidebar implements Component {
 		) {
 			const { evidence, claims, review, gaps, capacityReached, invalidEvents } = this.evidence;
 			heading("EVIDENCE", theme.fg("dim", "local"));
-			line(theme.fg("muted", `${evidence} sources · ${claims} claims`));
-			line(theme.fg(review ? "warning" : "dim", `${review} review · ${gaps} open gaps`));
+			if (this.evidence.unavailable) line(theme.fg("warning", this.evidence.unavailable));
+			else {
+				line(theme.fg("muted", `${evidence} sources · ${claims} claims`));
+				line(theme.fg(review ? "warning" : "dim", `${review} review · ${gaps} open gaps`));
+			}
 			if (capacityReached || invalidEvents)
 				line(theme.fg("warning", invalidEvents ? "Stored events need inspection" : "Capture limit reached"));
 		}

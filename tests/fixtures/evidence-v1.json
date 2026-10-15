@@ -1,0 +1,73 @@
+{
+	"description": "Frozen v1 event data, not a Pi session file. Synthetic provenance only; do not regenerate from future schemas.",
+	"events": [
+		{
+			"version": 1,
+			"action": "add",
+			"record": {
+				"id": "legacy-source",
+				"kind": "evidence",
+				"text": "Synthetic source observation",
+				"createdAt": "2026-10-14T00:00:00.000Z",
+				"status": "active",
+				"refs": [],
+				"applicability": "historical",
+				"automatic": false,
+				"source": {
+					"kind": "file",
+					"path": "fixture source.txt",
+					"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"startLine": 1,
+					"endLine": 1,
+					"quote": "Synthetic observation, not a live file"
+				}
+			}
+		},
+		{
+			"version": 1,
+			"action": "add",
+			"record": {
+				"id": "legacy-claim",
+				"kind": "claim",
+				"text": "A historical interpretation",
+				"createdAt": "2026-10-14T00:00:01.000Z",
+				"status": "active",
+				"refs": ["legacy-source"],
+				"applicability": "historical",
+				"automatic": false
+			}
+		},
+		{
+			"version": 1,
+			"action": "add",
+			"record": {
+				"id": "legacy-gap",
+				"kind": "gap",
+				"text": "Does the interpretation hold?",
+				"createdAt": "2026-10-14T00:00:02.000Z",
+				"status": "active",
+				"refs": ["legacy-claim"],
+				"applicability": "historical",
+				"automatic": false
+			}
+		},
+		{
+			"version": 1,
+			"action": "resolve",
+			"id": "legacy-gap",
+			"reason": "Synthetic resolution",
+			"refs": ["legacy-source"]
+		},
+		{
+			"version": 1,
+			"action": "review",
+			"id": "legacy-source",
+			"reason": "Legacy prose does not identify a precise review category"
+		}
+	],
+	"invalidEvents": [
+		{ "version": 99, "action": "review", "id": "legacy-source", "reason": "Unknown version" },
+		{ "version": 1, "action": "retract", "id": "missing", "reason": "Unknown record" },
+		{ "version": 1, "action": "add", "record": { "id": "incomplete" } }
+	]
+}

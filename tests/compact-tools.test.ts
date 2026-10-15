@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult, Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { type Component, stripTerminalSequences, Text, visibleWidth } from "@earendil-works/pi-tui";
 import { loadThemeFromPath } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import { compactToolRenderers } from "../src/compact-tools.ts";
+import { formatEvidenceResult } from "../src/evidence/format-result.ts";
 
 type Context = Parameters<NonNullable<ToolRenderers["renderCall"]>>[2];
 const midnight = (mode: "truecolor" | "256color" = "truecolor") =>
@@ -137,6 +139,96 @@ test("evidence rows show operation and review counts without changing model-faci
 	h.context.expanded = true;
 	assert.match(plain(h.call()).join("\n"), /Original evidence result/);
 	assert.deepEqual(value, original);
+});
+
+test("saved evidence versions and v2 states render honestly without mutating or hiding raw results", (t) => {
+	const saved = JSON.parse(readFileSync(new URL("./fixtures/evidence-results.json", import.meta.url), "utf8"));
+	const cases: [unknown, string][] = [
+		[saved.v1, "2 review · 3 gaps"],
+		[saved.v2, "2 review · 3 gaps"],
+		[saved.archive, "archive scanning · total unknown"],
+		[{ ...saved.archive, archive: { ...saved.archive.archive, complete: true } }, "archive unavailable"],
+		[
+			{
+				...saved.archive,
+				total: 5,
+				nextOffset: 2,
+				archive: { ...saved.archive.archive, complete: true, available: true },
+			},
+			"historical · 5 records · more",
+		],
+		[{ ...saved.v2, mode: "read-only", writable: false, issue: "unsafe\u001b[31m" }, "read-only · issue"],
+		[{ ...saved.v2, appendUncertain: true, writable: false }, "append uncertain · writes locked"],
+		[{ ...saved.v2, action: "commit", committed: true, operationId: "op", cancelledAfterAppend: false }, "committed"],
+		[
+			{ ...saved.v2, action: "update", committed: true, operationId: "op", cancelledAfterAppend: true },
+			"cancelled after append · committed",
+		],
+		[
+			{ ...saved.v2, action: "check", committed: true, operationId: "op", cancelledAfterAppend: true },
+			"cancelled · committed prefix",
+		],
+		[{ ...saved.v2, action: "recover" }, "replayed · no retry"],
+		[
+			{
+				...saved.v2,
+				action: "preview",
+				preview: {
+					token: "a".repeat(64),
+					setId: "next",
+					predecessor: { setId: `legacy:${"c".repeat(64)}`, anchor: "saved-anchor", digest: "b".repeat(64) },
+					bytes: 100,
+					carried: 2,
+					freeSlots: 510,
+					receipts: 0,
+					omitted: { total: 4, nextOffset: null, ids: [] },
+					review: { total: 2, nextOffset: null, ids: [] },
+					warnings: [],
+				},
+			},
+			"preview only · 2 carry · 4 omitted",
+		],
+		[
+			{ ...saved.v2, summary: { ...saved.v2.summary, capacityReached: true, invalidEvents: 2 } },
+			"capacity reached · 2 invalid events",
+		],
+	];
+	for (const [details, expected] of cases) {
+		assert.ok(formatEvidenceResult(details)?.includes(expected), expected);
+		const h = harness("midnight_evidence", { action: "list", id: "資料 😀" });
+		t.after(h.dispose);
+		const value = result("Original saved result 資料", details);
+		const original = structuredClone(value);
+		const component = h.finish(value);
+		assert.ok(plain(component, 240).join("\n").includes(expected));
+		for (const width of [0, 1, 8, 24, 80])
+			assert.ok(component.render(width).every((line) => visibleWidth(line) <= width));
+		h.finish(value, true);
+		assert.ok(plain(h.call(), 240).join("\n").includes(expected), "error rows retain structured status");
+		h.context.expanded = true;
+		assert.match(plain(h.call()).join("\n"), /Original saved result/);
+		h.context.expanded = false;
+		h.setEnabled(false);
+		assert.match(plain(h.call()).join("\n"), /Original saved result/);
+		assert.deepEqual(value, original);
+	}
+});
+
+test("unknown and malformed evidence results fall back without inventing counts", (t) => {
+	for (const details of [
+		null,
+		{},
+		{ version: 3, summary: { review: 0, gaps: 0 } },
+		{ version: 1, summary: { review: -1, gaps: 0 } },
+		{ version: 2, action: "archive" },
+	]) {
+		assert.equal(formatEvidenceResult(details), undefined);
+		const h = harness("midnight_evidence", { action: "list" });
+		t.after(h.dispose);
+		assert.doesNotMatch(plain(h.finish(result("Unknown saved payload", details))).join("\n"), /0 review|0 gaps/);
+		h.context.expanded = true;
+		assert.match(plain(h.call()).join("\n"), /Unknown saved payload/);
+	}
 });
 
 test("log-triage rows show actual routing, new requests, timing, and helper issues without mutating results", (t) => {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -13,7 +13,15 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
 import { ParamsSchema, receipt, registerEvidence } from "../src/evidence/index.ts";
-import { ENTRY_TYPE, EvidenceLedger, type EvidenceRecord, MAX_RECEIPTS, ResultSchema } from "../src/evidence/model.ts";
+import {
+	ENTRY_TYPE,
+	EvidenceLedger,
+	type EvidenceRecord,
+	MAX_RECEIPTS,
+	MAX_RECORDS,
+	ResultSchema,
+} from "../src/evidence/model.ts";
+import { legacyReviewReason, SemanticLedger, type SemanticRecord } from "../src/evidence/semantics.ts";
 import { captureSource, MAX_SOURCE_BYTES, sha256 } from "../src/evidence/source.ts";
 import { type TriageData, TriageSchema } from "../src/triage/result.ts";
 
@@ -35,6 +43,113 @@ function record(id: string, overrides: Partial<EvidenceRecord> = {}): EvidenceRe
 const claim = (id: string, refs: string[], overrides: Partial<EvidenceRecord> = {}) =>
 	record(id, { kind: "claim", refs, source: undefined, applicability: "current", ...overrides });
 const add = (ledger: EvidenceLedger, item: EvidenceRecord) => ledger.apply({ version: 1, action: "add", record: item });
+
+test("v3 review reasons are bounded, explicit, sticky, and do not reinterpret legacy events", () => {
+	const ledger = new SemanticLedger();
+	const source: SemanticRecord = { ...record("e"), semantics: 3, reviewReasons: [], reviewOverflow: false };
+	assert.ok(ledger.apply({ version: 3, action: "add", record: source }));
+	assert.equal(ledger.apply({ version: 1, action: "review", id: "e", reason: "ambiguous old prose" }), false);
+	assert.deepEqual(legacyReviewReason({ ...source, review: "old explanation" }), {
+		code: "legacy_unspecified",
+		explanation: "old explanation",
+	});
+	assert.ok(
+		ledger.apply({
+			version: 3,
+			action: "add",
+			record: { ...claim("c", ["e"]), semantics: 3, reviewReasons: [], reviewOverflow: false },
+		}),
+	);
+	assert.ok(
+		ledger.apply({
+			version: 3,
+			action: "add",
+			record: {
+				...claim("h", ["e"], { applicability: "historical" }),
+				semantics: 3,
+				reviewReasons: [],
+				reviewOverflow: false,
+			},
+		}),
+	);
+	for (let i = 0; i < 10; i++)
+		assert.ok(
+			ledger.apply({
+				version: 3,
+				action: "review",
+				id: "e",
+				reason: { code: "source_changed", explanation: `Changed ${i}` },
+			}),
+		);
+	assert.equal(ledger.records.get("e")?.reviewReasons.length, 8);
+	assert.equal(ledger.records.get("e")?.reviewOverflow, true);
+	assert.equal(ledger.records.get("e")?.review, "Changed 0");
+	assert.equal(ledger.records.get("c")?.reviewReasons[0].code, "dependency_review");
+	assert.equal(ledger.records.get("h")?.review, undefined);
+	const before = structuredClone([...ledger.records]);
+	assert.equal(
+		ledger.apply({ version: 3, action: "review", id: "e", reason: { code: "restored", explanation: "clear" } }),
+		false,
+	);
+	assert.deepEqual([...ledger.records], before);
+	assert.ok(ledger.apply({ version: 3, action: "retract", id: "e", reason: "Withdrawn" }));
+	assert.equal(ledger.records.get("h")?.reviewReasons[0].code, "dependency_retracted");
+	assert.deepEqual(source.reviewReasons, [], "caller data is not mutated");
+});
+
+test("v3 gap concerns survive resolution and reopening; dependency unions stay bounded and acyclic", () => {
+	const ledger = new SemanticLedger();
+	const events: unknown[] = [];
+	const apply = (event: unknown) => {
+		assert.ok(ledger.apply(event));
+		events.push(event);
+	};
+	const semantic = (item: EvidenceRecord, concerns?: string[]): SemanticRecord => ({
+		...item,
+		semantics: 3,
+		reviewReasons: [],
+		reviewOverflow: false,
+		...(concerns ? { concerns } : {}),
+	});
+	apply({ version: 3, action: "add", record: semantic(record("e")) });
+	apply({ version: 3, action: "add", record: semantic(claim("c", ["e"])) });
+	apply({
+		version: 3,
+		action: "add",
+		record: semantic(record("g", { kind: "gap", source: undefined, refs: ["c"] }), ["c"]),
+	});
+	apply({ version: 3, action: "resolve", id: "g", reason: "Observed", resolvedBy: ["e"] });
+	assert.deepEqual(ledger.records.get("g")?.concerns, ["c"]);
+	assert.deepEqual(ledger.records.get("g")?.resolvedBy, ["e"]);
+	assert.deepEqual(ledger.records.get("g")?.refs, ["c", "e"]);
+	apply({ version: 3, action: "add", record: semantic(record("e2", { supersedes: "e" })) });
+	assert.equal(ledger.records.get("g")?.status, "active");
+	assert.deepEqual(
+		ledger.records.get("g")?.resolvedBy,
+		["e"],
+		"old resolution support remains visible until explicitly replaced",
+	);
+	apply({ version: 3, action: "resolve", id: "g", reason: "Updated observation", resolvedBy: ["e2"] });
+	assert.deepEqual(ledger.records.get("g")?.concerns, ["c"]);
+	assert.ok(ledger.records.get("g")?.review, "resolving does not clear earlier review");
+	const replay = new SemanticLedger();
+	for (const event of events) assert.ok(replay.apply(event));
+	assert.deepEqual([...replay.records], [...ledger.records]);
+	const before = structuredClone([...ledger.records]);
+	assert.equal(
+		ledger.apply({
+			version: 3,
+			action: "add",
+			record: semantic(record("self", { kind: "gap", source: undefined, refs: ["self"] }), ["self"]),
+		}),
+		false,
+	);
+	assert.equal(
+		ledger.apply({ version: 3, action: "resolve", id: "g", reason: "Not evidence", resolvedBy: ["c"] }),
+		false,
+	);
+	assert.deepEqual([...ledger.records], before);
+});
 
 test("immutable corrections invalidate dependents; old evidence stays recoverable", () => {
 	const ledger = new EvidenceLedger();
@@ -90,6 +205,55 @@ test("references, supersession, malformed persistence and gap resolution are val
 		add(ledger, record("gap2", { kind: "gap", source: undefined, refs: ["gap"], supersedes: "gap" })),
 		false,
 	);
+});
+
+// Phase 0 characterization: recovery is deliberately not implemented by these tests.
+// Phase 1 must add recovery assertions without weakening rejection/non-mutation guarantees.
+test("v1 capacity includes inactive history and rejects corrections without partially replacing records", () => {
+	const ledger = new EvidenceLedger();
+	assert.ok(add(ledger, record("source")));
+	assert.ok(add(ledger, claim("dependent", ["source"])));
+	for (let i = ledger.records.size; i < MAX_RECORDS; i++) {
+		assert.ok(add(ledger, record(`gap-${i}`, { kind: "gap", source: undefined })));
+	}
+	const before = structuredClone([...ledger.records]);
+	assert.equal(add(ledger, record("replacement", { supersedes: "source" })), false);
+	assert.deepEqual([...ledger.records], before);
+	assert.equal(ledger.invalidEvents, 1);
+	assert.equal(ledger.summary().capacityReached, true);
+	assert.ok(ledger.apply({ version: 1, action: "retract", id: "gap-2", reason: "No longer relevant" }));
+	assert.equal(ledger.records.size, MAX_RECORDS);
+	assert.equal(add(ledger, record("replacement", { supersedes: "source" })), false);
+	assert.equal(ledger.records.get("source")?.status, "active");
+	assert.equal(ledger.records.get("dependent")?.review, undefined);
+	assert.equal(ledger.records.has("replacement"), false);
+});
+
+test("v1 resolution replaces concerns, retains review, and only active records accept lifecycle updates", () => {
+	const ledger = new EvidenceLedger();
+	assert.ok(add(ledger, record("source")));
+	assert.ok(add(ledger, claim("concern", ["source"])));
+	assert.ok(add(ledger, record("gap", { kind: "gap", source: undefined, refs: ["concern"] })));
+	assert.ok(ledger.apply({ version: 1, action: "review", id: "gap", reason: "Prior uncertainty" }));
+	assert.ok(ledger.apply({ version: 1, action: "resolve", id: "gap", reason: "Observed", refs: ["source"] }));
+	assert.deepEqual(ledger.records.get("gap")?.refs, ["source"]);
+	assert.equal(ledger.records.get("gap")?.review, "Prior uncertainty");
+	const closed = structuredClone(ledger.records.get("gap"));
+	for (const action of ["review", "retract", "resolve"] as const) {
+		assert.equal(ledger.apply({ version: 1, action, id: "gap", reason: "Rejected", refs: ["source"] }), false);
+	}
+	assert.equal(add(ledger, record("replacement-gap", { kind: "gap", source: undefined, supersedes: "gap" })), false);
+	assert.deepEqual(ledger.records.get("gap"), closed);
+	assert.ok(ledger.apply({ version: 1, action: "review", id: "source", reason: "Source unavailable" }));
+	assert.equal(ledger.records.get("gap")?.status, "active");
+	assert.match(ledger.records.get("gap")?.review ?? "", /Source unavailable/);
+	assert.equal(ledger.apply({ version: 1, action: "resolve", id: "gap", reason: "Stale", refs: ["source"] }), false);
+	assert.ok(add(ledger, record("fresh", { supersedes: "source" })));
+	assert.equal(ledger.records.get("source")?.status, "superseded");
+	assert.equal(ledger.apply({ version: 1, action: "retract", id: "source", reason: "Already inactive" }), false);
+	assert.ok(ledger.apply({ version: 1, action: "resolve", id: "gap", reason: "Reassessed", refs: ["fresh"] }));
+	assert.equal(ledger.records.get("gap")?.status, "resolved");
+	assert.ok(ledger.records.get("gap")?.review, "v1 resolution does not clear the previous review reason");
 });
 
 async function workspace(t: TestContext) {
@@ -181,6 +345,93 @@ function harness(cwd: string, manager = SessionManager.inMemory(cwd)) {
 	};
 	return { run, emit, observe, manager, handlers, integration, notices, ctx, tool: () => tool };
 }
+
+test("frozen v1 events replay deterministically, count malformed entries, and isolate sibling branches", async (t) => {
+	const fixture = JSON.parse(await readFile(new URL("./fixtures/evidence-v1.json", import.meta.url), "utf8")) as {
+		events: unknown[];
+		invalidEvents: unknown[];
+	};
+	const original = structuredClone(fixture);
+	const ledger = new EvidenceLedger();
+	for (const event of fixture.events) assert.ok(ledger.apply(event));
+	const valid = structuredClone([...ledger.records]);
+	for (const event of fixture.invalidEvents) assert.equal(ledger.apply(event), false);
+	assert.deepEqual([...ledger.records], valid);
+	assert.deepEqual(fixture, original, "replay never mutates persisted input objects");
+	assert.equal(ledger.invalidEvents, 3);
+	assert.equal(ledger.records.get("legacy-claim")?.review, undefined);
+	assert.equal(ledger.records.get("legacy-gap")?.status, "active");
+	assert.deepEqual(ledger.records.get("legacy-gap")?.refs, ["legacy-source"]);
+
+	const cwd = await workspace(t);
+	const manager = SessionManager.inMemory(cwd);
+	for (const event of [...fixture.events, ...fixture.invalidEvents]) manager.appendCustomEntry(ENTRY_TYPE, event);
+	const base = manager.getLeafId();
+	assert.ok(base);
+	const h = harness(cwd, manager);
+	const snapshot = await h.run({ action: "list", includeInactive: true });
+	assert.deepEqual(snapshot.records, [...ledger.records.values()].reverse());
+	assert.equal(snapshot.summary.invalidEvents, 3);
+	const left = (await h.run({ action: "add", kind: "gap", text: "Left-only question" })).records[0];
+	const leftLeaf = manager.getLeafId();
+	assert.ok(leftLeaf);
+	manager.branch(base);
+	h.emit("session_tree");
+	const right = (await h.run({ action: "add", kind: "gap", text: "Right-only question" })).records[0];
+	await assert.rejects(h.run({ action: "list", id: left.id }), /not found/);
+	manager.branch(leftLeaf);
+	h.emit("session_tree");
+	await assert.rejects(h.run({ action: "list", id: right.id }), /not found/);
+	assert.equal((await h.run({ action: "list", id: left.id })).records[0].id, left.id);
+	manager.branch(base);
+	const resumed = harness(cwd, manager);
+	assert.deepEqual(await resumed.run({ action: "list", includeInactive: true }), snapshot);
+});
+
+test("runtime capacity failures persist nothing; retracting retains history and still cannot free a slot", async (t) => {
+	const cwd = await workspace(t);
+	const manager = SessionManager.inMemory(cwd);
+	for (let i = 0; i < MAX_RECORDS; i++) {
+		manager.appendCustomEntry(ENTRY_TYPE, {
+			version: 1,
+			action: "add",
+			record: record(`full-${i}`, { kind: "gap", source: undefined }),
+		});
+	}
+	const h = harness(cwd, manager);
+	const initialCount = manager.getEntries().length;
+	const before = await h.run({ action: "list", id: "full-0" });
+	await assert.rejects(h.run({ action: "add", kind: "gap", text: "Replacement", supersedes: "full-0" }), /capacity/);
+	assert.equal(manager.getEntries().length, initialCount);
+	assert.deepEqual(await h.run({ action: "list", id: "full-0" }), before);
+	h.observe(commandEvent(0));
+	assert.equal(manager.getEntries().length, initialCount, "passive receipt exhaustion also appends nothing");
+	await h.run({ action: "retract", id: "full-1", reason: "No longer relevant" });
+	assert.equal(manager.getEntries().length, initialCount + 1);
+	await assert.rejects(h.run({ action: "add", kind: "gap", text: "Still full" }), /capacity/);
+	assert.equal(manager.getEntries().length, initialCount + 1);
+	const result = await h.run({ action: "list", includeInactive: true });
+	assert.equal(result.total, MAX_RECORDS);
+	assert.equal(result.summary.invalidEvents, 0, "rejected requests are not invalid stored events");
+	assert.equal((await h.run({ action: "list", id: "full-1" })).records[0].status, "retracted");
+});
+
+test("the active file limit counts records, not unique paths, and permits a same-slot correction", async (t) => {
+	const cwd = await workspace(t);
+	await writeFile(join(cwd, "source.txt"), "synthetic source");
+	const h = harness(cwd);
+	let first = "";
+	for (let i = 0; i < 32; i++) {
+		const result = await h.run({ action: "add", kind: "evidence", text: `Observation ${i}`, path: "source.txt" });
+		if (i === 0) first = result.records[0].id;
+	}
+	const count = h.manager.getEntries().length;
+	await assert.rejects(h.run({ action: "add", kind: "evidence", text: "Too many", path: "source.txt" }), /32 active/);
+	assert.equal(h.manager.getEntries().length, count);
+	await h.run({ action: "add", kind: "evidence", text: "Correction", path: "source.txt", supersedes: first });
+	assert.equal((await h.run({ action: "list" })).total, 32);
+	assert.equal((await h.run({ action: "list", includeInactive: true })).total, 33);
+});
 
 function commandEvent(code?: number, extra: Partial<ToolResultEvent> = {}): ToolResultEvent {
 	return {
