@@ -52,7 +52,6 @@ const WARNING =
 const MUTATING = new Set(["edit", "write", "bash", "powershell"]);
 const OBSERVED = new Set([...MUTATING, "midnight_log_triage"]);
 
-/** Small passive receipts, not copied commands, outputs, or generated conclusions. */
 export function receipt(event: ToolResultEvent): { text: string; source: EvidenceSource } | undefined {
 	const data = event.structuredContent;
 	let text: string;
@@ -134,7 +133,6 @@ export class EvidenceRuntime {
 		);
 	}
 
-	/** Follow public parent pointers, incrementally; never inspect unrelated conversation branches. */
 	private sync(ctx: ExtensionContext): void {
 		const leaf = ctx.sessionManager.getLeafId();
 		if (leaf === this.leaf) return;
@@ -160,7 +158,6 @@ export class EvidenceRuntime {
 	private append(event: EvidenceEvent, ctx: ExtensionContext): void {
 		if (!this.valid(ctx)) throw new Error("Evidence operation belongs to a replaced session.");
 		this.sync(ctx);
-		// Validate on a projection before persisting; failures must not write partial events.
 		const next = new EvidenceLedger();
 		for (const [id, record] of this.ledger.records) next.records.set(id, record);
 		next.invalidEvents = this.ledger.invalidEvents;
@@ -191,7 +188,6 @@ export class EvidenceRuntime {
 		this.calls.delete(event.toolCallId);
 		if (generation !== this.generation || !this.valid(ctx)) return;
 		this.sync(ctx);
-		// Even failed commands/edits can have partial effects. Do not parse shell commands for safety.
 		if (MUTATING.has(event.toolName))
 			this.reviewCurrent(
 				ctx,
@@ -220,7 +216,6 @@ export class EvidenceRuntime {
 		this.publish();
 	}
 
-	/** Serialize direct and nested/codemode operations, also against passive file checks. */
 	run<T>(
 		ctx: ExtensionContext,
 		signal: AbortSignal | undefined,
@@ -338,9 +333,7 @@ export function registerEvidence(pi: ExtensionAPI, onUpdate: (summary: EvidenceS
 	const check = async (_event: unknown, ctx: ExtensionContext) => {
 		try {
 			await runtime.run(ctx, ctx.signal, (signal) => runtime.check(ctx, signal));
-		} catch {
-			// Cancellation/session replacement is expected. Source failures become review events.
-		}
+		} catch {}
 	};
 	pi.on("agent_end", check);
 	pi.on("session_compact", check);

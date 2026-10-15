@@ -30,7 +30,6 @@ function isObject(value: unknown): value is object {
 	return typeof value === "object" && value !== null;
 }
 
-/** Override one read. Methods still use the original object and its cached stats. */
 function overrideRead<T extends object>(target: T, key: PropertyKey, read: () => unknown): T {
 	return new Proxy(target, {
 		get(object, property) {
@@ -41,7 +40,6 @@ function overrideRead<T extends object>(target: T, key: PropertyKey, read: () =>
 	});
 }
 
-/** Hide the name before Pi trims the path. Leave the shared session data alone. */
 function withoutSessionName(footer: FooterComponent): FooterComponent {
 	return overrideRead(footer, "session", () => {
 		const session: unknown = Reflect.get(footer, "session");
@@ -53,7 +51,6 @@ function withoutSessionName(footer: FooterComponent): FooterComponent {
 	});
 }
 
-/** Keep checks for Pi 1.2.0's private layout and footer fields in this class. */
 export class SidebarLayout {
 	private readonly tui: TUI;
 	private readonly sidebar: Component;
@@ -136,7 +133,6 @@ export class SidebarLayout {
 			for (const child of component.children) this.attachFooter(child);
 		}
 		if (!(component instanceof FooterComponent) || this.footers.has(component)) return;
-		// Only change what Pi's footer sees. Leave shared data and custom footers alone.
 		const data: unknown = Reflect.get(component, "footerData");
 		if (typeof data !== "object" || data === null) return;
 		for (const key of ["getGitBranch", "getExtensionStatuses", "getAvailableProviderCount", "onBranchChange"])
@@ -156,8 +152,6 @@ export class SidebarLayout {
 				visible.sidebar
 					? renderWithoutSidebarStats((columns) => render.call(view, columns), size)
 					: render.call(component, size);
-			// Explorer may show a different folder. Compare full paths, not display text.
-			// Hide the working path only if Explorer is showing that same path.
 			const root = visible.explorer && this.tui.terminal.rows >= 2 ? this.explorerPath() : undefined;
 			const session: unknown = Reflect.get(component, "session");
 			const manager: unknown = isObject(session) ? Reflect.get(session, "sessionManager") : undefined;

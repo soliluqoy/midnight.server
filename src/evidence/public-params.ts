@@ -15,7 +15,6 @@ export const EvidenceOperationParams = Type.Object(
 	},
 	{ additionalProperties: false },
 );
-// Commit/recovery are deliberately absent: they require an interactive user command.
 export const PublicEvidenceParams = Type.Union([
 	AuditParams,
 	EvidenceOperationParams,

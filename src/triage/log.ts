@@ -22,14 +22,12 @@ export interface PreparedLog extends LogAnalysis {
 	snapshot: string;
 	sha256: string;
 	selectionSha256: string;
-	/** Envelope only; selectedRanges is authoritative for non-contiguous selections. */
 	startLine: number;
 	endLine: number;
 	totalLines: number;
 	redacted: boolean;
 }
 
-/** Best effort, not a DLP boundary. Originals remain local; never log request bodies. */
 export function redact(text: string, apiKey: string): string {
 	let result = apiKey ? text.split(apiKey).join("[REDACTED]") : text;
 	result = result
@@ -62,7 +60,6 @@ function allowedName(path: string): boolean {
 	return !path.split(/[\\/]/).some((part) => SECRET_PATH.test(part));
 }
 
-/** Read one ordinary UTF-8 log, not a directory, binary, arbitrary source file, or escaped symlink. */
 export async function prepareLog(
 	cwd: string,
 	selection: LogSelection,
@@ -85,7 +82,6 @@ export async function prepareLog(
 		throw new Error(`maxLines must be between 1 and ${MAX_LINES}.`);
 	if (selection.startLine !== undefined && (!Number.isSafeInteger(selection.startLine) || selection.startLine < 1))
 		throw new Error("startLine must be a positive line number.");
-	// Reject special files before opening (opening a FIFO could otherwise wait indefinitely).
 	const metadata = await stat(source);
 	if (!metadata.isFile() || metadata.size > MAX_FILE_BYTES)
 		throw new Error("Log must be an ordinary file no larger than 1 MiB. Export a smaller log first.");
@@ -126,8 +122,6 @@ export async function prepareLog(
 	if (!original.trim()) throw new Error("The log is empty.");
 	const lines = original.split("\n");
 	if (lines.at(-1) === "") lines.pop();
-	// Redact before selecting a window so a private key cannot leak when its header is outside it.
-	// Strip terminal sequences per line and preserve newlines through redaction for evidence offsets.
 	const cleanLines = lines.map(stripVTControlCharacters);
 	const safeLines = redact(cleanLines.join("\n"), apiKey).split("\n");
 	if ((selection.startLine ?? 1) > lines.length) throw new Error("startLine is beyond the end of the log.");

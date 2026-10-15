@@ -13,10 +13,9 @@ export interface PreparedProjectSession {
 	discard(): Promise<void>;
 }
 
-/** Check only when asked. Do not run a shell, look for Git, or list folder contents. */
 export async function validateProjectFolder(input: string, cwd: string): Promise<string> {
-	// biome-ignore lint/suspicious/noControlCharactersInRegex: Block control characters in folder paths.
-	if (!input.trim() || /[\x00-\x1f\x7f]/.test(input))
+	const controlCharacters = String.raw`[\x00-\x1f\x7f]`;
+	if (!input.trim() || new RegExp(controlCharacters).test(input))
 		throw new Error("Enter a folder path without control characters.");
 	const target = await realpath(resolveExplorerFolder(input, cwd));
 	if (!(await stat(target)).isDirectory()) throw new Error("The destination is not a directory.");
@@ -24,18 +23,10 @@ export async function validateProjectFolder(input: string, cwd: string): Promise
 	return target;
 }
 
-/**
- * Pi 1.2.0 can switchSession across folders, but newSession cannot set cwd.
- * Let SessionManager make the path and header. Save the header ourselves because
- * create() waits for a conversation before saving. Do not copy history, guess the
- * file format, or change Pi's private fields.
- */
 export async function prepareProjectSession(
 	cwd: string,
 	source: ExtensionCommandContext["sessionManager"],
 ): Promise<PreparedProjectSession> {
-	// Check where Pi saves sessions without reading history or making
-	// an extra default folder when a custom folder is in use.
 	const storage = SessionManager.create(source.getCwd(), source.getSessionDir());
 	const customDir = storage.usesDefaultSessionDir() ? undefined : storage.getSessionDir();
 	const manager = SessionManager.create(cwd, customDir, { parentSession: source.getSessionFile() });
@@ -57,7 +48,6 @@ export async function prepareProjectSession(
 		path,
 		async discard() {
 			try {
-				// A cancel hook may have changed this file. Do not delete those changes.
 				if ((await stat(path)).size === Buffer.byteLength(contents) && (await readFile(path, "utf8")) === contents)
 					await unlink(path);
 			} catch (error) {
@@ -73,7 +63,6 @@ interface ProjectSwitchIO {
 	prepare: typeof prepareProjectSession;
 }
 
-/** Switch one project at a time. After cancel or reload, ignore late work from the old session. */
 export class ProjectSwitcher {
 	private readonly controller = new AbortController();
 	private busy = false;
@@ -141,8 +130,6 @@ export class ProjectSwitcher {
 				ctx.ui.notify("The draft changed while switching. Try again; nothing was switched.", "warning");
 				return;
 			}
-			// Pi handles cleanup, trust, and errors from here. After the switch,
-			// do not use the old context or delete the new session's file.
 			handedToPi = true;
 			const result = await ctx.switchSession(prepared.path, {
 				withSession: async (fresh) => {

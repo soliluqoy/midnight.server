@@ -30,7 +30,6 @@ export function normalizeSessionTitle(text: string): string {
 	return stripTerminalSequences(truncateToWidth(clean, 60, "…"));
 }
 
-/** Send only chat text when asking for a title. Leave out tool output and images. */
 export function sessionTitleConversation(entries: readonly SessionEntry[]): string {
 	const messages: string[] = [];
 	let hasUser = false;
@@ -89,7 +88,6 @@ export class SessionTitle {
 		this.pi.appendEntry(ENTRY_TYPE, this.state);
 	}
 
-	/** Stop auto naming after /name or another extension renames the session, until turned on again. */
 	nameChanged(ctx: ExtensionContext): void {
 		if (this.state.enabled && ctx.sessionManager.getSessionName() !== this.state.name) this.setEnabled(false, ctx);
 	}
@@ -161,12 +159,10 @@ export class SessionTitle {
 				fingerprint: title ? fingerprint : undefined,
 				lastRequestedAt,
 			};
-			// Store our title first so session_info_changed knows this rename came from us.
 			if (title && title !== name) this.pi.setSessionName(title);
 			this.pi.appendEntry(ENTRY_TYPE, { ...this.state, usage: result.usage });
 			this.changed(ctx);
 		} catch {
-			// Keep chat running if naming fails. Try again after a later turn.
 		} finally {
 			if (this.controller === controller) this.controller = undefined;
 		}

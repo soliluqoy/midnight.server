@@ -1,6 +1,5 @@
 import type { LiveContextState } from "./state.ts";
 
-/** Provider-reported context size observed on the first request after an acceptance. */
 export interface ObservedUsage {
 	revision: number;
 	tokens: number;

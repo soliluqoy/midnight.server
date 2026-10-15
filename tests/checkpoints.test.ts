@@ -113,7 +113,6 @@ test("batch validation rejects corrupt metadata, non-commits and mismatched tree
 	const nonCommit = cp.ref.replace(cp.id, randomUUID());
 	await git(root, ["update-ref", nonCommit, blob]);
 	bad.push(nonCommit);
-	// A real but different staged tree must not pass simply because its type is correct.
 	await writeFile(join(root, "file.txt"), "different staged tree\n");
 	await git(root, ["add", "--", "file.txt"]);
 	const stagedTree = (await out(root, ["write-tree"])).trim();

@@ -120,7 +120,6 @@ export const SemanticScopedSchema = Type.Object(
 );
 export type ScopedEvent = Static<typeof ScopedEventSchema> | Static<typeof SemanticScopedSchema>;
 
-/** JSON-compatible values only. Object keys sort lexically; array order remains significant. */
 export function canonicalJson(value: unknown): string {
 	return JSON.stringify(value, (_key, item: unknown) =>
 		item && typeof item === "object" && !Array.isArray(item)
@@ -138,7 +137,6 @@ export function projectionDigest(state: WorkingSet): string {
 	return digest(state);
 }
 
-/** Caller supplies a stable session/ancestry identity, never a replay-time random value. */
 export function legacyWorkingSet(ledger: EvidenceLedger, ancestryIdentity: string): WorkingSet {
 	if (!ancestryIdentity) throw new Error("A stable legacy ancestry identity is required.");
 	const state: WorkingSet = {
@@ -192,7 +190,6 @@ function validateProjection(state: WorkingSet, enforceLiveBudgets = true): void 
 				throw new Error(`Missing or invalid replacement lineage for ${record.id}.`);
 		}
 	}
-	// v1 references form a DAG; reject malformed snapshots rather than hiding a cycle in closure traversal.
 	const visited = new Set<string>();
 	const visiting = new Set<string>();
 	function visit(id: string): void {
@@ -223,7 +220,6 @@ export interface RolloverPreview {
 	warnings: string[];
 }
 
-/** Pure planning. This internal result is not a tool response; runtime output must paginate IDs/records. */
 export function previewRollover(
 	state: WorkingSet,
 	anchor: string,
@@ -299,7 +295,6 @@ export function previewRollover(
 	};
 }
 
-/** Recompute from the predecessor: a structurally valid agent-supplied snapshot is not trusted. */
 export function validateRollover(state: WorkingSet, anchor: string, value: unknown, previewToken: string): WorkingSet {
 	if (!Value.Check(RolloverSchema, value) && !Value.Check(SemanticRolloverSchema, value))
 		throw new Error("Malformed or unsupported rollover event.");
@@ -315,9 +310,6 @@ export function validateRollover(state: WorkingSet, anchor: string, value: unkno
 	};
 }
 
-/** Isolated reduction. Anchor identifies the predecessor, not the newly appended entry.
- * Runtime must prove ancestry and enforce operation-ID uniqueness; this is not an idempotent append API.
- */
 export function applyScopedEvent(state: WorkingSet, anchor: string, value: unknown): WorkingSet {
 	validateProjection(state);
 	if (!Value.Check(id, anchor)) throw new Error("Invalid branch anchor.");

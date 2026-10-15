@@ -149,7 +149,6 @@ class ReplayAccumulator {
 			this.fail("malformed_v2", "Malformed or unsupported v2 evidence history; the branch is read-only.", entry.id);
 			return;
 		}
-		// Narrow the validated union without accepting a version under the wrong entry type.
 		if (
 			!Value.Check(RolloverSchema, value) &&
 			!Value.Check(ScopedEventSchema, value) &&
@@ -225,11 +224,6 @@ class ReplayAccumulator {
 	}
 }
 
-/**
- * Bounded, resumable active-ancestry replay using only public SessionManager reads.
- * Collection is capped because parent pointers do not provide forward traversal. Each step
- * inspects at most the requested page; callers must not treat an incomplete cursor as writable.
- */
 export class EvidenceBranchReplay {
 	private readonly manager: EvidenceSessionManager;
 	private readonly startingLeaf: string | null;
@@ -257,8 +251,6 @@ export class EvidenceBranchReplay {
 		manager: EvidenceSessionManager,
 		targetAnchor: string | null = manager.getLeafId(),
 		maxBranchEntries = MAX_REPLAY_BRANCH_ENTRIES,
-		// Internal trusted projection from this manager/generation only. Reuse requires proving
-		// its exact leaf is an ancestor; fork/navigation falls back to cold replay.
 		seed?: EvidenceReplayResult,
 	) {
 		this.manager = manager;
@@ -412,7 +404,6 @@ interface ArchiveCursorState {
 	lastUsed: number;
 }
 
-/** Two-cursor LRU archive reader. Scan continuations are process-local and branch-bound. */
 export class EvidenceArchiveReader {
 	private readonly cursors = new Map<string, ArchiveCursorState>();
 	private clock = 0;
@@ -533,7 +524,6 @@ export class UncertainEvidenceAppendError extends Error {
 	}
 }
 
-/** Synchronous commit boundary around public appendEntry plus public session inspection. */
 export class EvidenceSessionStore {
 	private uncertain: UncertainEvidenceAppendError | undefined;
 	private readonly manager: EvidenceSessionManager;
@@ -577,7 +567,6 @@ export class EvidenceSessionStore {
 		return this.append(base, event, next, signal);
 	}
 
-	/** Preserve v1 event shape until an explicit rollover; never mix old writes into a v2 ancestry. */
 	commitLegacy(base: EvidenceReplayResult, event: EvidenceEvent, signal?: AbortSignal): EvidenceReplayResult {
 		const attemptId = randomUUID();
 		this.preflight(base, attemptId, signal);
@@ -588,7 +577,6 @@ export class EvidenceSessionStore {
 		ledger.invalidEvents = base.state.invalidEvents;
 		if (!ledger.apply(event))
 			throw new Error("Invalid evidence update: check active IDs, kinds, references, and capacity.");
-		// Validate before writing, including the strict projection's refusal to silently drop fields.
 		legacyWorkingSet(ledger, base.ancestryIdentity);
 		const entry = this.appendVerified(base.anchor, ENTRY_TYPE, event, attemptId, signal);
 		const identity = base.mode === "empty" ? ancestryIdentity(entry, "evidence") : base.ancestryIdentity;
@@ -707,7 +695,6 @@ export class EvidenceSessionStore {
 	}
 }
 
-/** True only for recognized evidence custom entries; useful to filter bounded scan diagnostics. */
 export function isEvidenceSessionEntry(entry: SessionEntry): boolean {
 	return customEvidenceEntry(entry);
 }

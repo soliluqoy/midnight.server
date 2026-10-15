@@ -141,7 +141,7 @@ test("audit is bounded and observational across source failures, paging and canc
 	assert.equal(unavailable.available, false);
 	assert.equal(unavailable.filesChecked, 0);
 	assert.ok(unavailable.issue);
-	h.manager.branch(leaf as string); // Seeded history above has a non-null leaf.
+	h.manager.branch(leaf as string);
 	for (const mode of ["cancel", "branch", "replace"] as const) {
 		wait = barrier();
 		const controller = new AbortController();

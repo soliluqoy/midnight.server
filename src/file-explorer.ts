@@ -15,44 +15,32 @@ import type { WorkspaceEntry, WorkspaceFileMark, WorkspaceSnapshot } from "./wor
 
 export { truncateLeftToWidth } from "./presentation.ts";
 
-/** Width includes the right border. */
 export const EXPLORER_WIDTH = 32;
-/** Hide below this width in auto mode, leaving about 80 columns for chat with both panels open. */
 export const EXPLORER_MIN_TERMINAL_WIDTH = 150;
-/** Two rows for the title and folder path. */
 const HEADER_ROWS = 2;
 
 export interface FileExplorerOptions {
 	theme: () => Theme;
 	keybindings: KeybindingsManager;
-	/** Leave focus with an active Midnight question dialog. */
 	inputBlocked?: () => boolean;
 	onExpand: (path: string) => void;
-	/** True only at the project root, not a folder inside it or elsewhere. */
 	isProjectRoot: () => boolean;
 	rootPath: () => string;
-	/** Files touched in this session that still have changes. Paths start at the shown folder. */
 	sessionChanges: () => ReadonlySet<string>;
-	/** Use the full terminal height. */
 	getHeight: () => number;
-	/** Enter or double-click adds the file path to the prompt. */
 	onOpen: (path: string) => void;
 	onPreview: (path: string) => void;
 	onFolder: () => void;
 	onParent: () => void;
 	onProject: () => void;
-	/** Escape returns to the prompt. */
 	onExit: () => void;
-	/** Toggle key pressed while browsing files. */
 	onToggle: () => void;
-	/** Send unused keys to the prompt so typing is not lost. */
 	onPassthrough: (data: string) => void;
 }
 
 interface ExplorerRow {
 	entry: WorkspaceEntry;
 	depth: number;
-	/** Go up a folder. Do not load this row or add it to the prompt. */
 	parent?: boolean;
 }
 
@@ -69,7 +57,6 @@ function parentPath(path: string): string {
 	return index === -1 ? "" : path.slice(0, index);
 }
 
-/** File tree on the left. Send normal typing back to the prompt. */
 export class FileExplorerComponent implements Component, Focusable {
 	focused = false;
 	private readonly options: FileExplorerOptions;
@@ -102,7 +89,6 @@ export class FileExplorerComponent implements Component, Focusable {
 		return this.selectedPath;
 	}
 
-	/** List open folders, but skip those inside closed folders. */
 	getExpandedDirectories(): string[] {
 		return [
 			"",
@@ -168,7 +154,6 @@ export class FileExplorerComponent implements Component, Focusable {
 		if (this.expanded.has(path)) this.expanded.delete(path);
 		else this.expanded.add(path);
 		this.rows = this.buildRows();
-		// Folders inside a reopened folder may need fresh lists too.
 		for (const directory of this.getExpandedDirectories()) this.options.onExpand(directory);
 	}
 
@@ -256,11 +241,8 @@ export class FileExplorerComponent implements Component, Focusable {
 				: entry.directory
 					? "muted"
 					: "text";
-		// Reserve the rail even when unfocused, so focus never shifts the tree sideways.
 		const bodyWidth = Math.max(0, width - 2);
 		const nameWidth = Math.max(0, bodyWidth - suffixWidth - (suffixWidth > 0 ? 1 : 0));
-		// Clip plain text first: truncateToWidth adds SGR resets, which would punch
-		// holes in a selected row's background if embedded inside its themed label.
 		const prefix = stripTerminalSequences(truncateToWidth(indent + icon, Math.max(0, nameWidth - 1), ""));
 		const filename = stripTerminalSequences(
 			truncateToWidth(
@@ -288,7 +270,6 @@ export class FileExplorerComponent implements Component, Focusable {
 			return this.cache.lines;
 		const theme = this.options.theme();
 		const hints = this.hints();
-		// Leave room for a space and the right border.
 		const contentWidth = Math.max(1, width - 2);
 		const footerRows = 1 + hints.length;
 		const height = Math.max(HEADER_ROWS + footerRows + 1, this.options.getHeight());
@@ -332,7 +313,6 @@ export class FileExplorerComponent implements Component, Focusable {
 		for (const hint of hints) lines.push(truncateToWidth(theme.fg("dim", hint), contentWidth, theme.fg("dim", "…")));
 
 		const rendered = lines.slice(0, Math.max(1, this.options.getHeight())).map((line, row) => {
-			// Light only the header edge; the selected row supplies the local focus signal.
 			const border = theme.fg(this.focused && row < HEADER_ROWS ? "borderAccent" : "borderMuted", "│");
 			return truncateToWidth(
 				`${line}${" ".repeat(Math.max(0, contentWidth - visibleWidth(line)))} ${border}`,

@@ -154,11 +154,6 @@ function estimateTextTokens(text: string): number {
 	return estimateTokens({ role: "user", content: text, timestamp: 0 } as AgentMessage);
 }
 
-/**
- * Provider-reported size of the most recent completed request: the usage of the newest
- * successful assistant message. Unlike `ctx.getContextUsage()`, this never blends in
- * harness estimates for trailing messages, so it can be labelled "observed" honestly.
- */
 function lastProviderReportedTokens(rawMessages: LiveContextMessage[]): { tokens: number; index: number } | undefined {
 	for (let index = rawMessages.length - 1; index >= 0; index--) {
 		const message = rawMessages[index] as unknown as AgentMessage;
@@ -172,7 +167,6 @@ function lastProviderReportedTokens(rawMessages: LiveContextMessage[]): { tokens
 	return undefined;
 }
 
-/** `/var/folders/…/T/pi-live-context-01a0ebe3-…/LIVE_CONTEXT.md` → `…/pi-live-context-01a0ebe3…/LIVE_CONTEXT.md`. */
 function shortPath(path: string): string {
 	const parts = path.split(/[\\/]/);
 	const file = parts.at(-1) ?? path;
@@ -192,35 +186,16 @@ function sameMessageSequence(left: LiveContextMessage[], right: LiveContextMessa
 }
 
 export interface LiveContextExtensionOptions {
-	/** Midnight owns the canonical command; legacy aliases are registered only after runtime inspection. */
 	commandName?: string;
 	editingMode?: "conservative" | "clm";
-	/** CLM-mode budget/reminder policy. Ignored in conservative mode, which keeps the percentage tiers. */
 	budget?: Partial<BudgetPolicyConfig>;
-	/** CLM-mode cap on each tool result in the effective context. Off unless `maxCharacters` is set. */
 	observationCap?: Partial<ObservationCapPolicy>;
-	/** CLM-mode steering document appended to the system prompt; strategy lives here, not in the harness. */
 	steeringPath?: string;
-	/** CLM-mode overflow guard: withhold the oldest tool results when the estimated request exceeds the limit. */
 	overflow?: Partial<OverflowGuardPolicy>;
-	/**
-	 * CLM-mode policy for Pi's automatic compaction. `auto` (default) cancels threshold
-	 * compactions whenever a budget is enforced by the overflow guard — Pi measures the raw
-	 * transcript, which CLM never shrinks, and its summary would discard the model's edits.
-	 * `off` cancels every automatic compaction (manual /compact still works). `on` leaves Pi
-	 * alone.
-	 */
 	nativeCompaction?: "auto" | "off" | "on";
-	/** Initial estimator calibration factor (≥1); learned from provider counts afterwards. */
 	estimateFactor?: number;
-	/**
-	 * Paper-harness parity: allow exactly one tool call per assistant turn (further calls in
-	 * the same turn are blocked with an explanatory error result).
-	 */
 	oneToolPerTurn?: boolean;
-	/** Paper-harness parity: append `[context: ~N of B tokens]` to every tool result. */
 	sizeTrailer?: boolean;
-	/** `/clm-compact` prompt template (markdown with {{placeholders}}); default is the built-in prompt. */
 	compactPromptPath?: string;
 }
 
@@ -231,7 +206,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 	let store: MirrorStore | undefined;
 	let turnBaseline: TurnBaseline | undefined;
 	let lifecycleEpoch = 0;
-	/** A /clm-compact waiting for the agent to go idle; a second one is refused instead of racing it. */
 	let compactPending = false;
 	let pendingNotice: string | undefined;
 	let mirrorMutationSeen = false;
@@ -256,26 +230,17 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 	let nativeCompaction = options.nativeCompaction ?? "auto";
 	let steering: SteeringDocument | undefined;
 	let steeringError: string | undefined;
-	// CLM settings: defaults come from the options (environment at load); the panel and
-	// `/clm config` store per-session overrides as a branch-local session entry.
 	const baseSettings = defaultClmSettings(options);
 	let settingsOverrides: ClmSettingsOverrides = {};
 	let settings: ClmSettings = baseSettings;
 	const bundledSteering = join(EXTENSION_DIR, "..", "..", "steering", "house-brief.md");
-	/** Path the current `steering` / `steeringError` belong to; null until first applied. */
 	let loadedSteeringPath: string | undefined | null = null;
 	const budgetTracker = new BudgetTracker();
 	let lastBudgetReading: BudgetReading | undefined;
-	/** Saved settings that could not be used at restore, reported in status until settings are saved again. */
 	let settingsWarning: string | undefined;
-	/**
-	 * `/clm reset` or a native compaction replaced the projection since the last request: the
-	 * old reading and the session's last provider count describe a context that no longer exists.
-	 */
 	let projectionReplaced = false;
 	if (editingMode === "clm") activateSettings(stageSettings(baseSettings, { strictSteering: false }));
 
-	/** A resolved configuration, ready to activate. */
 	interface StagedSettings {
 		settings: ClmSettings;
 		budgetPolicy: typeof budgetPolicy;
@@ -284,13 +249,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		steeringError: string | undefined;
 	}
 
-	/**
-	 * Resolve `next` without touching the live configuration, so a change can be validated
-	 * and persisted before it takes effect. With `strictSteering` (interactive edits), a
-	 * steering document or compact prompt that fails to load rejects the whole change;
-	 * otherwise a steering failure is recorded and reported, and the rest applies (startup,
-	 * resume).
-	 */
 	function stageSettings(next: ClmSettings, { strictSteering }: { strictSteering: boolean }): StagedSettings {
 		let nextSteering = steering;
 		let nextSteeringError = steeringError;
@@ -307,7 +265,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 				}
 			}
 		}
-		// A template that cannot be read is rejected when it is set, not when /clm-compact runs.
 		if (strictSteering && next.compactPrompt && next.compactPrompt !== settings.compactPrompt)
 			loadCompactPrompt(next.compactPrompt);
 		const sameReminders = next.reminders.join(",") === baseSettings.reminders.join(",");
@@ -327,7 +284,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		};
 	}
 
-	/** Make staged settings the live configuration. */
 	function activateSettings(staged: StagedSettings): void {
 		const next = staged.settings;
 		const budgetChanged =
@@ -350,7 +306,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		}
 	}
 
-	/** Save the overrides as a session entry; throws a user-facing message when that fails. */
 	function persistSettings(overrides: ClmSettingsOverrides): void {
 		try {
 			pi.appendEntry(CLM_SETTINGS_ENTRY, { version: 1, overrides });
@@ -374,31 +329,27 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 			activateSettings(stageSettings(applyOverrides(baseSettings, overrides), { strictSteering: false }));
 			settingsOverrides = overrides;
 		} catch (error) {
-			// Saved settings must never break session start: fall back to the defaults.
 			activateSettings(stageSettings(baseSettings, { strictSteering: false }));
 			settingsOverrides = {};
 			settingsWarning = `ignored saved settings: ${error instanceof Error ? error.message : String(error)}`;
 		}
 	}
 
-	/** Apply `/clm config <key> <value>` (or a panel change); throws with a user-facing message. */
 	function changeSetting(key: string, text: string, ctx: ExtensionContext): string {
 		const descriptor = settingDescriptor(key);
 		if (!descriptor) throw new Error(`Unknown setting "${key}". Settings: ${CLM_SETTING_COMMAND_KEYS.join(", ")}.`);
 		const parsed = descriptor.parse(text, bundledSteering);
 		const nextOverrides: ClmSettingsOverrides = { ...settingsOverrides, ...parsed };
-		// Store only what differs from the default, so "changed" means changed.
 		for (const [name, value] of Object.entries(parsed) as [keyof ClmSettings, unknown][]) {
 			const baseValue = baseSettings[name];
 			const normalized = value === null ? undefined : value;
 			if (JSON.stringify(normalized) === JSON.stringify(baseValue)) delete nextOverrides[name];
 		}
-		// Validate, persist, then activate: a change that is not saved never takes effect.
 		const staged = stageSettings(applyOverrides(baseSettings, nextOverrides), { strictSteering: true });
 		persistSettings(nextOverrides);
 		activateSettings(staged);
 		settingsOverrides = nextOverrides;
-		settingsWarning = undefined; // the saved entry is now well-formed
+		settingsWarning = undefined;
 		updateStatus(ctx);
 		return `${descriptor.label}: ${descriptor.format(settings, { modelWindow: ctx.model?.contextWindow })}`;
 	}
@@ -412,11 +363,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		updateStatus(ctx);
 	}
 
-	/**
-	 * Calibrated estimate of a request: system prompt, messages and notices. The budget
-	 * reading and the status fallback use this one measure, so they never disagree about
-	 * what a request contains.
-	 */
 	function estimateRequestTokens(
 		ctx: ExtensionContext,
 		messages: LiveContextMessage[],
@@ -427,7 +373,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		return calibrator.apply(systemPromptTokens + estimateLiveContextTokens(messages) + noticeTokens);
 	}
 
-	/** Calibrated sizes for status text: the next request, and raw vs sent messages. */
 	function sizeFigures(ctx: ExtensionContext): {
 		next?: number;
 		observed?: number;
@@ -441,10 +386,7 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 			lastBudgetReading && resolved && lastBudgetReading.budget === resolved.budget ? lastBudgetReading : undefined;
 		const factor = calibrator.factor;
 		const measured = currentContextView !== undefined;
-		// After /clm reset or a native compaction, estimate the rebuilt context instead.
 		const replaced = projectionReplaced && !measured;
-		// Before the first request of this runtime (e.g. after resume), sizes come from the
-		// session: the provider's count of the last request, and a rebuilt snapshot.
 		const snapshot = measured ? defined(currentContextView) : contextSnapshot(ctx);
 		const sessionObserved = reading || replaced ? undefined : lastProviderReportedTokens(snapshot.rawMessages ?? []);
 		const sessionObservedStale =
@@ -452,8 +394,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 			state.checkpoint !== undefined &&
 			sessionObserved.index < state.checkpoint.sourceMessageCount;
 		return {
-			// Without a reading for the current budget (e.g. just after a settings change), estimate
-			// the next request from the context snapshot the same way the reading does.
 			next:
 				reading?.estimated ??
 				(measured || replaced ? estimateRequestTokens(ctx, snapshot.effectiveMessages) : undefined),
@@ -471,7 +411,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		};
 	}
 
-	/** Footer: `clm 346k / 1.0m · r2` (calibrated estimate of the next request against the budget). */
 	function clmFooterText(ctx: ExtensionContext): string {
 		if (!state.enabled) return `clm off · r${state.revision}`;
 		const { next, observed, budget } = sizeFigures(ctx);
@@ -499,7 +438,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		return lines;
 	}
 
-	/** `/clm status`: three lines — size against budget, edits, settings — plus any warnings. */
 	function shortStatus(ctx: ExtensionContext): string {
 		const { next, observed, budget, raw, sent } = sizeFigures(ctx);
 		const of = (tokens: number) =>
@@ -524,7 +462,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		return [head, `${messages}${outcome}`, `${settingsSummary(ctx)} · /clm for the panel`, ...warnings()].join("\n");
 	}
 
-	/** Grouped details: the text form of the panel's settings page. */
 	function settingsDetails(ctx: ExtensionContext): string[] {
 		const { next, observed, budget } = sizeFigures(ctx);
 		const window = ctx.model?.contextWindow;
@@ -552,7 +489,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 				? `          estimate not calibrated yet (characters ÷ 4 until the provider reports a size)`
 				: `          estimate ×${calibrator.factor.toFixed(2)}, calibrated from ${calibrator.sampleCount} provider count${calibrator.sampleCount === 1 ? "" : "s"}`,
 			`Guard     ${overflowGuard.mode === "off" ? "off" : `withholds the oldest tool results above ${limit === undefined ? "?" : formatTokens(limit)}`}${nativeCompaction === "on" ? "" : nativeCompaction === "off" ? " · Pi's automatic compaction off" : overflowGuard.mode === "off" ? "" : " · Pi's automatic compaction paused"}`,
-			// The steering hash identifies an experiment arm exactly (matches `sha256sum`).
 			...(steering ? [`Prompt    steering ${steering.name} (sha256sum ${steering.hash}…) · ${steering.path}`] : []),
 			`Files     mirror ${store ? shortPath(store.filePath) : "unavailable"} (full path: /clm path)`,
 			`          annotations ${annotations.length === 0 ? "none" : `${active} continuity/pin · ${archived} archive · ${annotations.length} total`}${maxTokensLifts > 0 ? ` · max_tokens clamp lifted on ${maxTokensLifts} request${maxTokensLifts === 1 ? "" : "s"}` : ""}`,
@@ -620,7 +556,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 					} else if (id === "reset") {
 						if (value === "reset now") resetSettings(ctx);
 					} else {
-						// Cycled labels like "10k chars" parse like typed values.
 						changeSetting(id, value.replace(/ chars.*$/, ""), ctx);
 					}
 					return undefined;
@@ -652,7 +587,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		);
 	}
 
-	/** Record the provider-reported size of the first request served by a new revision. */
 	function captureObservedUsage(ctx: ExtensionContext): void {
 		if (awaitObservationForRevision === undefined) return;
 		if (awaitObservationForRevision !== state.revision) {
@@ -680,7 +614,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		rememberCheckpoint(state.checkpoint);
 	}
 
-	/** Persistence must succeed before activating even a slim state transition. */
 	function persistOutcome(nextState: typeof state): void {
 		pi.appendEntry(LIVE_CONTEXT_STATE, toOutcomeEntry(nextState));
 		state = nextState;
@@ -797,12 +730,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		return pressureNoticeText(percent, tier, store?.filePath);
 	}
 
-	/**
-	 * CLM-mode reminder: absolute tokens against a configurable budget. The estimate covers
-	 * the request about to be sent (system prompt + effective messages); the observed value is
-	 * Pi's provider-reported size of the previous request. Both are reported, neither is
-	 * relabelled as the other.
-	 */
 	function budgetNotice(
 		ctx: ExtensionContext,
 		rawMessages: LiveContextMessage[],
@@ -815,9 +742,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 			return undefined;
 		}
 		const observed = lastProviderReportedTokens(rawMessages);
-		// An observation is stale when the request it measured was answered inside the raw
-		// prefix the active revision replaced: that context no longer exists. Deriving this
-		// from positions (not from in-memory flags) keeps it correct after resume and /tree.
 		const observedStale =
 			observed !== undefined && state.checkpoint !== undefined && observed.index < state.checkpoint.sourceMessageCount;
 		const reading: BudgetReading = {
@@ -1043,7 +967,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 	});
 
 	if (editingMode === "clm") {
-		// A top-level command so Pi's completion shows it beside its own /compact.
 		pi.registerCommand(`${commandName}-compact`, {
 			description:
 				"Ask the model to compact its own live context now; text after the command is passed along as instructions. (Pi's /compact summarizes the transcript and resets CLM instead.)",
@@ -1051,11 +974,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		});
 	}
 
-	/**
-	 * `/clm-compact [instructions]`: send the (configurable) compaction prompt as a user
-	 * message. The model does the editing; its edit is validated and committed at turn end
-	 * like any other.
-	 */
 	async function compactCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
 		if (compactPending) {
 			ctx.ui.notify("A /clm-compact is already waiting for the current run to finish.", "info");
@@ -1070,11 +988,9 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		}
 		compactPending = true;
 		try {
-			// Measure once the agent is idle, so the size in the prompt is the one the model sees.
 			if (!ctx.isIdle()) ctx.ui.notify("The model will compact its context when the current run finishes.", "info");
 			const epoch = lifecycleEpoch;
 			await ctx.waitForIdle();
-			// A branch switch, reset, reload or /clm off while waiting: that is a different context.
 			if (epoch !== lifecycleEpoch) {
 				ctx.ui.notify(
 					"The live context changed while /clm-compact was waiting, so nothing was sent. Run it again if you still want it.",
@@ -1093,7 +1009,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 				return;
 			}
 			const { next, observed, budget } = sizeFigures(ctx);
-			// No usable measurement (e.g. just after resume): estimate the context that would be sent.
 			const effective =
 				next === undefined && observed === undefined ? contextSnapshot(ctx).effectiveMessages : undefined;
 			if (effective?.length === 0) {
@@ -1122,11 +1037,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		}
 	}
 
-	/**
-	 * The exact context-hook snapshot when there is one: checkpoints anchor to that message
-	 * space, which may differ from the raw session after earlier context handlers. Before
-	 * the hook has run (e.g. just after resume), reconstruct it from the session.
-	 */
 	function contextSnapshot(ctx: ExtensionContext): CurrentContextView & { rawMessages: LiveContextMessage[] } {
 		const captured = currentContextView;
 		if (captured?.rawMessages) return { ...captured, rawMessages: captured.rawMessages };
@@ -1155,7 +1065,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		};
 	}
 
-	/** Open the panel (CLM) or viewer (conservative) on `tab`; outside the TUI, print that page. */
 	async function openViewer(args: string, ctx: ExtensionCommandContext): Promise<void> {
 		if (editingMode === "clm" && args.trim() === "settings" && contextMode(ctx) !== "tui") {
 			ctx.ui.notify(settingsText(ctx), "info");
@@ -1189,7 +1098,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		);
 	}
 
-	// CLM mode has one entry point: `/clm` opens the panel. Conservative mode keeps its viewer command.
 	if (editingMode !== "clm") {
 		pi.registerCommand(`${commandName}-view`, {
 			description: "Open the live-context projection viewer",
@@ -1241,7 +1149,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		await ctx.waitForIdle();
 		const words = args.trim().split(/\s+/).filter(Boolean);
 		if (editingMode === "clm") {
-			// Values keep their case (steering paths); actions and setting names do not.
 			const [first = "", ...rest] = words;
 			const verb = first.toLowerCase();
 			if (verb === "" || (CLM_VIEW_TABS as readonly string[]).includes(verb)) {
@@ -1265,7 +1172,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		const action = actionWord;
 		switch (action) {
 			case "status": {
-				// Conservative mode; CLM mode answers `/clm status` above.
 				const active = activeContinuityAnnotations(annotations).length;
 				const archived = annotations.filter(
 					(annotation) => annotation.retention === "archive" && annotation.resolvedAt === undefined,
@@ -1403,7 +1309,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		effectiveMessages = selectContextVisibleMessages(effectiveMessages);
 		if (editingMode === "clm") effectiveMessages = capObservations(effectiveMessages, observationCap);
 		pendingOverflowNotice = undefined;
-		// Learn from the provider's count of the previous request before estimating this one.
 		if (editingMode === "clm") calibrator.observe(lastProviderReportedTokens(rawMessages));
 		if (editingMode === "clm" && overflowGuard.mode === "withhold") {
 			const resolved = resolveBudget(budgetPolicy, ctx.model?.contextWindow);
@@ -1417,8 +1322,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 					fixedTokens,
 					estimate: (messages) => calibrator.apply(estimateLiveContextTokens(messages)),
 					saveDirectory: store ? join(store.directory, "withheld") : undefined,
-					// Only the raw suffix after the accepted projection is withholdable; the
-					// model's own accepted context is respected.
 					protectBefore: state.checkpoint
 						? Math.max(0, effectiveMessages.length - selectContextVisibleMessages(suffixMessages).length)
 						: 0,
@@ -1447,15 +1350,11 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		};
 		updateStatus(ctx);
 
-		// Extension-managed continuity is appended after the editable projection so
-		// mirror compression cannot silently remove an active obligation or exact pin.
 		const snapshot = renderContextDocument(effectiveMessages, {
 			revision: state.revision,
 			...(editingMode === "clm"
 				? {
 						protectedIndexes: new Set<number>(),
-						// Nonce stays constant until the next accepted edit: header ids read on
-						// one call remain valid on the next.
 						documentSeed: `${ctx.sessionManager.getSessionId()}:${state.checkpoint?.sourceDigest ?? "raw"}`,
 					}
 				: {}),
@@ -1519,11 +1418,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 			ctx.ui.notify(`pi-clm: cancelled Pi's ${event.reason} compaction (PI_CLM_NATIVE_COMPACTION=off).`, "info");
 			return { cancel: true };
 		}
-		// auto: Pi measures the raw transcript, which CLM never shrinks, and its summary keeps
-		// ~20k recent raw tokens — on a small window that re-admits more than the projection
-		// held and discards the model's edits. While pi-clm has a budget to enforce, the
-		// overflow guard is the substitute for threshold compaction; only overflow recovery
-		// (after a provider-side failure) is left to Pi as the last resort.
 		if (event.reason !== "threshold") return undefined;
 		const resolved = resolveBudget(budgetPolicy, ctx.model?.contextWindow);
 		if (!resolved || overflowGuard.mode === "off") return undefined;
@@ -1565,13 +1459,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		mirrorMutationSeen = true;
 	});
 
-	/**
-	 * Pi clamps the request's max output tokens to `window − estimate(raw agent state) − 4096`
-	 * (floor 1). That estimate is taken over the *raw* transcript, not the projection this
-	 * extension actually sends, so after a big raw turn Pi can hand the model a 1-token answer
-	 * even though the provider received a request that fits comfortably. Re-derive the room
-	 * from the calibrated effective estimate and lift the clamp when Pi set it lower.
-	 */
 	pi.on("before_provider_request", (event, ctx) => {
 		if (editingMode !== "clm" || !state.enabled) return undefined;
 		const payload = event.payload;
@@ -1645,8 +1532,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 			queueOutcomeNotice(`Mirror read failed: ${message}`);
 			return;
 		}
-		// A tree move/reset/shutdown during async I/O invalidates the captured draft,
-		// even when the newly selected branch happens to have the same revision number.
 		if (
 			epoch !== lifecycleEpoch ||
 			activeStore !== store ||
@@ -1656,9 +1541,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 			return;
 		if (editedText === undefined || editedText.trim() === baseline.snapshot.text.trim()) return;
 
-		// Pi's provider-independent token estimator is injected as the single acceptance
-		// and reporting metric; the core's default character estimate stays for callers
-		// that do not provide one.
 		const result = applyContextDocument(editedText, baseline.snapshot, {
 			editingMode,
 			estimate: estimateLiveContextTokens,

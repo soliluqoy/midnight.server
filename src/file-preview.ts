@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { open } from "node:fs/promises";
 import { getLanguageFromPath, highlightCode, renderDiff, type Theme } from "@earendil-works/pi-coding-agent";
 import {
@@ -14,15 +15,12 @@ import {
 import type { SessionDiffSection } from "./session-diff.ts";
 
 const MAX_PREVIEW_BYTES = 1024 * 1024;
-/** A zero byte near the start means we treat the file as binary. */
-const BINARY_SNIFF_BYTES = 8192;
 
 export type FilePreviewContent =
 	| { kind: "text"; lines: string[] }
 	| { kind: "diff"; sections: SessionDiffSection[] }
 	| { kind: "message"; text: string };
 
-/** Preview text only. Skip folders, big files, and binary files. */
 export async function loadFilePreview(absolutePath: string): Promise<FilePreviewContent> {
 	try {
 		const file = await open(absolutePath, "r");
@@ -34,7 +32,8 @@ export async function loadFilePreview(absolutePath: string): Promise<FilePreview
 			const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
 			if (bytesRead > MAX_PREVIEW_BYTES) return { kind: "message", text: "Too large to preview (limit: 1 MiB)." };
 			const bytes = buffer.subarray(0, bytesRead);
-			if (bytes.subarray(0, BINARY_SNIFF_BYTES).includes(0)) return { kind: "message", text: "Binary file." };
+			if (bytes.includes(0)) return { kind: "message", text: "Binary file." };
+			if (!isUtf8(bytes)) return { kind: "message", text: "Not valid UTF-8 text." };
 			const text = stripTerminalSequences(bytes.toString("utf8"))
 				.replace(/\r\n?/g, "\n")
 				.replace(/\t/g, "    ")
@@ -51,16 +50,13 @@ export async function loadFilePreview(absolutePath: string): Promise<FilePreview
 export interface FilePreviewOptions {
 	theme: () => Theme;
 	keybindings: KeybindingsManager;
-	/** File path to show in the title. */
 	path: string;
 	content: FilePreviewContent;
-	/** Height in rows, counting the borders too. */
 	getHeight: () => number;
 	onInsert: () => void;
 	onClose: () => void;
 }
 
-/** Show a file or diff. You can scroll, but not edit. */
 export class FilePreviewComponent implements Component, Focusable {
 	focused = false;
 	private readonly options: FilePreviewOptions;
@@ -77,7 +73,6 @@ export class FilePreviewComponent implements Component, Focusable {
 	invalidate(): void {
 		this.cache = undefined;
 		const theme = this.options.theme();
-		// Keep the same highlighting when only the size or visible rows change.
 		if (this.highlightedTheme === theme) return;
 		this.highlightedTheme = theme;
 		const content = this.options.content;

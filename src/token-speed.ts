@@ -3,7 +3,6 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 const STATUS_KEY = "midnight-token-speed";
 const UPDATE_INTERVAL_MS = 250;
 
-/** Measure response speed from turn start, including the wait for the first token. */
 export function registerTokenSpeed(pi: ExtensionAPI, now: () => number = () => performance.now()): void {
 	let started: number | undefined;
 	let firstToken: number | undefined;
@@ -55,7 +54,6 @@ export function registerTokenSpeed(pi: ExtensionAPI, now: () => number = () => p
 			characters += delta.delta.length;
 			firstToken ??= time;
 		} else if (delta.type === "toolcall_start") {
-			// Some providers send the whole tool call at once, not in small pieces.
 			firstToken ??= time;
 		} else return;
 		if (time - lastUpdate >= UPDATE_INTERVAL_MS) render(ctx, time);
@@ -65,7 +63,6 @@ export function registerTokenSpeed(pi: ExtensionAPI, now: () => number = () => p
 		const message = event.message;
 		const output = message.usage.output;
 		const outcome = message.stopReason === "error" ? " · error" : message.stopReason === "aborted" ? " · aborted" : "";
-		// A provider may report zero tokens after an error, even if it sent some text.
 		render(
 			ctx,
 			now(),

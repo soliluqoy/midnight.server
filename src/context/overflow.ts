@@ -1,22 +1,3 @@
-/**
- * Overflow guard: keep the next request under the budget when the model has not.
- *
- * Reminders arrive at request boundaries, but one assistant turn with many parallel tool
- * calls can add tens of thousands of tokens at once. When the estimated request exceeds
- * the guard limit, tool results are *withheld* from the effective context, oldest first —
- * each replaced by a short note giving the tool, call id, size, and a file holding the
- * full text — until the estimate fits or nothing withholdable is left.
- *
- * Properties:
- * - transcript-only: raw history is untouched and no tool is ever re-executed;
- * - oldest first, tool results only; user, assistant and note blocks are never touched.
- *   Oldest first matters: the result the model just asked for (often a re-read of a
- *   withheld file) must stay visible, otherwise withholding turns into a loop;
- * - deterministic and cached per source message, so repeated context calls agree;
- * - the withheld note is an ordinary block in the mirror: the model can shorten, delete,
- *   or replace it, and can re-read the saved file with offset/limit.
- */
-
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { defined } from "./defined.ts";
@@ -39,12 +20,6 @@ export function resolveOverflowGuard(overrides: Partial<OverflowGuardPolicy> | u
 	return { ...DEFAULT_OVERFLOW_GUARD, ...(overrides ?? {}) };
 }
 
-/**
- * The limit the guard enforces. Two ceilings apply: the configured budget minus the
- * generation reserve, and — when the model window is known — the window minus Pi's own
- * 4,096-token safety margin minus the reserve, because Pi clamps `max_tokens` to
- * `window − estimate − 4096` and a request past that point gets a 1-token answer.
- */
 export function overflowGuardLimit(budget: number, reserve: number, contextWindow: number | undefined): number {
 	const fromBudget = budget - reserve;
 	if (contextWindow === undefined || !Number.isFinite(contextWindow) || contextWindow <= 0) return fromBudget;
@@ -62,7 +37,6 @@ export interface WithheldRecord {
 export interface OverflowGuardResult {
 	messages: LiveContextMessage[];
 	withheld: WithheldRecord[];
-	/** Estimated tokens of the returned messages (same estimator as the caller). */
 	estimated: number;
 }
 
@@ -87,7 +61,6 @@ function toolResultText(message: LiveContextMessage): string {
 		.join("\n");
 }
 
-/** Short by design: notes accumulate, so each costs as little context as possible. */
 export function withheldNoteText(record: Omit<WithheldRecord, "message">, _estimated: number, _limit: number): string {
 	const where = record.file ? ` Full text: ${record.file}` : " Full text remains in the session history.";
 	return `[pi-clm overflow guard] ${record.toolName}#${record.toolCallId} (~${record.tokens.toLocaleString("en-US")} tok) withheld over budget.${where}`;
@@ -98,19 +71,12 @@ const savedFiles = new WeakMap<LiveContextMessage, string>();
 
 export interface ApplyOverflowGuardOptions {
 	limit: number;
-	/** Estimated tokens of everything outside `messages` (system prompt, notices). */
 	fixedTokens: number;
 	estimate: (messages: LiveContextMessage[]) => number;
-	/** Directory for saved outputs; omitted → nothing is written, notes point at history only. */
 	saveDirectory?: string;
-	/** Only messages at or after this index are candidates (the raw suffix after the last accepted edit); default 0. */
 	protectBefore?: number;
 }
 
-/**
- * Withhold tool results, oldest first, until `fixedTokens + estimate(messages) <= limit`.
- * Returns the same array when nothing needed to change.
- */
 export function applyOverflowGuard(
 	messages: LiveContextMessage[],
 	options: ApplyOverflowGuardOptions,
@@ -124,7 +90,7 @@ export function applyOverflowGuard(
 	for (let index = options.protectBefore ?? 0; index < messages.length; index++) {
 		const message = defined(messages[index]);
 		if (message.role !== "toolResult") continue;
-		if (withheldCache.get(message) === message) continue; // already a note
+		if (withheldCache.get(message) === message) continue;
 		const text = toolResultText(message);
 		if (text.startsWith("[pi-clm overflow guard]")) continue;
 		candidates.push(index);

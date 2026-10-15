@@ -44,7 +44,6 @@ export function parseGitStatus(output: string, prefix: string): WorkspaceGitStat
 	return { marks, ignored };
 }
 
-/** Use symbolic-ref because it works even with no commits yet. rev-parse HEAD does not. */
 export async function readGitBranch(cwd: string, signal?: AbortSignal): Promise<string | undefined> {
 	const branch = await runGit(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"], signal);
 	if (branch?.trim()) return branch.trim();
@@ -67,7 +66,6 @@ const defaultIO: WorkspaceIO = {
 	git: readGitSnapshot,
 };
 
-/** Cache folder reads. Wait until hidden or closed folders are shown again before rereading them. */
 export class Workspace implements WorkspaceSnapshot {
 	private readonly cache = new Map<string, WorkspaceEntry[]>();
 	private readonly fresh = new Map<string, number>();
@@ -185,7 +183,6 @@ export class Workspace implements WorkspaceSnapshot {
 		signal?.addEventListener("abort", abort, { once: true });
 		const active = () => !this.disposed && !signal?.aborted && generation === this.generation;
 		const git = async () => {
-			// Reuse the prefix when we can. Retry failed reads in case a repo was created later.
 			const prefix = this.prefix ?? (await this.io.prefix(this.root, signal));
 			if (!active()) return;
 			if (prefix !== undefined) this.prefix = prefix.replace(/\r?\n$/, "");
@@ -219,7 +216,6 @@ export class Workspace implements WorkspaceSnapshot {
 			if (this.changed) this.notify();
 		});
 		try {
-			// Show folder results without waiting for Git to finish.
 			const [snapshot] = await Promise.all([git(), files]);
 			return active() ? snapshot : undefined;
 		} finally {

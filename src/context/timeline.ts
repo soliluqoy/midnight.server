@@ -1,29 +1,11 @@
-/**
- * Context-size timeline: how large the model's context was on every request, and where
- * the model (or the user) changed it.
- *
- * Built only from the active branch's session entries, so it works on resume and needs no
- * extra persistence:
- *
- * - one point per completed assistant message with provider usage — the provider-reported
- *   size of that request (`totalTokens`, or input+output+cache when absent);
- * - one marker per `live-context-state` entry whose outcome was `applied` (an accepted
- *   context edit, with its recorded before/after estimate), `reset`, or a rejection.
- *
- * Rendering is pure text so it can be unit-tested and reused by the non-TUI report.
- */
-
 import { defined } from "./defined.ts";
 import type { LiveContextState, SessionEntryLike } from "./state.ts";
 import { isLiveContextState } from "./state.ts";
 
 export interface TimelinePoint {
-	/** 1-based request number on this branch. */
 	request: number;
 	at?: string;
-	/** Provider-reported context size of this request. */
 	tokens: number;
-	/** Live-context revision active when the request was answered. */
 	revision: number;
 }
 
@@ -31,7 +13,6 @@ export interface TimelineMarker {
 	kind: "applied" | "rejected" | "reset";
 	revision: number;
 	at?: string;
-	/** Index into `points` of the request after which this marker was recorded (−1 = before any). */
 	afterPoint: number;
 	beforeTokens?: number;
 	afterTokens?: number;
@@ -42,7 +23,6 @@ export interface ContextTimeline {
 	points: TimelinePoint[];
 	markers: TimelineMarker[];
 	peakTokens: number;
-	/** Indices into `points` of the first request after each user message (turn landmarks). */
 	turnStarts?: number[];
 }
 
@@ -97,7 +77,6 @@ export function buildContextTimeline(entries: readonly SessionEntryLike[]): Cont
 			const state: LiveContextState = entry.data;
 			revision = state.revision;
 			const outcome = state.lastOutcome;
-			// Slim entries (toggles, repeated persists) carry the same outcome again; record it once.
 			if (!outcome || outcome.at === lastOutcomeAt) continue;
 			lastOutcomeAt = outcome.at;
 			const tokensUnit = outcome.estimateUnit === "tokens";
@@ -122,59 +101,29 @@ export function formatTokenCount(value: number): string {
 	return `${(value / 1_000_000).toFixed(1)}m`;
 }
 
-/**
- * How requests map to columns.
- * - `requests`: one column per request; a window of the newest (or focused) requests
- *   when the branch is wider than the terminal.
- * - `fit`: the whole branch, consecutive requests bucketed so it fits the width.
- * - `turns`: one column per user turn (a user message and every request it caused),
- *   consecutive turns grouped when there are more turns than columns.
- * Wall-clock buckets are deliberately not a mode: idle gaps would become empty space and
- * bursts of tool calls would collapse into one bar. Time appears in labels instead.
- */
 export type TimelineZoom = "requests" | "fit" | "turns";
-/** Cycle order; `fit` is the default so a branch opens fully visible. */
 export const TIMELINE_ZOOMS: readonly TimelineZoom[] = ["fit", "requests", "turns"];
 
 export interface TimelineChartOptions {
 	width: number;
 	height: number;
-	/** Column mapping; default `requests`. */
 	zoom?: TimelineZoom;
-	/** Optional budget line drawn across the chart. */
 	budget?: number;
-	/** Index of the marker to highlight, or undefined. */
 	selectedMarker?: number;
-	/** Index into `points` whose column is highlighted (e.g. the latest request, "now"). */
 	selectedPoint?: number;
-	/**
-	 * Index into `points` that must be visible in `requests` zoom. When the branch has more
-	 * requests than columns, the chart shows a window of consecutive requests centred on
-	 * this point, clamped so the window stays full (so the newest request sits at the
-	 * right edge). Default: the newest requests. Panning follows the selection.
-	 */
 	focusPoint?: number;
-	/** Style hooks; identity by default so tests see plain text. */
 	style?: {
 		bar?: (text: string) => string;
 		editBar?: (text: string) => string;
 		marker?: (text: string) => string;
 		budget?: (text: string) => string;
 		axis?: (text: string) => string;
-		/** Column of the selected compaction point. */
 		selected?: (text: string) => string;
-		/** Edit marker of the selected column (defaults to `selected`). */
 		selectedMarker?: (text: string) => string;
-		/** User-turn landmarks on the baseline. */
 		landmark?: (text: string) => string;
 	};
 }
 
-/**
- * Choose the window of consecutive requests to draw: at most `columns`, centred on
- * `focus` and clamped to the ends, so a focus near the newest request shows the newest
- * requests with the focus at (or near) the right edge rather than leaving empty columns.
- */
 export function timelineWindow(
 	pointCount: number,
 	columns: number,
@@ -182,7 +131,7 @@ export function timelineWindow(
 ): { start: number; end: number } {
 	const width = Math.max(1, Math.min(columns, pointCount));
 	if (pointCount <= width) return { start: 0, end: pointCount };
-	let start = pointCount - width; // default: newest requests
+	let start = pointCount - width;
 	if (focus !== undefined && focus >= 0 && focus < pointCount) {
 		start = Math.max(0, Math.min(pointCount - width, focus - Math.floor(width / 2)));
 	}
@@ -190,16 +139,11 @@ export function timelineWindow(
 }
 
 export interface TimelineBucket {
-	/** Inclusive range of indices into `points`. */
 	first: number;
 	last: number;
-	/** Peak provider-reported size in the bucket (keeps pressure spikes visible). */
 	tokens: number;
-	/** Size of the bucket's last request (shows where it ended, e.g. after an edit). */
 	finalTokens: number;
-	/** User turns that start in this bucket. */
 	turns: number;
-	/** Indices into `markers` of accepted edits recorded after a request in this bucket. */
 	edits: number[];
 }
 
@@ -208,29 +152,25 @@ export interface TimelineLayout {
 	buckets: TimelineBucket[];
 	columnWidth: number;
 	gap: number;
-	/** Largest number of requests in one bucket (1 in `requests` zoom). */
 	requestsPerColumn: number;
-	/** Turns per column in `turns` zoom. */
 	turnsPerColumn: number;
 }
 
-const CHART_LABEL_WIDTH = 7; // e.g. " 32.0k " before the axis
+const CHART_LABEL_WIDTH = 7;
 
 function plotWidthFor(width: number): number {
 	return Math.max(8, width - CHART_LABEL_WIDTH - 1);
 }
 
-/** Few buckets: widen each column (up to 3 cells + gap) so bars are readable; many: one cell each. */
 function columnGeometry(bucketCount: number, plotWidth: number): { columnWidth: number; gap: number; columns: number } {
 	const columnWidth = Math.max(1, Math.min(3, Math.floor(plotWidth / Math.max(1, bucketCount)) - 1));
 	const gap = bucketCount * (columnWidth + 1) <= plotWidth && columnWidth > 1 ? 1 : 0;
 	return { columnWidth, gap, columns: Math.max(1, Math.floor(plotWidth / (columnWidth + gap))) };
 }
 
-/** Group boundaries (start indices into `points`) of consecutive runs, one run per user turn. */
 function turnGroupStarts(timeline: ContextTimeline): number[] {
 	const starts = new Set(timeline.turnStarts ?? []);
-	starts.add(0); // requests before the first recorded user message form their own group
+	starts.add(0);
 	return [...starts].filter((index) => index >= 0 && index < timeline.points.length).sort((a, b) => a - b);
 }
 
@@ -249,7 +189,6 @@ function bucketFromRange(
 	return { first, last, tokens, finalTokens: timeline.points[last]?.tokens ?? 0, turns, edits: [] };
 }
 
-/** The columns a chart of `width` shows for `zoom`; shared by the renderer and the viewer's detail line. */
 export function layoutTimeline(
 	timeline: ContextTimeline,
 	options: Pick<TimelineChartOptions, "width" | "zoom" | "focusPoint">,
@@ -293,22 +232,15 @@ function bucketContaining(buckets: readonly TimelineBucket[], point: number | un
 	return buckets.find((bucket) => point >= bucket.first && point <= bucket.last);
 }
 
-/**
- * Zooms worth offering at this width. When every request already has its own column,
- * `fit` is the per-request view, so `requests` (the panning view) is dropped: there is no
- * zooming in below one request per column.
- */
 export function availableTimelineZooms(timeline: ContextTimeline, width: number): TimelineZoom[] {
 	const fitsWidth = timeline.points.length <= plotWidthFor(width);
 	return TIMELINE_ZOOMS.filter((zoom) => !(fitsWidth && zoom === "requests"));
 }
 
-/** Clock span a column covers, e.g. `11:44 PM–11:53 PM (9 min)`, or the time of a single request. */
 export function formatBucketSpan(timeline: ContextTimeline, bucket: TimelineBucket): string | undefined {
 	return timeSpan(timeline, bucket.first, bucket.last);
 }
 
-/** Index of the bucket holding `point`, or −1 (e.g. panned out of view in `requests` zoom). */
 export function bucketIndexOf(layout: TimelineLayout, point: number | undefined): number {
 	if (point === undefined || point < 0) return -1;
 	return layout.buckets.findIndex((bucket) => point >= bucket.first && point <= bucket.last);
@@ -338,7 +270,6 @@ function timeSpan(timeline: ContextTimeline, first: number, last: number): strin
 	return `${from}–${to} (${formatDuration(new Date(end).valueOf() - new Date(start).valueOf())})`;
 }
 
-/** One-line description of a column: range, time, peak/final size, turns and edits. */
 export function describeTimelineBucket(timeline: ContextTimeline, bucket: TimelineBucket): string {
 	const first = timeline.points[bucket.first];
 	const last = timeline.points[bucket.last];
@@ -358,12 +289,6 @@ export function describeTimelineBucket(timeline: ContextTimeline, bucket: Timeli
 	return parts.join(" · ");
 }
 
-/**
- * Vertical bar chart, one column per request or bucket (see `TimelineZoom`). Bars show
- * the bucket's peak; columns with an accepted edit use `▓` and get a marker directly
- * above the bar (`▿`, `▼` when selected, or the count when several edits share a column). User turns are `•`
- * landmarks on the baseline; the budget, when given, is a dashed line.
- */
 export function renderTimelineChart(timeline: ContextTimeline, options: TimelineChartOptions): string[] {
 	const id = (text: string) => text;
 	const style = {
@@ -384,9 +309,6 @@ export function renderTimelineChart(timeline: ContextTimeline, options: Timeline
 	const layout = layoutTimeline(timeline, options);
 	const { buckets, columnWidth, gap } = layout;
 	const cell = (glyph: string, styled: (text: string) => string) => styled(glyph.repeat(columnWidth)) + " ".repeat(gap);
-	// Scale to the data. The budget line is drawn only when it is within reach of the data
-	// (≤ 2× the peak); a far-away budget (e.g. a 272k model window against 10k requests)
-	// would flatten every ordinary request into nothing, so it is reported in the footer instead.
 	const budgetOnChart = options.budget !== undefined && options.budget <= Math.max(1, timeline.peakTokens) * 2;
 	const ceiling = Math.max(timeline.peakTokens, budgetOnChart ? (options.budget ?? 0) : 0, 1);
 	const selectedMarker = options.selectedMarker !== undefined ? timeline.markers[options.selectedMarker] : undefined;
@@ -397,8 +319,6 @@ export function renderTimelineChart(timeline: ContextTimeline, options: Timeline
 			? height - 1 - Math.min(height - 1, Math.round((options.budget / ceiling) * (height - 1)))
 			: undefined;
 
-	// Edit markers sit directly above their bar. A bar that reaches the top row needs one
-	// headroom row above the chart; otherwise the marker goes in the empty cell above the bar.
 	const filledAt = (bucket: TimelineBucket, row: number) =>
 		bucket.tokens >= ((height - row) / height) * ceiling - ceiling / height / 2 ||
 		(row === height - 1 && bucket.tokens > 0);
@@ -406,7 +326,6 @@ export function renderTimelineChart(timeline: ContextTimeline, options: Timeline
 		for (let row = 0; row < height; row++) if (filledAt(bucket, row)) return row;
 		return height;
 	});
-	// A shared column keeps its edit count even when selected; selection is shown by style.
 	const markerGlyph = (bucket: TimelineBucket, column: number) =>
 		bucket.edits.length > 1
 			? bucket.edits.length > 9
@@ -457,7 +376,6 @@ export function renderTimelineChart(timeline: ContextTimeline, options: Timeline
 		const axisGlyph = budgetRow === row ? style.budget("┼") : style.axis("┤");
 		rows.push(`${style.axis(label)}${axisGlyph}${cells}`);
 	}
-	// Baseline with user-turn landmarks (every column is a turn in `turns` zoom, so none there).
 	const baselineCells = buckets
 		.map((bucket) => {
 			const landmark = layout.zoom !== "turns" && bucket.turns > 0;
@@ -495,7 +413,6 @@ export function renderTimelineChart(timeline: ContextTimeline, options: Timeline
 		xLabel = `${turns} user turn${turns === 1 ? "" : "s"} · ${layout.turnsPerColumn}/column · ${total} requests`;
 	}
 	if (layout.zoom !== "requests") {
-		// The time span is extra context: include it only when the label still fits.
 		const span = timeSpan(timeline, 0, total - 1);
 		const withSpan = `${xLabel} · ${span}${offChartBudget}`;
 		if (span && labelWidth + 1 + withSpan.length <= options.width) xLabel += ` · ${span}`;
@@ -504,7 +421,6 @@ export function renderTimelineChart(timeline: ContextTimeline, options: Timeline
 	return rows;
 }
 
-/** One line per compaction point, newest last: `r3  16:52  9.5k → 2.9k  −70%`. */
 export function formatMarkerRow(marker: TimelineMarker, timeline: ContextTimeline): string {
 	const time = marker.at ? new Date(marker.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "--:--";
 	const request =
@@ -528,7 +444,6 @@ export function formatMarkerRow(marker: TimelineMarker, timeline: ContextTimelin
 	return `r${marker.revision}  ${time}  edit rejected: ${marker.message}  (${request})`;
 }
 
-/** Short list row for the viewer: `r1  11:43 PM  296k → 21k  −93%`. */
 export function formatMarkerCompact(marker: TimelineMarker): string {
 	const time = clockTime(marker.at) ?? "--:--";
 	if (marker.kind === "reset") return `r${marker.revision}  ${time}  reset to raw context`;
@@ -543,7 +458,6 @@ export function formatMarkerCompact(marker: TimelineMarker): string {
 
 export { clockTime as formatClockTime };
 
-/** Plain-text summary used by the non-interactive report. */
 export function formatTimelineReport(timeline: ContextTimeline, width = 72, budget?: number): string {
 	const lines = renderTimelineChart(timeline, { width, height: 8, budget });
 	const applied = timeline.markers.filter((marker) => marker.kind === "applied");

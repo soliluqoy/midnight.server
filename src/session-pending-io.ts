@@ -6,7 +6,6 @@ import { basename, dirname, resolve } from "node:path";
 export const MAX_PENDING_BYTES = 1024 * 1024;
 export const MAX_PENDING_LINES = 20_000;
 
-/** Report failures as errors, not empty output. Commands only read, with time and output limits. */
 export function pendingGit(
 	cwd: string,
 	args: string[],
@@ -26,7 +25,6 @@ export function pendingGit(
 				signal,
 			},
 			(error, stdout, stderr) => {
-				// For this command, exit code 1 means HEAD is missing (no first commit yet).
 				if (error?.code === 1 && args.join(" ") === "rev-parse --verify --quiet HEAD") {
 					accept("<unborn>");
 					return;
@@ -55,11 +53,9 @@ export async function fileStamp(path: string): Promise<string> {
 	}
 }
 
-/** Find the real parent path, but do not follow a link at the file itself. */
 export async function candidateIdentity(file: string): Promise<string> {
 	try {
 		const stat = await lstat(file);
-		// Use the disk's letter case. Lowercasing could mix up two different files.
 		if (!stat.isSymbolicLink()) return await realpath(file);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -75,7 +71,6 @@ export async function candidateIdentity(file: string): Promise<string> {
 	return resolve(await realpath(parent), ...tail);
 }
 
-/** For deleted files, start at the nearest parent that still exists. Do not scan subfolders. */
 export async function owningRepository(path: string, signal: AbortSignal): Promise<string | undefined> {
 	let parent = dirname(path);
 	while ((await fileStamp(parent)) === "absent") {
@@ -91,16 +86,13 @@ export async function owningRepository(path: string, signal: AbortSignal): Promi
 	}
 }
 
-/** Check HEAD, index, and file stamps for other edits. This is not a locked snapshot. */
 export async function repositoryStamp(root: string, signal: AbortSignal): Promise<string> {
-	// Ask for one path at a time so newlines in paths stay intact, including worktree paths.
 	const index = (await pendingGit(root, ["rev-parse", "--git-path", "index"], signal)).replace(/\r?\n$/, "");
 	const head = await pendingGit(root, ["rev-parse", "--verify", "--quiet", "HEAD"], signal);
 	const absoluteIndex = resolve(root, index);
 	return `${absoluteIndex}\0${head}\0${await fileStamp(absoluteIndex)}`;
 }
 
-/** Limit memory and bytes read. Skip links and special files before opening. */
 export async function currentText(path: string): Promise<string> {
 	const before = await lstat(path);
 	if (!before.isFile() || before.isSymbolicLink())

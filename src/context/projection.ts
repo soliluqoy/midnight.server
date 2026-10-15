@@ -11,10 +11,8 @@ export interface ProjectionCheckpoint {
 	projectedMessages: LiveContextMessage[];
 	beforeEstimate: number;
 	afterEstimate: number;
-	/** Older checkpoints omitted this field and stored character estimates. */
 	estimateUnit?: "characters" | "tokens";
 	createdAt: string;
-	/** Provenance for the accepted edit that produced projectedMessages. */
 	editTrace?: ContextEditTrace;
 }
 
@@ -70,15 +68,10 @@ export function createProjectionCheckpoint(options: {
 		editTrace: options.editTrace,
 	};
 
-	// Fail at creation time rather than writing an unserializable custom session entry.
 	JSON.stringify(checkpoint);
 	return checkpoint;
 }
 
-/**
- * Replace the checkpoint's raw source prefix and retain every raw message appended after
- * it. A mismatch fails closed and returns the untouched raw context.
- */
 export function applyProjection(
 	rawMessages: LiveContextMessage[],
 	checkpoint: ProjectionCheckpoint | undefined,
@@ -118,18 +111,6 @@ export function applyProjection(
 	};
 }
 
-/**
- * Pi persists failed assistant responses in JSONL before automatic retry, while its live
- * agent state removes those responses before retrying. A checkpoint accepted later in
- * that process therefore anchors to a prefix without the failed responses. On resume,
- * SessionManager reconstructs them and the otherwise unchanged prefix no longer hashes.
- *
- * Recover only when deleting assistant error responses after a cryptographically matching
- * older checkpoint (or from the beginning) makes the target checkpoint match exactly.
- * No user, successful assistant, or tool message is ever ignored by this compatibility
- * path. The caller should immediately rebase a recovered projection onto the resumed raw
- * transcript so future turns use the normal exact-prefix path again.
- */
 export function recoverProjectionFromRetryErrors(
 	rawMessages: LiveContextMessage[],
 	checkpoint: ProjectionCheckpoint,
@@ -176,8 +157,6 @@ export function recoverProjectionFromRetryErrors(
 		}
 		if (removedErrorCount === 0) continue;
 
-		// Only reconcile the target's source prefix. Later error responses are ordinary
-		// suffix history and must not be silently removed by checkpoint recovery.
 		const candidateMessages = [...prefix, ...retainedSourceTail, ...rawMessages.slice(cursor)];
 		const recovered = applyProjection(candidateMessages, checkpoint);
 		if (!recovered.valid) continue;

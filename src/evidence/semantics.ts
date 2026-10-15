@@ -27,7 +27,6 @@ export const SemanticRecordSchema = Type.Object(
 	{
 		...RecordSchema.properties,
 		semantics: Type.Literal(3),
-		// refs is the bounded dependency union, not a replacement for relationship roles.
 		concerns: Type.Optional(refs),
 		resolvedBy: Type.Optional(refs),
 		reviewReasons: Type.Array(ReviewReasonSchema, { maxItems: MAX_REVIEW_REASONS }),
@@ -65,11 +64,9 @@ function reviewed(record: SemanticRecord, reason: ReviewReason): SemanticRecord 
 	};
 }
 
-/** Fresh-session v3 semantics. Deliberately does not reinterpret saved v1/v2 events. */
 export class SemanticLedger {
 	readonly records = new Map<string, SemanticRecord>();
 
-	/** Validate on a detached state so a rejected transition never changes records. */
 	apply(value: unknown): boolean {
 		if (!Value.Check(SemanticEventSchema, value)) return false;
 		const event = value;
@@ -130,7 +127,6 @@ export class SemanticLedger {
 				resolved.refs = dependencies(resolved);
 				if (resolved.refs.length > 16 || reaches(next, resolved.refs, record.id)) return false;
 				next.set(record.id, resolved);
-				// Preserve existing conservative downstream reassessment on resolution.
 				cause = {
 					code: "dependency_review",
 					dependency: changed,
@@ -191,7 +187,6 @@ function reaches(records: Map<string, SemanticRecord>, roots: string[], target: 
 	return false;
 }
 
-/** Explicit legacy inspection only, not migration or a guess from reason prose. */
 export function legacyReviewReason(record: EvidenceRecord): ReviewReason | undefined {
 	return record.review ? { code: "legacy_unspecified", explanation: record.review } : undefined;
 }

@@ -1,4 +1,3 @@
-/** Synthetic, credential-free regression corpus. Never uploaded by the offline test suite. */
 export const triageCorpus = [
 	{
 		name: "early compiler failure survives a long progress tail",

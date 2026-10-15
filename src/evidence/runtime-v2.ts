@@ -87,11 +87,6 @@ function ledger(base: EvidenceReplayResult): EvidenceLedger {
 	return result;
 }
 
-/** Shared queued runtime for legacy v1/v2 and fresh-session v3 semantics.
- * All reads/writes and passive observations share one FIFO queue. Live replay reuses a trusted
- * ancestor projection; cold scans yield between pages. Archive calls inspect at most one page
- * without synchronizing live state and return branch-bound continuations.
- */
 export class EvidenceRuntimeV2 {
 	private binding: Binding | undefined;
 	private retainedStore: Pick<Binding, "ctx" | "sessionId" | "store" | "requiresSemantic"> | undefined;
@@ -121,7 +116,6 @@ export class EvidenceRuntimeV2 {
 	start(ctx: Context, options: { freshSession?: boolean; navigation?: boolean } = {}): void {
 		const previous = this.retainedStore;
 		const sessionId = ctx.sessionManager.getSessionId();
-		// Navigation/reload in the same session must not accidentally unlock an uncertain append.
 		const store =
 			previous?.ctx.sessionManager === ctx.sessionManager && previous.sessionId === sessionId
 				? previous.store
@@ -131,7 +125,6 @@ export class EvidenceRuntimeV2 {
 		const requiresSemantic =
 			options.freshSession === true || (previous?.store === store && previous.requiresSemantic === true);
 		this.retainedStore = { ctx: context, sessionId, store, requiresSemantic };
-		// Defer navigation review to the same FIFO as explicit work. Starting does no file I/O or append.
 		this.binding = {
 			ctx: context,
 			sessionId,
@@ -176,8 +169,6 @@ export class EvidenceRuntimeV2 {
 			this.guard(binding);
 			combined.throwIfAborted();
 			const result = await operation(binding, combined);
-			// Caller cancellation after a successful append does not undo the commit. Session replacement
-			// still suppresses publication/results from the previous generation.
 			this.guard(binding);
 			return result;
 		});
@@ -243,7 +234,6 @@ export class EvidenceRuntimeV2 {
 			.map(({ record }) => record.id);
 		for (const id of ids) {
 			base = this.append(binding, base, { version: 1, action: "review", id, reason }, signal, code).next;
-			// A cancellation after a verified append cannot roll it back. Leave remaining work pending.
 			if (signal.aborted) break;
 		}
 		return base;
@@ -500,14 +490,12 @@ export class EvidenceRuntimeV2 {
 				(base.state.semantics === 3 ? !(record as SemanticRecord).reviewOverflow : !record.review),
 		);
 		const hashes = new Map<string, string | null>();
-		// Read each path once before any review append. Failed reads are unavailable, never clean.
 		for (const { record } of files) {
 			if (record.source?.kind !== "file" || hashes.has(record.source.path)) continue;
 			let hash: string | null = null;
 			try {
 				hash = (await this.sources.read(binding.ctx.cwd, record.source.path, signal)).sha256;
 			} catch {
-				// Cancellation/replacement/branch races are not evidence that the file changed.
 				this.guardSource(binding, base, signal);
 			}
 			this.guardSource(binding, base, signal);
@@ -538,7 +526,6 @@ export class EvidenceRuntimeV2 {
 		return { next: base, operationId };
 	}
 
-	/** Internal parity path for existing requests; uses this queue, not the live v1 runtime's queue. */
 	execute(params: Static<typeof EvidenceOperationParams>, signal?: AbortSignal): Promise<EvidenceLiveResultV2> {
 		const request = structuredClone(params);
 		return this.run(signal, async (binding, combined) => {
@@ -640,7 +627,6 @@ export class EvidenceRuntimeV2 {
 		});
 	}
 
-	/** Observational replay deliberately bypasses sync: no navigation review or initialization writes. */
 	audit(params: Static<typeof AuditParams>, signal?: AbortSignal): Promise<AuditResult> {
 		const request = structuredClone(params);
 		return this.run(signal, async (binding, combined) => {
@@ -780,7 +766,6 @@ export class EvidenceRuntimeV2 {
 		const generation = this.calls.get(event.toolCallId);
 		this.calls.delete(event.toolCallId);
 		if (generation !== this.generation || !this.binding) return Promise.resolve();
-		// Extract only bounded provenance now; never retain commands/output across the queue.
 		const observation = receipt(event);
 		const name = event.toolName;
 		return this.run(undefined, async (binding, signal) => {

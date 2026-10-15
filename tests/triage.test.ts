@@ -667,7 +667,6 @@ test("cache identity includes source, project, content, selection, model and end
 	await h.integration.command("on", h.ctx);
 	assert.equal(structured(await h.run()).mode, "remote");
 	h.emit("session_start");
-	// Flag scoped to project A, so restarting in B removes its authorization.
 	assert.equal(structured(await h.run()).mode, "local");
 	Object.assign(h.ctx, { cwd: "project-A" });
 	h.emit("session_start");

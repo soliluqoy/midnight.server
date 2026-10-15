@@ -4,14 +4,12 @@ import { DiagnosticSchema, RangeSchema } from "./analysis.ts";
 const NullableString = Type.Union([Type.String(), Type.Null()]);
 const NullableNumber = Type.Union([Type.Number(), Type.Null()]);
 
-/** Identical machine-readable contract for local, cached, remote, and partial/error results. */
 export const TriageSchema = Type.Object({
 	version: Type.Literal(2),
 	advisory: Type.Literal(true),
 	warning: Type.String(),
 	mode: Type.Union([Type.Literal("local"), Type.Literal("remote"), Type.Literal("cache")]),
 	reason: NullableString,
-	// Optional for backward compatibility with historical version-2 ScaleDown receipts.
 	helperModel: Type.Optional(Type.String()),
 	costBasis: Type.Optional(Type.Literal("catalog_estimate")),
 	source: Type.String(),

@@ -20,10 +20,6 @@ export interface LiveContextSourceReference {
 	role: string;
 }
 
-/**
- * A full append-only annotation snapshot. Resolving an annotation appends a new
- * snapshot with the same id rather than changing the earlier session entry.
- */
 export interface LiveContextAnnotation {
 	version: 1;
 	id: string;
@@ -59,7 +55,6 @@ export interface RecallFormatResult {
 	returnedTokens: number;
 }
 
-/** Warn once per aggregate-note threshold crossing; re-arm after it shrinks below. */
 export class ContinuitySizeTracker {
 	private warned = false;
 
@@ -119,7 +114,6 @@ export function isLiveContextAnnotation(value: unknown): value is LiveContextAnn
 	);
 }
 
-/** Latest valid snapshot for each id wins on the supplied Pi branch. */
 export function reconstructLiveContextAnnotations(entries: ContinuitySessionEntryLike[]): LiveContextAnnotation[] {
 	const latest = new Map<string, LiveContextAnnotation>();
 	for (const entry of entries) {
@@ -181,7 +175,6 @@ function timestampFromEntry(entry: ContinuitySessionEntryLike): number {
 	return Number.isFinite(parsed) ? parsed : 0;
 }
 
-/** Reconstruct the AgentMessage-shaped source represented by a durable Pi entry. */
 export function messageFromSessionEntry(entry: ContinuitySessionEntryLike | undefined): LiveContextMessage | undefined {
 	if (!entry) return undefined;
 	if (entry.type === "message" && entry.message && typeof entry.message === "object") {
@@ -217,7 +210,6 @@ export function messageFromSessionEntry(entry: ContinuitySessionEntryLike | unde
 	return undefined;
 }
 
-/** Find the durable active-branch entry that exactly produced a mirror message. */
 export function findSourceEntry(
 	entries: ContinuitySessionEntryLike[],
 	message: LiveContextMessage,
@@ -327,7 +319,6 @@ export function formatRecall(options: {
 		else high = middle - 1;
 	}
 	let text = `${header}\n${body.slice(0, low)}${marker}`;
-	// Defensive fallback for estimators whose result is not perfectly monotonic.
 	while (low > 0 && estimateTokens(text) > maxTokens) {
 		low = Math.max(0, low - Math.max(1, Math.ceil(low / 20)));
 		text = `${header}\n${body.slice(0, low)}${marker}`;

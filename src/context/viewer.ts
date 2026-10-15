@@ -52,42 +52,24 @@ import {
 import type { ContextEditSourceKind, ContextEditTrace, LiveContextMessage } from "./types.ts";
 
 export const LIVE_CONTEXT_VIEW_TABS = ["overview", "edit", "projection", "tree", "history", "agents"] as const;
-/**
- * CLM panel (`/clm`): four pages. `overview` is the context-size timeline with its
- * compaction points; `input` is the current effective context with the savings bar;
- * `edits` is the per-revision diff; `settings` shows sizes and edits the CLM settings.
- * The conservative-mode tree/history/agents tabs are not offered.
- */
 export const CLM_VIEW_TABS = ["overview", "input", "edits", "settings"] as const;
 
-/** One editable row of the panel's settings page. */
 export interface ViewerSettingItem {
 	id: string;
 	label: string;
 	value: string;
 	description?: string;
-	/** Enter/Space cycles through these. */
 	choices?: string[];
-	/** Without choices, Enter asks for text with this placeholder. */
 	placeholder?: string;
 }
 
-/** What the settings page needs from the extension: live rows, a setter, and the size summary. */
 export interface ViewerSettingsController {
 	items(): ViewerSettingItem[];
-	/** Apply a change; returns an error message when it was rejected. */
 	apply(id: string, value: string): string | undefined;
-	/** Read-only lines above the list (sizes, guard, files). */
 	summary(): string[];
 }
-/**
- * `timeline` remains a standalone tab id for hosts that want it beside the conservative tabs.
- * CLM ids: `overview` = timeline + compaction points, `input` = the current effective
- * context (the `projection` page plus the savings bar), `edits` = the `edit` page.
- */
 export type LiveContextViewTab = (typeof LIVE_CONTEXT_VIEW_TABS)[number] | (typeof CLM_VIEW_TABS)[number] | "timeline";
 
-/** Map a tab id to the page implementation that renders it. */
 function pageOf(
 	tab: LiveContextViewTab,
 ): "overview" | "edit" | "projection" | "tree" | "history" | "agents" | "timeline" | "input" | "settings" {
@@ -120,7 +102,6 @@ export interface LiveContextHistoryView {
 	message: string;
 	beforeEstimate?: number;
 	afterEstimate?: number;
-	/** Viewer history is normalized to tokens. Legacy character values are never relabeled. */
 	estimateUnit?: "tokens";
 	estimateSource?: "recorded" | "recomputed";
 	estimateNote?: string;
@@ -147,10 +128,6 @@ export interface LiveContextEditView {
 	afterPreview?: string;
 	beforeDetail?: string;
 	afterDetail?: string;
-	/**
-	 * Full rendered text used for the side-by-side diff (the diff itself bounds what it
-	 * shows). Computed lazily; falls back to the detail fields when absent.
-	 */
 	beforeText?: string;
 	afterText?: string;
 }
@@ -193,7 +170,6 @@ export interface LiveContextViewModel {
 	checkpointCreatedAt?: string;
 	lastOutcome?: LiveContextState["lastOutcome"];
 	messages: LiveContextMessageView[];
-	/** Latest accepted edit, retained for report/API compatibility. */
 	edits: LiveContextEditView[];
 	editTraceSource: "recorded" | "reconstructed" | "unavailable";
 	editRevisions: LiveContextEditRevisionView[];
@@ -201,9 +177,7 @@ export interface LiveContextViewModel {
 	treeHiddenEntryCount: number;
 	history: LiveContextHistoryView[];
 	runtime: LiveContextRuntimeView;
-	/** Provider-reported context size per request plus accepted/rejected edit markers. */
 	timeline: ContextTimeline;
-	/** Configured CLM budget in tokens, drawn on the timeline when present. */
 	budget?: number;
 }
 
@@ -217,7 +191,6 @@ export interface SessionTreeNodeLike {
 export interface BuildLiveContextViewOptions {
 	state: LiveContextState;
 	entries: SessionEntryLike[];
-	/** True when raw session entries newer than the snapshot's capture time exist. */
 	snapshotStale?: boolean;
 	tree?: SessionTreeNodeLike[];
 	leafId?: string | null;
@@ -229,7 +202,6 @@ export interface BuildLiveContextViewOptions {
 	mode: string;
 	env?: NodeJS.ProcessEnv;
 	previewCharacters?: number;
-	/** CLM budget in tokens for the timeline chart. */
 	budget?: number;
 }
 
@@ -327,7 +299,6 @@ function lineageScore(
 	return 0;
 }
 
-/** Reconstruct provenance for checkpoints created before edit traces were persisted. */
 function reconstructEditTrace(
 	before: LiveContextMessage[],
 	after: LiveContextMessage[],
@@ -402,11 +373,6 @@ function expandedMessageDetail(message: LiveContextMessage, maxCharacters = 2_00
 	return rendered.length <= maxCharacters ? rendered : `${rendered.slice(0, maxCharacters - 1)}…`;
 }
 
-/**
- * Diff rows shown per message before an explicit "preview truncated" row. The diff is
- * always computed on the full text, so a change anywhere is found and nothing identical
- * is claimed; only the display is bounded.
- */
 const EDITED_DIFF_MAX_ROWS = 400;
 const ONE_SIDED_DIFF_MAX_ROWS = 60;
 
@@ -414,7 +380,6 @@ function diffText(message: LiveContextMessage): string {
 	return renderMessage(message);
 }
 
-/** Adds enumerable, cached getters so full-text diffs are only rendered for rows someone expands. */
 function withLazyDiffText(
 	view: LiveContextEditView,
 	source: LiveContextMessage | undefined,
@@ -676,11 +641,6 @@ function foldedTreeDetails(entries: SessionEntry[], limit = 8): string[] {
 
 type ProjectionVisibility = "kept" | "rewritten" | "omitted";
 
-/**
- * Match the active raw path to the effective context once. The previous tree renderer
- * repeated full-message serialization for every raw/effective pair in every turn,
- * making large sessions quadratic and causing multi-second overlay stalls.
- */
 function buildProjectionVisibility(
 	activePath: SessionEntry[],
 	effectiveMessages: LiveContextMessage[],
@@ -728,9 +688,6 @@ function buildProjectionVisibility(
 	};
 	for (const { entry, message } of unmatchedRaw) {
 		if (typeof message.timestamp === "number") {
-			// An edited user or assistant message keeps its role; every other rewritten or
-			// orphaned message becomes a live-context-projection note that preserves the
-			// source timestamp, so that role change to "custom" still counts as rewritten.
 			const outputIndex =
 				popLive(lineageQueues.get(`${message.role}\u0000${message.timestamp}`)) ??
 				(message.role === "custom" ? undefined : popLive(noteQueues.get(message.timestamp)));
@@ -833,8 +790,6 @@ function treeDisplay(
 	if (entry.type === "custom" && entry.customType === "live-context-state" && isLiveContextState(entry.data)) {
 		const persistedState = entry.data;
 		const current = entry.id === currentStateEntryId;
-		// Slim outcome entries omit the checkpoint payload. The current branch state has
-		// already reconstructed that checkpoint from the preceding acceptance entry.
 		const state = current ? currentLiveState : persistedState;
 		const outcome = !state.enabled
 			? "disabled"
@@ -983,9 +938,6 @@ function treeRows(
 		numberPending.unshift(...node.children);
 	}
 
-	// Indentation grows only at branch points. A conversation is usually a linear chain,
-	// and one indent level per turn pushed long sessions off the right edge; an only
-	// child therefore continues at its parent's column with no connector.
 	type Work = { node: ConversationTreeNode; prefixGuides: boolean[]; connector: string; childGuides: boolean[] };
 	const sortedRoots = [...roots].sort(
 		(left, right) => Number(activeIds.has(right.entry.id)) - Number(activeIds.has(left.entry.id)),
@@ -1052,11 +1004,6 @@ function lazy<T>(compute: () => T): () => T {
 	};
 }
 
-/**
- * The summary fields are computed eagerly; per-tab data (messages, revisions, tree,
- * history) is materialized on first property access and memoized. The text report and
- * the overview tab therefore stay cheap on long branches.
- */
 export function buildLiveContextViewModel(options: BuildLiveContextViewOptions): LiveContextViewModel {
 	const checkpoint = options.state.checkpoint;
 	const effectiveMessages = options.current?.effectiveMessages ?? checkpoint?.projectedMessages ?? [];
@@ -1150,7 +1097,6 @@ export function formatLiveContextReport(model: LiveContextViewModel): string {
 	return lines.join("\n");
 }
 
-/** Text report for one page; used outside the TUI (print/JSON/RPC modes). */
 export function formatViewerPageReport(model: LiveContextViewModel, tab: LiveContextViewTab, width = 72): string {
 	const page = pageOf(tab);
 	const header = formatLiveContextReport(model);
@@ -1190,11 +1136,8 @@ function parseInitialTab(value: string, tabs: readonly LiveContextViewTab[]): Li
 }
 
 export interface ShowLiveContextViewerOptions {
-	/** Tab set to offer; defaults to the conservative-mode six. */
 	tabs?: readonly LiveContextViewTab[];
-	/** Command name for the usage hint. */
 	commandName?: string;
-	/** Enables the `settings` page. */
 	settings?: ViewerSettingsController;
 }
 
@@ -1241,17 +1184,10 @@ function eventGlyph(event: LiveContextHistoryView["event"]): string {
 const TREE_ROW_START_LINE = 4;
 const TREE_DETAIL_PANEL_MAX_HEIGHT = 10;
 
-/** How zooms are named to users: the whole history fitted, one column per request, per user turn. */
 const TIMELINE_ZOOM_LABELS: Record<TimelineZoom, string> = { fit: "all", requests: "detail", turns: "turns" };
 
-/** Color of context-edit events in the overview chart and list (blue in Pi's built-in themes). */
 const EDIT_COLOR = "mdLink" as const;
 
-/**
- * The groups (a list row plus any expanded details) to show within `budget` lines: the
- * selected group always, then neighbours alternately after and before it, with a one-line
- * "⋯ N earlier/later" marker for whatever is cut off at either end.
- */
 export function windowAroundSelection(
 	groups: readonly (readonly string[])[],
 	selected: number,
@@ -1290,48 +1226,25 @@ export class LiveContextViewer implements Component {
 	private scroll = 0;
 	private editRevisionIndex: number | undefined;
 	private editSelection = 0;
-	/** Physical start lines of edit rows, refreshed by editLines on every render. */
 	private editRowPhysicalStarts: number[] = [];
 	private editPagePhysicalLength = 0;
-	/** Set when a row expands; the next render scrolls its diff into view once positions are known. */
 	private revealSelectedEdit = false;
 	private readonly expandedEdits = new Set<string>();
-	/** Diff rows per edit key; rendering is repeated on every Pi redraw, diffing is not. */
 	private readonly editDiffs = new Map<string, SideBySideRow[]>();
-	/**
-	 * Laid-out (already wrapped) row headers and expanded bodies per edit key and width.
-	 * Pi redraws the overlay on every stream update; with "expand all" on a large revision,
-	 * re-measuring every line each time made the viewer lag.
-	 */
 	private readonly editLayouts = new Map<string, string[]>();
 	private editLayoutWidth = 0;
 	private treeSelection: number | undefined;
 	private expandedTreeRowId: string | undefined;
-	/**
-	 * Selected stop on the timeline: an index into `timeline.markers`, or
-	 * `markers.length` for "now" (the latest request). Resolved on first use to "now", so
-	 * the chart opens on the current position rather than the oldest compaction point.
-	 */
 	private timelineSelection: number | undefined;
-	/**
-	 * `z` cycles fit (whole branch, the default) → requests (one column per request, panning)
-	 * → turns (one column per user turn); `requests` is skipped when fit already shows one
-	 * request per column.
-	 */
 	private timelineZoom: TimelineZoom = "fit";
-	/** Width of the last timeline render, so `z` knows which zooms differ at this size. */
 	private timelineWidth = 80;
 	private readonly tabs: readonly LiveContextViewTab[];
-	/** CLM layout: the overview page hosts the timeline and the effective context. */
 	private readonly clmLayout: boolean;
 	private settingsList: SettingsList | undefined;
-	/** Rows the settings list was built to show; it is rebuilt when a different number fits. */
 	private settingsListRows = 0;
 	private settingsSubmenuOpen = false;
 	private settingsMessage: { text: string; warning: boolean } | undefined;
-	/** Page line to keep on screen: the selected setting, or the open text prompt's input. */
 	private settingsFocusLine = 0;
-	/** `settingsFocusLine` at the last render, to tell a moved selection from a scroll. */
 	private settingsScrolledFocus: number | undefined;
 
 	private readonly tui: TUI;
@@ -1354,14 +1267,12 @@ export class LiveContextViewer implements Component {
 		this.model = model;
 		this.done = done;
 		this.settings = settings;
-		// The settings page needs a controller; without one (e.g. a read-only host) it is not offered.
 		this.tabs = settings ? tabs : tabs.filter((tab) => tab !== "settings");
 		this.clmLayout = tabs.includes("input");
 		this.tabIndex = Math.max(0, tabs.indexOf(initialTab));
 		if (initialTab === "tree") this.scroll = this.treeSelectionScroll();
 	}
 
-	/** Tab state resolves on first use so opening one tab does not build the others. */
 	private resolveEditRevisionIndex(): number {
 		this.editRevisionIndex ??= Math.max(0, this.model.editRevisions.length - 1);
 		return this.editRevisionIndex;
@@ -1486,14 +1397,13 @@ export class LiveContextViewer implements Component {
 	}
 
 	invalidate(): void {
-		// Laid-out edit rows hold styled strings; diff rows themselves are theme-independent.
 		this.editLayouts.clear();
 	}
 
 	private activateTab(index: number): void {
 		this.tabIndex = index;
 		this.scroll = this.currentPage() === "tree" ? this.treeSelectionScroll() : 0;
-		this.settingsScrolledFocus = undefined; // re-entering settings shows the selection with its description
+		this.settingsScrolledFocus = undefined;
 	}
 
 	private treeSelectionScroll(): number {
@@ -1509,10 +1419,6 @@ export class LiveContextViewer implements Component {
 		}
 	}
 
-	/**
-	 * ↓/↑ (and PageDown/PageUp) first scroll through the selected row's expanded diff when it
-	 * extends past the viewport, then move to the next/previous row, so long diffs stay readable.
-	 */
 	private scrollWithinExpandedEdit(delta: number): boolean {
 		if (!this.expandedEdits.has(this.editKey(this.editSelection))) return false;
 		const start = this.editRowPhysicalStarts[this.editSelection];
@@ -1533,7 +1439,6 @@ export class LiveContextViewer implements Component {
 	private ensureEditSelectionVisible(): void {
 		const viewport = this.pageViewportHeight();
 		const selectedLine = this.editRowPhysicalStarts[this.editSelection] ?? 5 + this.editSelection;
-		// Show as much of the selected row (header plus any expanded diff) as fits, header first.
 		const rowEnd =
 			this.editRowPhysicalStarts[this.editSelection + 1] ??
 			(this.editPagePhysicalLength > selectedLine ? this.editPagePhysicalLength : selectedLine + 1);
@@ -1569,7 +1474,6 @@ export class LiveContextViewer implements Component {
 		return this.resolveTimelineSelection() === this.model.timeline.markers.length;
 	}
 
-	/** ← → step through compaction points; the last stop after the newest point is "now". */
 	private moveTimelineSelection(delta: number): void {
 		const now = this.model.timeline.markers.length;
 		this.timelineSelection = Math.max(0, Math.min(now, this.resolveTimelineSelection() + delta));
@@ -1581,7 +1485,6 @@ export class LiveContextViewer implements Component {
 			return;
 		}
 		if (this.currentPage() === "edit") {
-			// An explicit move wins over a pending reveal from the last Enter.
 			this.revealSelectedEdit = false;
 			if (this.scrollWithinExpandedEdit(delta)) return;
 			const count = this.currentEditRevision()?.edits.length ?? 0;
@@ -1614,7 +1517,6 @@ export class LiveContextViewer implements Component {
 		if (this.currentPage() === "edit") {
 			this.revealSelectedEdit = false;
 			this.editSelection = toEnd ? Math.max(0, (this.currentEditRevision()?.edits.length ?? 1) - 1) : 0;
-			// End means the end of the page (the bottom of the last row's diff), start the top.
 			this.scroll = toEnd ? Number.MAX_SAFE_INTEGER : 0;
 			return;
 		}
@@ -1672,8 +1574,6 @@ export class LiveContextViewer implements Component {
 	}
 
 	private viewportHeight(): number {
-		// Keep overlays compact. A near-full-height viewer is redrawn whenever the
-		// underlying Pi stream updates and caused visible flicker in active sessions.
 		return Math.max(8, Math.min(26, Math.floor(this.tui.terminal.rows * 0.62)));
 	}
 
@@ -1707,7 +1607,6 @@ export class LiveContextViewer implements Component {
 										: tab === "timeline"
 											? this.timelineLines(width)
 											: this.agentLines();
-		// The edit page lays out (and caches) its own physical lines so row positions are exact.
 		if (tab === "edit") return logical;
 		return logical.flatMap((line) => (line ? wrapTextWithAnsi(line, width) : [""]));
 	}
@@ -1760,11 +1659,8 @@ export class LiveContextViewer implements Component {
 		];
 	}
 
-	/** CLM overview: the context-size timeline and its compaction points. */
 	private clmOverviewLines(width: number): string[] {
 		const model = this.model;
-		// Only say something above the chart when it is not the normal state; the title
-		// already carries the revision and the list below carries every outcome.
 		const notice = !model.enabled
 			? this.theme.fg("warning", "Projection off: the model sees the raw transcript (/clm on).")
 			: model.lastOutcome?.kind === "rejected"
@@ -1774,7 +1670,6 @@ export class LiveContextViewer implements Component {
 		return [...above, ...this.timelineLines(width, above.length)];
 	}
 
-	/** CLM input page: savings bar, size/message counts, and the current effective context. */
 	private inputLines(width: number): string[] {
 		const model = this.model;
 		const barWidth = Math.max(10, Math.min(48, width - 18));
@@ -1823,7 +1718,6 @@ export class LiveContextViewer implements Component {
 		if (!rows) {
 			const before = edit.kind === "added" ? "" : (edit.beforeText ?? edit.beforeDetail ?? "");
 			const after = edit.kind === "removed" ? "" : (edit.afterText ?? edit.afterDetail ?? "");
-			// One-sided blocks show a shorter preview so "expand all" on a big revision stays cheap.
 			const maxRows = edit.kind === "removed" || edit.kind === "added" ? ONE_SIDED_DIFF_MAX_ROWS : EDITED_DIFF_MAX_ROWS;
 			rows = limitRows(sideBySideRows(diffLines(before, after)), maxRows);
 			this.editDiffs.set(key, rows);
@@ -1840,12 +1734,10 @@ export class LiveContextViewer implements Component {
 		return lines;
 	}
 
-	/** Physical lines of an expanded row: one column for kept/restored, a diff otherwise. */
 	private editBodyLines(key: string, edit: LiveContextEditView, width: number): string[] {
 		return this.cachedLayout(`body:${key}@${width}`, () => {
 			const wrap = (line: string) => (line ? wrapTextWithAnsi(line, width) : [""]);
 			if (edit.kind === "kept" || edit.kind === "restored") {
-				// Identical on both sides: one column.
 				if (edit.beforeDetail === undefined) return [];
 				const label = `${edit.kind === "kept" ? "content" : "restored original"} · ${formatCount(edit.beforeTokens ?? 0)} tok`;
 				return [
@@ -1930,7 +1822,6 @@ export class LiveContextViewer implements Component {
 			"",
 		];
 		if (width !== this.editLayoutWidth) {
-			// Layouts are per width; drop the old ones on resize instead of accumulating them.
 			this.editLayouts.clear();
 			this.editLayoutWidth = width;
 		}
@@ -2142,10 +2033,6 @@ export class LiveContextViewer implements Component {
 		];
 	}
 
-	/**
-	 * Switch to the edit tab positioned on the revision the selected marker produced; at
-	 * "now", open the page showing what the next request contains.
-	 */
 	private openSelectedTimelineMarker(): void {
 		if (this.timelineAtNow()) {
 			const inputIndex = this.tabs.findIndex((tab) => pageOf(tab) === "input" || pageOf(tab) === "projection");
@@ -2162,10 +2049,6 @@ export class LiveContextViewer implements Component {
 		this.activateTab(editIndex);
 	}
 
-	/**
-	 * Settings page keys: an open text prompt gets everything; otherwise ↑ ↓ Enter Space go
-	 * to the list and the rest (Tab, digits, q, Esc) stay panel keys. Returns true if handled.
-	 */
 	private handleSettingsInput(data: string): boolean {
 		const list = this.ensureSettingsList();
 		if (!list) return false;
@@ -2197,10 +2080,6 @@ export class LiveContextViewer implements Component {
 		};
 	}
 
-	/**
-	 * Built on first use and rebuilt after each change, so values, markers and choices stay
-	 * live, and when `rows` (how many settings fit) changes. A rebuild keeps the selection.
-	 */
 	private ensureSettingsList(selectId?: string, rows?: number): SettingsList | undefined {
 		if (!this.settings) return undefined;
 		const refit = rows !== undefined && rows !== this.settingsListRows && !this.settingsSubmenuOpen;
@@ -2228,24 +2107,16 @@ export class LiveContextViewer implements Component {
 		return this.settingsList;
 	}
 
-	/** The selected setting's id, read from the list's rendering (the list keeps its index private). */
 	private selectedSettingId(list: SettingsList): string | undefined {
 		const cursor = this.settingsListTheme().cursor;
 		const row = list.render(1_000).find((line) => line.startsWith(cursor));
 		if (!row) return undefined;
 		const text = stripTerminalSequences(row.slice(cursor.length));
-		// Longest label first, so "Budget •" is not mistaken for "Budget".
 		return [...(this.settings?.items() ?? [])]
 			.sort((left, right) => right.label.length - left.label.length)
 			.find((item) => text.startsWith(item.label))?.id;
 	}
 
-	/**
-	 * How many settings fit on screen with everything else on the page, all measured as
-	 * wrapped at `width`: `used` lines above and below the list, plus what the list adds under
-	 * its rows (its position, the longest description, the key hint). At least three rows so
-	 * the selection keeps its neighbours; below that the page scrolls (see `settingsScroll`).
-	 */
 	private fitSettingsRows(width: number, used: number): number {
 		const items = this.settings?.items() ?? [];
 		const description = Math.max(
@@ -2254,17 +2125,12 @@ export class LiveContextViewer implements Component {
 				item.description ? wrapTextWithAnsi(item.description, Math.max(1, width - 4)).length : 0,
 			),
 		);
-		const below = (description > 0 ? 1 + description : 0) + 2; // blank + description, blank + hint
+		const below = (description > 0 ? 1 + description : 0) + 2;
 		const space = this.pageViewportHeight() - used - below;
 		if (items.length <= space) return items.length;
-		return Math.max(Math.min(3, items.length), space - 1); // the list adds a "(n/N)" line when it scrolls
+		return Math.max(Math.min(3, items.length), space - 1);
 	}
 
-	/**
-	 * Settings page scroll. When the page is taller than the viewport, show its bottom (the
-	 * list, the selected setting's description, any message) whenever the selection moves;
-	 * PageUp/PageDown can bring the summary back, but the selected setting never leaves the screen.
-	 */
 	private settingsScroll(pageLength: number, viewport: number): number {
 		const focus = this.settingsFocusLine;
 		const moved = focus !== this.settingsScrolledFocus;
@@ -2279,19 +2145,15 @@ export class LiveContextViewer implements Component {
 		this.settingsMessage = error
 			? { text: error, warning: true }
 			: { text: `${item?.label.replace(/ •$/, "") ?? id}: ${item?.value ?? value}`, warning: false };
-		// Rebuild after the list finishes its own update (it assigns currentValue after onChange),
-		// so a rejected change shows the value actually in effect.
 		queueMicrotask(() => {
 			this.ensureSettingsList(id);
 			this.tui.requestRender();
 		});
 	}
 
-	/** Text prompt for settings without fixed choices (budget, reserve). */
 	private settingsPrompt(item: ViewerSettingItem, current: string, done: (value?: string) => void): Component {
 		this.settingsSubmenuOpen = true;
 		const input = new Input({ placeholder: item.placeholder });
-		// Start from the current number with the cursor at the end, ready to edit or replace.
 		const initial = /^\d/.test(current) ? current.replace(/ .*$/, "") : "";
 		for (const character of initial) input.handleInput(character);
 		const finish = (value?: string) => {
@@ -2314,7 +2176,6 @@ export class LiveContextViewer implements Component {
 
 	private settingsLines(width: number): string[] {
 		if (!this.settings) return [this.theme.fg("muted", "Settings are not available here.")];
-		// Wrapped here, so line counts are what the screen shows.
 		const wrap = (line: string) => (line ? wrapTextWithAnsi(line, width) : [""]);
 		const header = [
 			this.theme.fg("accent", this.theme.bold("Settings")) +
@@ -2335,7 +2196,6 @@ export class LiveContextViewer implements Component {
 		);
 		const body = list.render(width);
 		const cursor = this.settingsListTheme().cursor;
-		// The prompt's input is its second line; otherwise the row with the cursor.
 		this.settingsFocusLine =
 			header.length +
 			(this.settingsSubmenuOpen
@@ -2347,7 +2207,6 @@ export class LiveContextViewer implements Component {
 		return [...header, ...body, ...message];
 	}
 
-	/** The chosen zoom, or the default when it is not offered at this width. */
 	private effectiveTimelineZoom(): TimelineZoom {
 		const zooms = availableTimelineZooms(this.model.timeline, this.timelineWidth);
 		return zooms.includes(this.timelineZoom) ? this.timelineZoom : defined(zooms[0]);
@@ -2357,7 +2216,6 @@ export class LiveContextViewer implements Component {
 		const timeline = this.model.timeline;
 		this.timelineWidth = width;
 		const zoom = this.effectiveTimelineZoom();
-		// Compact: the chart is a sparkline-style overview, the list below carries the detail.
 		const chartHeight = Math.max(4, Math.min(6, this.pageViewportHeight() - 8));
 		const selection = this.resolveTimelineSelection();
 		const atNow = selection === timeline.markers.length;
@@ -2371,9 +2229,6 @@ export class LiveContextViewer implements Component {
 			selectedMarker: atNow ? undefined : selection,
 			selectedPoint: atNow && newestPoint >= 0 ? newestPoint : undefined,
 			style: {
-				// Grey context, blue edits, white selection; yellow is reserved for the budget.
-				// Theme names (not raw ANSI) so light and custom themes keep working; mdLink is
-				// the one blue that is consistent across Pi's built-in themes.
 				bar: (text) => this.theme.fg("muted", text),
 				editBar: (text) => this.theme.fg(EDIT_COLOR, text),
 				marker: (text) => this.theme.fg(EDIT_COLOR, text),
@@ -2393,16 +2248,12 @@ export class LiveContextViewer implements Component {
 		]
 			.filter(Boolean)
 			.join(" · ");
-		// Physical lines throughout, so the list budget below is exact.
 		const wrap = (line: string) => (line ? wrapTextWithAnsi(line, width) : [""]);
 		const head = [
-			// One title for every zoom; the x label and the help bar say how columns map.
 			this.theme.fg("accent", this.theme.bold("Context size")) + this.theme.fg("muted", ` · ${summary}`),
 			...chart,
 			"",
 		].flatMap(wrap);
-		// Rows are collapsed (▸); the selected row expands (▾) with its details, like the edits page.
-		// Details wrap under their own indent rather than back to the left edge.
 		const details = () =>
 			this.timelineRowDetails(chartOptions, atNow ? undefined : timeline.markers[selection], focusPoint)
 				.flatMap((line) => wrapTextWithAnsi(line, Math.max(10, width - 6)))
@@ -2417,23 +2268,16 @@ export class LiveContextViewer implements Component {
 			];
 		});
 		const nowTime = formatClockTime(latest?.at) ?? "--:--";
-		// Same columns as the marker rows: label, clock time, size under the "before" column.
 		const nowRow = `${atNow ? "› ▾" : "  ▸"} now ${nowTime}  ${latest ? formatTokenCount(latest.tokens).padStart(5) : "no completed requests yet"}`;
 		groups.push([
 			...wrap(atNow ? this.theme.bold(this.theme.fg("text", nowRow)) : this.theme.fg("muted", nowRow)),
 			...(atNow ? details() : []),
 		]);
-		// The chart stays put; the list shows a window around the selected row so the
-		// selection and its details are always on screen, however many edits there are.
 		const budget = this.pageViewportHeight() - reservedAbove - head.length;
 		const more = (count: number, where: "earlier" | "later") => this.theme.fg("dim", `    ⋯ ${count} ${where}`);
 		return [...head, ...windowAroundSelection(groups, selection, budget, more)];
 	}
 
-	/**
-	 * Details of the selected list row: where an edit happened and what it changed, what the
-	 * highlighted chart column covers in fit/turns zoom, and what Enter opens.
-	 */
 	private timelineRowDetails(
 		chartOptions: { width: number; zoom: TimelineZoom; focusPoint: number | undefined },
 		marker: TimelineMarker | undefined,
@@ -2443,8 +2287,6 @@ export class LiveContextViewer implements Component {
 		const layout = timeline.points.length > 0 ? layoutTimeline(timeline, chartOptions) : undefined;
 		const bucket = layout?.buckets[bucketIndexOf(layout, focusPoint)];
 		const bucketed = chartOptions.zoom !== "requests" && bucket !== undefined && bucket.first !== bucket.last;
-		// A bucketed column only adds its time period (and how many edits share it); sizes are
-		// on the chart and in the row.
 		const shared = bucketed && bucket.edits.length > 1 ? `${bucket.edits.length} edits in this column` : undefined;
 		const period = bucketed ? formatBucketSpan(timeline, bucket) : undefined;
 		const span = [period, shared].filter(Boolean).join(" · ") || undefined;

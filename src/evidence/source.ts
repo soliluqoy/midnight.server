@@ -23,7 +23,6 @@ function sensitive(path: string): boolean {
 		);
 }
 
-/** Explicit local reads only. No snapshots or reads outside the project, even through symlinks. */
 export async function readSource(cwd: string, path: string, signal?: AbortSignal) {
 	signal?.throwIfAborted();
 	const root = await realpath(cwd);
@@ -54,7 +53,6 @@ export async function readSource(cwd: string, path: string, signal?: AbortSignal
 		const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 		if (text.includes("\0")) throw new Error("Evidence source must be UTF-8 text, not binary.");
 		signal?.throwIfAborted();
-		// Retain the requested project-relative path so a later symlink retarget is detected.
 		return { path: relative(resolve(cwd), requested), sha256: sha256(bytes), text };
 	} finally {
 		await handle.close();

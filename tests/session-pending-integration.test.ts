@@ -160,7 +160,6 @@ test("refresh coordinator coalesces a burst into one follow-up and awaits it", a
 	});
 	let runs = 0;
 	let reconciles = 0;
-	// Test the real refresh flow with fake UI parts. No terminal or model calls.
 	const panels = Object.assign(Object.create(MidnightPanels.prototype), {
 		disposed: false,
 		pendingRefresh: false,

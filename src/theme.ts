@@ -2,7 +2,6 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 export const MIDNIGHT_THEME = "midnight";
 
-/** Pick a default once; never replace an explicit user, project, or CLI theme. */
 export function applyDefaultTheme(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	if (ctx.mode !== "tui" || pi.getSettings().theme !== undefined || ctx.ui.theme.name !== "system") return;
 	const result = ctx.ui.setTheme(MIDNIGHT_THEME);

@@ -64,7 +64,6 @@ export type AuditResult = Static<typeof AuditResultSchema>;
 export const AUDIT_WARNING =
 	"Advisory selected-claim assessment, not truth verification. Only recorded relationships are considered; unrecorded gaps and external state are not checked. File hashes are bounded observations, not transactional or perpetual freshness. Historical applicability and receipts do not prove current behavior. Audit writes nothing and never clears review. Pagination must be inspected; no findings does not mean the answer is correct.";
 
-/** Pure selection, bounded by the working-set cap. No provenance or lifecycle mutation. */
 export function planAudit(state: WorkingSet, selected: string[]) {
 	const records = new Map(state.records.map(({ record }) => [record.id, record]));
 	const findings: AuditFinding[] = [];
@@ -86,7 +85,6 @@ export function planAudit(state: WorkingSet, selected: string[]) {
 		if (claim.review) add(claimId, claimId, "review_required");
 		if (!claim.refs.length) add(claimId, claimId, "missing_support");
 		const relevant = new Set([claimId, ...claim.refs]);
-		// Follow reverse concern links, including gaps concerning other selected-scope gaps.
 		let grew = true;
 		while (grew) {
 			grew = false;

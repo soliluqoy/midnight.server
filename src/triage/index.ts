@@ -65,7 +65,6 @@ export interface TriageStatus {
 
 export interface TriageDependencies {
 	onUpdate?: (status: TriageStatus | undefined) => void;
-	/** Yield panel input ownership and close previews before opening a native dialog. */
 	beforeDialog?: () => boolean;
 	client?: TriageClient;
 	env?: NodeJS.ProcessEnv;
@@ -73,7 +72,6 @@ export interface TriageDependencies {
 	now?: () => number;
 }
 
-/** Optional helper only: never changes providers, other tool results, or conversation history. */
 export function registerTriage(pi: ExtensionAPI, dependencies: TriageDependencies = {}) {
 	const client = dependencies.client ?? new TriageClient();
 	const env = dependencies.env ?? process.env;
@@ -106,7 +104,6 @@ export function registerTriage(pi: ExtensionAPI, dependencies: TriageDependencie
 		timeoutMs: integerSetting(env, "MIDNIGHT_TRIAGE_TIMEOUT_MS", 15000, 100, 60000),
 	});
 	const setActive = () => {
-		// Local triage is always available; upload consent only controls the optional helper.
 		const active = pi.getActiveTools();
 		if (!active.includes(TOOL_NAME)) pi.setActiveTools([...active, TOOL_NAME]);
 	};
@@ -239,7 +236,6 @@ export function registerTriage(pi: ExtensionAPI, dependencies: TriageDependencie
 				if (model) {
 					data.helperModel = current.model;
 					data.costBasis = "catalog_estimate";
-					// Source/project identity prevents cross-project reuse. Only redacted selection hashes are keys.
 					const cacheKey = JSON.stringify([
 						log.project,
 						log.source,
@@ -262,11 +258,9 @@ export function registerTriage(pi: ExtensionAPI, dependencies: TriageDependencie
 						data.categorySource = "provider";
 						data.summary = cached.summary;
 					} else {
-						// Helper-only configuration must not block no-key local extraction or cached results.
 						const { maxRequests, timeoutMs } = settings();
 						if (current.requests + 1 > maxRequests)
 							throw new Error("Triage request limit reached; use mode local or the original log.");
-						// Reserve before any await. Failures count; local/cache paths do not consume the cap.
 						current.requests += 1;
 						data.mode = "remote";
 						data.reason = args.mode === "remote" ? "remote_requested" : "no_local_match";
@@ -285,7 +279,6 @@ export function registerTriage(pi: ExtensionAPI, dependencies: TriageDependencie
 						data.completeCost = assessment.costKnown;
 						data.completeUsage = Boolean(usage);
 						data.errors = assessment.error ? [assessment.error] : [];
-						// A cancelled/stale call can still have incurred usage, but never publish its diagnosis or cache it.
 						const stale = combined.aborted || current !== state || !current.enabled;
 						if (stale) data.errors.push("Triage result cancelled or session changed; provider output discarded.");
 						else {
@@ -336,7 +329,6 @@ export function registerTriage(pi: ExtensionAPI, dependencies: TriageDependencie
 		state.controller.abort();
 		state = freshState();
 		initialProject ??= ctx.cwd;
-		// Persistent opt-in is user-controlled and applies across projects; the CLI flag remains project-scoped.
 		state.model = env.MIDNIGHT_TRIAGE_MODEL?.trim() ?? "";
 		state.enabled =
 			Boolean(state.model) &&
@@ -407,7 +399,6 @@ export function registerTriage(pi: ExtensionAPI, dependencies: TriageDependencie
 						if (activeDialog === token) activeDialog = undefined;
 					}
 				}
-				// Revalidate after the picker: auth/model availability may have changed while it was open.
 				try {
 					resolveHelper(ctx, selection);
 				} catch (error) {

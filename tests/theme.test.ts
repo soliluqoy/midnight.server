@@ -12,7 +12,6 @@ import {
 	type ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import { loadThemeFromPath } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
-// Validate with the pinned host's parser, not a second copy of the theme schema.
 import { validateThemeJson } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme-schema.js";
 import { applyDefaultTheme, MIDNIGHT_THEME } from "../src/theme.ts";
 
@@ -52,7 +51,6 @@ test("package ships a valid Midnight theme with blue accents and thinking border
 		const [, red, green, blue] = ansi.map(Number);
 		assert.ok(blue > green && green > red, `${token} must stay blue, not purple/pink`);
 	}
-	// Keep warning, error, and diff colors distinct from the blue controls.
 	for (const token of ["success", "warning", "error", "toolDiffAdded", "toolDiffRemoved"] as const) {
 		assert.notEqual(theme.getFgAnsi(token), theme.getFgAnsi("accent"));
 	}

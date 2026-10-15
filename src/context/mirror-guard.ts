@@ -1,18 +1,5 @@
 import { resolve } from "node:path";
 
-/**
- * What a tool call does to the mirror file.
- *
- * - "write": the call mutates the mirror (edit/write tools, or a bash command with an
- *   explicit write indicator). Counted toward the one-write-per-turn limit.
- * - "read": a bash command references the mirror without a recognized write indicator
- *   (header discovery, grep, head). Allowed and never counted, so inspection cannot
- *   consume the write allowance.
- * - "none": the call does not reference the mirror.
- *
- * Bash classification is a heuristic on command text; validation at turn_end remains
- * the correctness boundary regardless of how a mutation was performed.
- */
 export type MirrorToolIntent = "write" | "read" | "none";
 
 const WRITE_INDICATOR =

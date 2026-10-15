@@ -2,7 +2,6 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, stripTerminalSequences, Text } from "@earendil-works/pi-tui";
 import type { RestorePlan } from "./core.ts";
 
-/** All changed paths and exclusions are reviewable, without an editable buffer or filesystem I/O in rendering. */
 export async function reviewRestore(ctx: ExtensionCommandContext, plan: RestorePlan): Promise<boolean> {
 	const clean = (path: string) => stripTerminalSequences(path).replace(/[\r\n\t]/g, " ");
 	const contents = [

@@ -32,7 +32,6 @@ import { SessionAnalysis, sessionEntryCount } from "../src/session-analysis.ts";
 
 const plain = (lines: string[]) => lines.map(stripTerminalSequences).join("\n");
 
-// No terminal is started and no real terminal input/output is used.
 function terminal() {
 	const result = new ProcessTerminal();
 	Object.defineProperties(result, { columns: { value: 160, writable: true }, rows: { value: 40 } });
@@ -109,7 +108,6 @@ test("supported Pi fullscreen tree mounts panels, filters its real footer, and r
 	const mounted = plain(tui.render(160));
 	for (const label of ["sidebar", "explorer", "editor draft", "custom widget", "custom status"])
 		assert.ok(mounted.includes(label), label);
-	// Direct component rendering has no height allocation for the grow-only transcript.
 	assert.match(plain(transcript.render(100)), /transcript/);
 	assert.deepEqual(root.children, originalChildren, "the original fullscreen tree is preserved");
 	const filtered = plain(footer.render(100));
@@ -180,7 +178,6 @@ test("supported Pi exposes guarded entry counts and session analysis avoids repe
 });
 
 test("startup, reload and new mount panels before services without reusing old counters; headless stays untouched", async (t) => {
-	// Reuse the installed TUI without starting a terminal or doing panel filesystem/Git I/O.
 	t.mock.method(MidnightPanels.prototype, "refreshFiles", async () => {});
 	const handlers = new Map<string, ((event: unknown, ctx: ExtensionContext) => unknown)[]>();
 	const commands = new Set<string>();
@@ -252,7 +249,6 @@ test("startup, reload and new mount panels before services without reusing old c
 	t.after(() => emit("session_shutdown", "exit"));
 	for (const reason of ["startup", "reload", "new"]) {
 		manager = SessionManager.inMemory(context.cwd);
-		// Service algorithms have their own real Git/context tests. This checks composition/order.
 		manager.appendCustomEntry("midnight-suite-settings", { version: 1, context: false, checkpoints: false });
 		const previous = mounted;
 		const startup = handlers.get("session_start") ?? [];

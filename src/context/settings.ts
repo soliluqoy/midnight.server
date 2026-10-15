@@ -1,13 +1,3 @@
-/**
- * CLM settings: one table of the knobs the plugin exposes, their defaults (from the
- * environment at load, see `index.ts`), per-session overrides made from the panel or
- * `/clm config`, and how each is shown and parsed.
- *
- * Overrides are saved as a session entry (`pi-clm-settings`), so they are branch-local
- * and survive resume and `/reload` like the projection itself; environment variables
- * remain the defaults for new sessions.
- */
-
 import { basename } from "node:path";
 
 import { DEFAULT_BUDGET_POLICY } from "./budget.ts";
@@ -16,27 +6,21 @@ import { DEFAULT_OBSERVATION_CAP } from "./observation.ts";
 export const CLM_SETTINGS_ENTRY = "pi-clm-settings";
 
 export interface ClmSettings {
-	/** Context budget in tokens; undefined follows the model window. */
 	budget?: number;
 	reserve: number;
-	/** Reminder fractions of the budget; empty disables reminders (including the reserve one). */
 	reminders: number[];
 	guard: "withhold" | "off";
 	compaction: "auto" | "off" | "on";
-	/** Characters kept per tool result; undefined disables the cap. */
 	cap?: number;
 	capHead: number;
-	/** Steering document path; undefined is protocol only. */
 	steering?: string;
 	oneTool: boolean;
 	trailer: boolean;
-	/** `/clm-compact` prompt template path; undefined uses the built-in prompt. */
 	compactPrompt?: string;
 }
 
 export type ClmSettingKey = keyof Omit<ClmSettings, "capHead">;
 
-/** Stored overrides. `null` means "explicitly unset" for optional settings (e.g. budget → model window). */
 export type ClmSettingsOverrides = { [K in keyof ClmSettings]?: ClmSettings[K] | null };
 
 export interface ClmSettingsEntry {
@@ -90,7 +74,6 @@ export function isClmSettingsEntry(value: unknown): value is ClmSettingsEntry {
 const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const isPath = (value: unknown) => value === null || (typeof value === "string" && value.trim() !== "");
 
-/** What each stored override may hold; the same limits the budget, cap and guard resolvers enforce. */
 const VALID_OVERRIDE: Record<keyof ClmSettings, (value: unknown) => boolean> = {
 	budget: (value) => value === null || (isNumber(value) && value > 0),
 	reserve: (value) => isNumber(value) && value >= 0,
@@ -106,10 +89,6 @@ const VALID_OVERRIDE: Record<keyof ClmSettings, (value: unknown) => boolean> = {
 	compactPrompt: isPath,
 };
 
-/**
- * The well-formed part of a stored override set, and the names of anything else (dropped).
- * A session entry from another version or a hand edit must not break session start.
- */
 export function sanitizeOverrides(raw: unknown): { overrides: ClmSettingsOverrides; ignored: string[] } {
 	if (raw === null || typeof raw !== "object" || Array.isArray(raw))
 		return { overrides: {}, ignored: raw == null ? [] : ["overrides"] };
@@ -129,7 +108,6 @@ export function formatTokens(value: number): string {
 	return String(value);
 }
 
-/** `200k`, `1.5m`, `200000`, `200_000`, `200,000`. */
 export function parseTokenCount(text: string): number {
 	const match = text
 		.trim()
@@ -178,14 +156,10 @@ function formatCap(settings: ClmSettings): string {
 export interface ClmSettingDescriptor {
 	key: ClmSettingKey;
 	label: string;
-	/** Shown under the list when selected: what it does, and its environment variable. */
 	description: string;
-	/** Cycle values offered in the panel; absent means the panel asks for text. */
 	choices?: string[];
-	/** Placeholder when the panel asks for text. */
 	placeholder?: string;
 	format(settings: ClmSettings, context: { modelWindow?: number }): string;
-	/** Parse user text into the override for this key (null = unset / follow the default source). */
 	parse(text: string, bundledSteering: string): ClmSettingsOverrides;
 }
 
@@ -252,7 +226,6 @@ export const CLM_SETTINGS: readonly ClmSettingDescriptor[] = [
 		label: "Observation cap",
 		description:
 			'Keep at most this many characters of each tool result in the context (head + tail). The paper used 10k (5k + 5k: "10k:0.5"). Env: PI_CLM_OBSERVATION_CAP.',
-		// Written as formatCap shows them, so the panel's cycle finds the current value.
 		choices: ["off", "5k chars", "10k chars", "20k chars", "50k chars"],
 		format: formatCap,
 		parse: (text) => {
@@ -305,7 +278,6 @@ export const CLM_SETTINGS: readonly ClmSettingDescriptor[] = [
 		label: "Compact prompt",
 		description:
 			'Markdown template /clm-compact sends instead of the built-in prompt; may use {{mirror}} {{current}} {{budget}} {{instructions}}. Type a path, or "default" for the built-in prompt. Env: PI_CLM_COMPACT_PROMPT.',
-		// A text prompt, not a cycle: a custom path is not recoverable once cycled away.
 		placeholder: "path/to/prompt.md, or default",
 		format: (settings) => (settings.compactPrompt ? basename(settings.compactPrompt) : "default"),
 		parse: (text) => {
@@ -334,7 +306,6 @@ const ALIASES: Record<string, ClmSettingKey> = {
 	"compact-prompt": "compactPrompt",
 };
 
-/** Keys users type in `/clm config <key> <value>`. */
 export const CLM_SETTING_COMMAND_KEYS = [
 	"budget",
 	"reserve",
@@ -355,7 +326,6 @@ export function settingDescriptor(name: string): ClmSettingDescriptor | undefine
 	return key ? CLM_SETTINGS.find((item) => item.key === key) : undefined;
 }
 
-/** Keys whose effective value differs from the default. */
 export function changedSettings(base: ClmSettings, effective: ClmSettings): ClmSettingKey[] {
 	return CLM_SETTINGS.filter((item) => {
 		const before = item.format(base, {});

@@ -41,7 +41,6 @@ export function registerSuite(pi: ExtensionAPI, onRestore: (ctx: ExtensionContex
 	let preferences: SuiteSettings = { version: 1, context: true, checkpoints: true };
 	const aliases = new Set<string>();
 	let commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
-	// This runs before either service's startup handler. Public runtime APIs are now bound.
 	const ownership = (_event: unknown, ctx: ExtensionContext) => {
 		preferences = suiteSettings(ctx.sessionManager.getBranch());
 		try {

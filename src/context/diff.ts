@@ -1,16 +1,6 @@
-/**
- * Line and word diffs for the `/clm-view` edits page, plus a side-by-side layout.
- *
- * Pi's own edit diffs use the `diff` package, which is Pi's dependency rather than
- * ours; this module is a small self-contained LCS diff so the plugin keeps only peer
- * dependencies. The rendering is style-injected (no theme import) so it is testable
- * with plain strings and matches Pi's diff colors when given the real theme.
- */
-
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 export interface DiffLine {
-	/** One-based line number in its own text. */
 	line: number;
 	text: string;
 }
@@ -26,13 +16,10 @@ export type SideBySideRow =
 	| { kind: "removed"; left: DiffLine }
 	| { kind: "added"; right: DiffLine }
 	| { kind: "skipped"; count: number }
-	/** Rows cut by `limitRows`; `count` is the number of source lines not shown. */
 	| { kind: "omitted"; count: number };
 
-/** Above this many LCS cells the unmatched middle is treated as one replaced block. */
 const MAX_LINE_CELLS = 1_000_000;
 const MAX_WORD_CELLS = 40_000;
-/** Longer lines are clipped for display (a minified blob would otherwise wrap into thousands of rows). */
 const MAX_LINE_CHARACTERS = 2_000;
 const RESET = "\u001b[0m";
 
@@ -41,10 +28,6 @@ function splitLines(text: string): string[] {
 	return text.replace(/\r\n?/g, "\n").split("\n");
 }
 
-/**
- * Longest-common-subsequence alignment of `a` and `b`, returned as index pairs.
- * Returns undefined when the table would exceed `maxCells`.
- */
 function lcsPairs<T>(a: readonly T[], b: readonly T[], maxCells: number): Array<[number, number]> | undefined {
 	const n = a.length;
 	const m = b.length;
@@ -77,7 +60,6 @@ function lcsPairs<T>(a: readonly T[], b: readonly T[], maxCells: number): Array<
 	return pairs;
 }
 
-/** Line-level diff. Common prefix/suffix are matched first so large bodies with a small edit stay cheap. */
 export function diffLines(before: string, after: string): DiffOp[] {
 	const a = splitLines(before);
 	const b = splitLines(after);
@@ -121,10 +103,6 @@ export function diffLines(before: string, after: string): DiffOp[] {
 	return ops;
 }
 
-/**
- * Pairs removed/added runs into `changed` rows (like `diff -y`) and folds unchanged
- * runs longer than `2 × context` into a `skipped` row. Returns [] when nothing differs.
- */
 export function sideBySideRows(ops: readonly DiffOp[], context = 3): SideBySideRow[] {
 	if (!ops.some((op) => op.kind !== "same")) return [];
 	const paired: SideBySideRow[] = [];
@@ -139,7 +117,6 @@ export function sideBySideRows(ops: readonly DiffOp[], context = 3): SideBySideR
 		const added: DiffLine[] = [];
 		while (index < ops.length && ops[index].kind === "removed") removed.push((ops[index++] as { left: DiffLine }).left);
 		while (index < ops.length && ops[index].kind === "added") added.push((ops[index++] as { right: DiffLine }).right);
-		// Interleaved runs (added before removed) are consumed by the next loop turn.
 		const count = Math.max(removed.length, added.length);
 		for (let k = 0; k < count; k++) {
 			const left = removed[k];
@@ -179,10 +156,6 @@ function rowLineCount(row: SideBySideRow): number {
 	return row.kind === "skipped" || row.kind === "omitted" ? row.count : 1;
 }
 
-/**
- * Keeps at most `maxRows` rows and replaces the rest with one explicit `omitted` row, so
- * a huge replaced block stays cheap to lay out and never reads as "no change".
- */
 export function limitRows(rows: readonly SideBySideRow[], maxRows: number): SideBySideRow[] {
 	if (rows.length <= maxRows) return [...rows];
 	const kept = rows.slice(0, Math.max(0, maxRows));
@@ -210,7 +183,6 @@ function mergeSpans(tokens: readonly string[], changed: readonly boolean[]): Wor
 	return spans;
 }
 
-/** Word-level spans for one changed line pair; everything is marked changed when the lines are too long to align. */
 export function diffWords(before: string, after: string): { left: WordSpan[]; right: WordSpan[] } {
 	const a = tokenize(before);
 	const b = tokenize(after);
@@ -227,7 +199,6 @@ export function diffWords(before: string, after: string): { left: WordSpan[]; ri
 		leftChanged[i] = false;
 		rightChanged[j] = false;
 	}
-	// Whitespace alone is not a meaningful match between two changed words.
 	const unmarkIsolatedSpace = (tokens: string[], changed: boolean[]) => {
 		for (let k = 1; k < tokens.length - 1; k++) {
 			if (!changed[k] && /^\s+$/.test(tokens[k]) && changed[k - 1] && changed[k + 1]) changed[k] = true;
@@ -242,7 +213,6 @@ export interface DiffStyle {
 	context(text: string): string;
 	removed(text: string): string;
 	added(text: string): string;
-	/** Applied inside removed/added for the changed words of a changed pair. */
 	emphasis(text: string): string;
 	lineNumber(text: string): string;
 	muted(text: string): string;
@@ -252,18 +222,15 @@ export interface DiffStyle {
 export interface SideBySideOptions {
 	leftTitle: string;
 	rightTitle: string;
-	/** Shown in the empty column when one side has no text at all. */
 	leftPlaceholder?: string;
 	rightPlaceholder?: string;
 }
 
-/** Below this width the diff is shown unified (one column) instead. */
 export const MIN_SIDE_BY_SIDE_WIDTH = 60;
 
 function sanitize(text: string): string {
-	// Tabs match Pi's diff rendering; other control characters would corrupt the layout.
-	// biome-ignore lint/suspicious/noControlCharactersInRegex: Strip unsafe terminal control characters.
-	const clean = text.replace(/\t/g, "   ").replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "�");
+	const unsafeControls = String.raw`[\u0000-\u0008\u000b-\u001f\u007f]`;
+	const clean = text.replace(/\t/g, "   ").replace(new RegExp(unsafeControls, "g"), "�");
 	return clean.length <= MAX_LINE_CHARACTERS
 		? clean
 		: `${clean.slice(0, MAX_LINE_CHARACTERS)}… (+${clean.length - MAX_LINE_CHARACTERS} chars)`;
@@ -288,7 +255,6 @@ function wrapStyled(text: string, width: number): string[] {
 	if (text === "") return [""];
 	const wrapped = wrapTextWithAnsi(text, width);
 	if (wrapped.length === 0) return [""];
-	// Wrapped pieces carry open styles; close them so padding and the next column stay plain.
 	return text.includes("\u001b[") ? wrapped.map((line) => `${line}${RESET}`) : wrapped;
 }
 
@@ -334,11 +300,6 @@ function lineNumberWidth(rows: readonly SideBySideRow[]): number {
 	return String(max).length;
 }
 
-/**
- * Two columns, each `line-number text`, separated by a marker column:
- * `│` unchanged, `~` changed pair (changed words emphasized), `−` removed, `+` added.
- * Every returned line has visible width ≤ `width`, so callers must not re-wrap it.
- */
 export function renderSideBySide(
 	rows: readonly SideBySideRow[],
 	width: number,
@@ -371,14 +332,12 @@ export function renderSideBySide(
 			continue;
 		}
 		if (row.kind === "omitted") {
-			// Spans both columns: it describes the diff, not one side.
 			lines.push(...wrapStyled(style.title(omittedLabel(row.count)), width));
 			continue;
 		}
 		const sides = rowSides(row, style);
 		const number = (line: number | undefined) =>
 			style.lineNumber(line === undefined ? " ".repeat(gutter) : String(line).padStart(gutter, " "));
-		// Placeholders wrap inside their own column like text, so narrow widths keep the layout.
 		const leftLines = sides.left
 			? wrapStyled(sides.left.text, leftText)
 			: placeholderLeft
@@ -402,7 +361,6 @@ export function renderSideBySide(
 	return lines;
 }
 
-/** One-column fallback for narrow terminals, in Pi's `-`/`+` diff style. */
 export function renderUnified(
 	rows: readonly SideBySideRow[],
 	width: number,

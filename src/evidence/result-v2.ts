@@ -111,8 +111,6 @@ export const PublicEvidenceResultSchema = Type.Union([EvidenceResultV2Schema, Au
 const CommonSchema = Type.Object(common, closed);
 type ResultVariants = Static<typeof EvidenceResultV2Schema>;
 export type EvidenceArchiveResultV2 = Extract<ResultVariants, { action: "archive" }>;
-// Live builders use optional variant fields; every return is checked against the schema.
-// Archive results deliberately omit live metadata: bounded historical reads do not sync live state.
 export type EvidenceLiveResultV2 = Static<typeof CommonSchema> & {
 	action: Exclude<ResultVariants["action"], "archive">;
 	preview?: Extract<ResultVariants, { action: "preview" }>["preview"];

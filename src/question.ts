@@ -33,7 +33,6 @@ const display = (text: string) =>
 		.replace(/\s+/gu, " ")
 		.trim();
 
-/** Native Pi dialogs own the editor and inherit its theme, keybindings, and RPC support. */
 export function registerQuestion(pi: ExtensionAPI, beforeOpen: () => boolean = () => true) {
 	let lifecycle = new AbortController();
 	let active: symbol | undefined;
@@ -133,7 +132,6 @@ export function registerQuestion(pi: ExtensionAPI, beforeOpen: () => boolean = (
 				if (combined.aborted) return result();
 				throw error;
 			} finally {
-				// An old completion must not clear the active flag of a replacement session's question.
 				if (active === token) active = undefined;
 			}
 		},

@@ -9,7 +9,6 @@ export interface GitPathStatus {
 	oldPath?: string;
 	code: string;
 	kind: string;
-	/** Keep Git's file modes and submodule flags to spot changes we cannot show as text. */
 	metadata: string[];
 }
 
@@ -51,7 +50,6 @@ export function runGit(cwd: string, args: string[], signal?: AbortSignal): Promi
 	});
 }
 
-/** Split on zero bytes to keep spaces and newlines in paths, including old rename paths. */
 export function parseGitSnapshot(output: string, prefix = ""): GitSnapshot {
 	const summary: GitStatusSummary = { staged: 0, unstaged: 0, untracked: 0, conflicted: 0, changedFiles: 0 };
 	const snapshot: GitSnapshot = {
@@ -113,7 +111,6 @@ export function parseGitSnapshot(output: string, prefix = ""): GitSnapshot {
 	return snapshot;
 }
 
-/** Get the branch, counts, file marks, and ignored paths with one Git status scan. */
 export async function readGitSnapshot(
 	cwd: string,
 	prefix: string,
@@ -121,7 +118,6 @@ export async function readGitSnapshot(
 ): Promise<GitSnapshot | undefined> {
 	const activeSignal = signal ?? new AbortController().signal;
 	try {
-		// Check the repo root again. Someone may have run git init in a folder inside it.
 		const top = await runGit(cwd, ["rev-parse", "--show-toplevel"], signal);
 		if (top === undefined) return undefined;
 		const root = await realpath(top.replace(/\r?\n$/, ""));
@@ -146,19 +142,15 @@ export async function readGitSnapshot(
 }
 
 export interface GitStatusSummary {
-	/** Commits ahead of or behind the upstream branch. Missing if none is set. */
 	ahead?: number;
 	behind?: number;
 	staged: number;
-	/** Only tracked files count here. */
 	unstaged: number;
 	untracked: number;
 	conflicted: number;
-	/** Count each file once, even if it has both staged and unstaged changes. */
 	changedFiles: number;
 }
 
-/** Skip status lines we do not know. */
 export function parseGitStatusPorcelainV2(output: string): GitStatusSummary {
 	const summary: GitStatusSummary = { staged: 0, unstaged: 0, untracked: 0, conflicted: 0, changedFiles: 0 };
 	for (const line of output.split(/\r?\n/)) {
@@ -186,7 +178,6 @@ export function parseGitStatusPorcelainV2(output: string): GitStatusSummary {
 
 const MAX_STATUS_OUTPUT_BYTES = 4 * 1024 * 1024;
 
-/** Return undefined if Git is missing or fails. */
 export function readGitStatus(repoDir: string, signal?: AbortSignal): Promise<GitStatusSummary | undefined> {
 	return new Promise((resolvePromise) => {
 		execFile(
@@ -207,11 +198,6 @@ export function readGitStatus(repoDir: string, signal?: AbortSignal): Promise<Gi
 	});
 }
 
-/**
- * Cache Git status for one folder. Refresh only when asked.
- * If more requests arrive during a refresh, do one extra refresh after it.
- * Tell listeners only when the summary changes.
- */
 export class GitStatusTracker {
 	private cwd: string;
 	private status: GitStatusSummary | undefined;

@@ -1,11 +1,3 @@
-/**
- * Steering document: the one place where context-management *strategy* may enter the
- * prompt. The harness itself only states the editing protocol; a steering file tells the
- * model when to compact, what to keep, how to structure notes, and so on. It is
- * swappable so experiments can compare "no strategy" against a paper-style brief or an
- * evolved skill, and it is hashed so runs can be attributed to an exact document.
- */
-
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
@@ -14,7 +6,6 @@ export interface SteeringDocument {
 	path: string;
 	name: string;
 	text: string;
-	/** First 12 hex chars of the SHA-256 of the file bytes (matches `sha256sum`). */
 	hash: string;
 }
 
@@ -33,12 +24,10 @@ export function loadSteeringDocument(path: string): SteeringDocument {
 		path: absolute,
 		name: basename(absolute),
 		text,
-		// Hash of the file bytes, so it matches `sha256sum <file>`.
 		hash: createHash("sha256").update(raw).digest("hex").slice(0, 12),
 	};
 }
 
-/** System-prompt section appended after the editing protocol. */
 export function steeringPromptSection(doc: SteeringDocument): string {
 	return `## Context-management guidance (${doc.name})\n\n${doc.text}`;
 }

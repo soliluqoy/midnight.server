@@ -24,10 +24,8 @@ interface Match {
 	recognized: boolean;
 }
 
-/** Deliberately narrow recognizers, not a claim that arbitrary output is fully parsed. */
 function matchDiagnostic(line: string): Match | undefined {
 	const text = line.trim();
-	// Test names are data. A passing test named "handles failures" is not a failure.
 	if (/^(?:[✔✓]|ok\b|# Subtest:)/u.test(text)) return;
 	if (/^(?:#|ℹ)\s+(?:tests|suites|pass|fail|cancelled|skipped|todo|duration_ms)\s+\d/u.test(text)) return;
 	const type = /\berror (TS\d{4,5}):/.exec(text);
@@ -81,7 +79,6 @@ function omissions(selected: LineRange[], total: number): LineRange[] {
 	return result;
 }
 
-/** Pure, bounded local analysis over already redacted lines. No filesystem, commands or provider calls. */
 export function analyzeLog(lines: string[], startLine?: number, maxLines = MAX_LINES): LogAnalysis {
 	const start = startLine === undefined ? 0 : startLine - 1;
 	const end = startLine === undefined ? lines.length : Math.min(lines.length, start + maxLines);
@@ -111,7 +108,6 @@ export function analyzeLog(lines: string[], startLine?: number, maxLines = MAX_L
 			});
 		}
 	}
-	// Keep structured output bounded separately from the uploaded text.
 	const diagnostics: Diagnostic[] = [];
 	let diagnosticBytes = 0;
 	for (const diagnostic of groups.values()) {
@@ -132,12 +128,10 @@ export function analyzeLog(lines: string[], startLine?: number, maxLines = MAX_L
 		return true;
 	};
 	if (startLine !== undefined) {
-		// An explicit window is contiguous and always keeps its requested starting line.
 		for (let index = start; index < end; index++) if (!add(index)) break;
 	} else if (lines.length <= maxLines && Buffer.byteLength(lines.map((_, i) => row(i)).join("\n")) <= MAX_INPUT_BYTES) {
 		for (let index = start; index < end; index++) add(index);
 	} else {
-		// First failure, final status, distinct failures, then their context and a bounded tail.
 		if (diagnostics.length) add(diagnostics[0].firstLine - 1);
 		add(end - 1);
 		for (const diagnostic of diagnostics) add(diagnostic.firstLine - 1);
@@ -145,7 +139,6 @@ export function analyzeLog(lines: string[], startLine?: number, maxLines = MAX_L
 		for (const diagnostic of diagnostics) {
 			for (let delta = -2; delta <= 3; delta++) add(diagnostic.firstLine - 1 + delta);
 		}
-		// Keep repeats in immediate context/tail, but do not fill the remaining budget with them.
 		for (let index = end - 1; index >= start && selected.size < maxLines; index--) {
 			if (!repeats.has(index)) add(index);
 		}
@@ -181,7 +174,6 @@ export function analyzeLog(lines: string[], startLine?: number, maxLines = MAX_L
 		!unrecognized &&
 		groups.size === diagnostics.length &&
 		diagnostics.every((item) => !item.messageTruncated && evidenceIndexes.has(item.firstLine - 1));
-	// Report only observed test totals, never a process exit status or a verified success.
 	const tail = [...evidenceIndexes]
 		.filter((index) => index >= end - 12)
 		.sort((a, b) => a - b)

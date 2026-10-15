@@ -190,7 +190,6 @@ export function registerCheckpoints(
 			}
 		}
 	});
-	// Nested codemode tools are not all surfaced as outer tool_result events by every host path.
 	pi.on("tool_execution_end", (event) => {
 		if (owns() && ["write", "edit", "bash", "powershell", "codemode"].includes(event.toolName)) dirty = true;
 	});

@@ -21,7 +21,6 @@ export interface CallResult {
 	value?: Assessment;
 	error?: string;
 	usage?: Usage;
-	/** Pi catalog-based estimate, not a provider billing receipt. Zero catalog prices are unknown. */
 	costKnown: boolean;
 }
 
@@ -43,7 +42,6 @@ export function addUsage(total: Usage, usage: Usage | undefined): void {
 		total.cost[field] += usage.cost[field];
 }
 
-/** Exact chat model selection. No price heuristics, virtual routing, auth guessing, or main-model fallback. */
 export function resolveHelper(ctx: ExtensionContext, selection: string): Model<Api> {
 	const slash = selection.indexOf("/");
 	if (slash < 1 || slash === selection.length - 1) throw new Error("Choose a helper as provider/model-id.");
@@ -51,7 +49,6 @@ export function resolveHelper(ctx: ExtensionContext, selection: string): Model<A
 	const id = selection.slice(slash + 1);
 	const model = ctx.modelRegistry.getModelOfType("chat", provider, id);
 	if (!model) throw new Error("Selected helper is not a registered chat model. Use /midnight triage models.");
-	// Pi 1.2.0 documents this API ID, but does not publicly export isVirtualModel.
 	if (model.api === "pi-virtual")
 		throw new Error("Choose a physical chat model; virtual helper routing is not allowed.");
 	if (!ctx.modelRegistry.hasConfiguredAuth(model))
@@ -60,7 +57,6 @@ export function resolveHelper(ctx: ExtensionContext, selection: string): Model<A
 }
 
 function validTokens(value: Usage): boolean {
-	// Pi initializes error replies with zero usage; that is not a provider usage receipt.
 	return (
 		Boolean(value) &&
 		value.totalTokens > 0 &&
@@ -76,7 +72,6 @@ function validCost(cost: Usage["cost"]): boolean {
 	);
 }
 
-/** One bounded, provider-neutral request. Never expose raw provider errors or malformed response text. */
 export class TriageClient {
 	async assess(
 		ctx: ExtensionContext,

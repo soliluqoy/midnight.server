@@ -2,7 +2,6 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { Workspace, type WorkspaceIO, type WorkspaceSnapshot } from "./workspace-files.ts";
 
-/** Handle quotes and ~ without a shell or changing the working folder. */
 export function resolveExplorerFolder(input: string, root: string, home = homedir(), paths = path): string {
 	let value = input.trim();
 	if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
@@ -18,17 +17,12 @@ function inside(relative: string, paths = path): boolean {
 	return relative !== ".." && !relative.startsWith(`..${paths.sep}`) && !paths.isAbsolute(relative);
 }
 
-/** Use paths from the project root inside the project, and full paths outside it. */
 export function explorerReference(project: string, root: string, file: string, paths = path): string {
 	const absolute = paths.resolve(root, file);
 	const relative = paths.relative(project, absolute);
 	return inside(relative, paths) ? relative.split(paths.sep).join("/") : absolute;
 }
 
-/**
- * Keep one Git cache for the project and one folder cache for browsing elsewhere.
- * Only read the folder being opened. Do not scan Git in other projects.
- */
 export class ExplorerLocation implements WorkspaceSnapshot {
 	readonly project: Workspace;
 	readonly projectRoot: string;
@@ -105,7 +99,6 @@ export class ExplorerLocation implements WorkspaceSnapshot {
 		if (error) throw new Error(error);
 	}
 
-	/** Use the last folder picked. If it cannot be opened, keep showing the current folder. */
 	async go(input: string): Promise<boolean> {
 		if (this.disposed) return false;
 		const generation = ++this.generation;
@@ -138,7 +131,6 @@ export class ExplorerLocation implements WorkspaceSnapshot {
 		this.rootPath = root;
 		this.changesCache = undefined;
 		this.onChange(true);
-		// Back at the project folder, show the saved list first, then reload it without a Git scan.
 		if (next === this.project) void next.load("", true);
 		return true;
 	}

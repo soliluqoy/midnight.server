@@ -7,7 +7,6 @@ import { PublicEvidenceParams } from "./public-params.ts";
 import { type EvidenceLiveResultV2, PublicEvidenceResultSchema } from "./result-v2.ts";
 import { EvidenceRuntimeV2 } from "./runtime-v2.ts";
 
-/** Live bridge. Only interactive user commands can commit rollover or recover an append lock. */
 export function registerEvidence(
 	pi: ExtensionAPI,
 	onUpdate: (summary: EvidenceDisplaySummary) => void = () => {},
@@ -55,7 +54,6 @@ export function registerEvidence(
 				summary = { ...summary, unavailable: "Evidence check unavailable" };
 				onUpdate(summary);
 			}
-			// Replaced/cancelled work cannot publish. Explicit operations still report failures.
 		}
 	};
 	const start = async (event: { reason?: SessionStartEvent["reason"]; type?: string }, ctx: ExtensionContext) => {
@@ -63,8 +61,6 @@ export function registerEvidence(
 		pendingPreview = undefined;
 		context = ctx;
 		sessionId = ctx.sessionManager.getSessionId();
-		// Only an explicit host new-session event authorizes v3 initialization. Startup,
-		// reload, resume, fork and an empty ledger are not proof of a new session.
 		const freshSession =
 			event.reason === "new" &&
 			ctx.sessionManager

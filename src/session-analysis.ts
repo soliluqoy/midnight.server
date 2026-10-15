@@ -4,7 +4,6 @@ import { sessionTitleUsage } from "./session-title.ts";
 
 type Manager = ExtensionContext["sessionManager"];
 
-/** Pi 1.2.0 can count entries without a scan, but its read-only type leaves this method out. */
 export function sessionEntryCount(manager: Manager): number | undefined {
 	const getter: unknown = Reflect.get(manager, "getEntryCount");
 	if (typeof getter !== "function") return undefined;
@@ -12,7 +11,6 @@ export function sessionEntryCount(manager: Manager): number | undefined {
 	return typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? count : undefined;
 }
 
-/** Read only new entries when they are added. Rebuild after a branch or session change. */
 export class SessionAnalysis {
 	totals = { input: 0, output: 0, cost: 0 };
 	private manager: Manager | undefined;
@@ -42,7 +40,6 @@ export class SessionAnalysis {
 				cursor = entry.parentId;
 			}
 		}
-		// Totals include old branches too, not just the one we are on.
 		const incremental =
 			sameSession &&
 			count !== undefined &&

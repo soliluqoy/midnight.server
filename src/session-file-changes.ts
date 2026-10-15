@@ -3,23 +3,18 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 
 export interface SessionFileEdit {
 	tool: "edit" | "write";
-	/** Use Pi's diff with line numbers before falling back to the patch. */
 	diff?: string;
 	patch?: string;
-	/** Text saved by write, not a before-and-after diff. */
 	content?: string;
 }
 
 export interface SessionFileChange {
-	/** Path from the working folder for files inside it; full path for files outside it. */
 	path: string;
 	added: number;
 	removed: number;
-	/** Successful tool calls in saved order, not the file's current diff. */
 	edits: SessionFileEdit[];
 }
 
-/** Count added and removed lines, not the +++ and --- file headers. */
 export function countPatchLines(patch: string): { added: number; removed: number } {
 	let added = 0;
 	let removed = 0;
@@ -42,18 +37,12 @@ function displayPath(path: string, cwd: string): string {
 		: absolute;
 }
 
-/**
- * List files touched by successful edit/write calls, newest first.
- * Add up line counts from each call. For write, count all lines as added
- * because the old text was not saved.
- */
 export function collectSessionFileChanges(entries: readonly SessionEntry[], cwd: string): SessionFileChange[] {
 	const collector = new SessionFileChanges(cwd);
 	for (const entry of entries) collector.append(entry);
 	return collector.snapshot();
 }
 
-/** Add new entries as they arrive. Start over when the branch changes. */
 export class SessionFileChanges {
 	private readonly cwd: string;
 	private readonly callPaths = new Map<string, { path: string; tool: "edit" | "write"; content?: string }>();

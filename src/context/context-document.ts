@@ -12,8 +12,6 @@ import type {
 } from "./types.ts";
 
 const DOCUMENT_VERSION = 1;
-// Metadata is valid only as the first line. An example copied into a message body must
-// never be mistaken for the active document envelope.
 const META_RE =
 	/^\[\[LIVE_CONTEXT version=(\d+) revision=(\d+) document=([a-f0-9]{64}) baseline=([a-f0-9]{64})\]\](?:\r?\n|$)/;
 
@@ -116,7 +114,6 @@ export function renderMessage(message: LiveContextMessage): string {
 		if (typeof message.summary === "string") parts.push(message.summary);
 	}
 
-	// Legacy/OpenAI-shaped messages are accepted by the pure core as well.
 	const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
 	for (const toolCall of toolCalls) {
 		if (!toolCall || typeof toolCall !== "object") continue;
@@ -141,13 +138,6 @@ function documentId(baselineDigest: string, revision: number): string {
 	return createHash("sha256").update(`pi-live-context:${DOCUMENT_VERSION}:${revision}:${baselineDigest}`).digest("hex");
 }
 
-/**
- * Structural lines inside a body are escaped when the document nonce is stable across
- * renders (CLM mode). With a per-render nonce this was unnecessary: a header the model
- * printed on one call could never match the nonce of the next render. With a per-revision
- * nonce, a `head -5 LIVE_CONTEXT.md` tool result would contain live headers, so they are
- * neutralised with a leading backslash at render time and restored when a body is edited.
- */
 const STRUCTURAL_LINE_RE = /^(\\*)(\[\[(?:CTX_TURN|LIVE_CONTEXT) )/gm;
 
 export function escapeStructuralLines(body: string): string {
@@ -167,12 +157,6 @@ function escapeRegExp(value: string): string {
 export interface RenderContextDocumentOptions {
 	revision?: number;
 	protectedIndexes?: Set<number>;
-	/**
-	 * When set, the document nonce is derived from this seed and the revision instead of
-	 * the rendered baseline, so it stays constant between accepted edits even as new
-	 * messages arrive. Header ids a model reads on one call remain valid on the next.
-	 * Bodies are then escaped so live headers quoted inside tool output stay inert.
-	 */
 	documentSeed?: string;
 }
 
@@ -304,7 +288,6 @@ function toolCallIds(message: LiveContextMessage): Set<string> {
 	return ids;
 }
 
-/** Edited body text as it should enter a message: escaped structural lines restored. */
 function bodyText(body: string, snapshot: ContextDocumentSnapshot): string {
 	return snapshot.stableDocument ? unescapeStructuralLines(body) : body;
 }
@@ -507,9 +490,6 @@ export function applyContextDocument(
 
 	const parsed = parseDocument(editedText, snapshot);
 	const metadataLine = snapshot.text.split("\n")[0] ?? "";
-	// CLM: a file with no current block headers at all is the model replacing its whole
-	// context with free text (the paper's "collapse to a summary" move). Accept it as one
-	// notes block, keeping the first user turn so the task statement survives.
 	if (options.editingMode === "clm" && parsed.blocks.length === 0 && editedText.trim().length > 0) {
 		const body = unescapeStructuralLines(
 			editedText
@@ -543,8 +523,6 @@ export function applyContextDocument(
 				". To edit blocks individually, keep the [[CTX_TURN ...]] headers.",
 		]);
 	}
-	// With a stable document the baseline digest still changes every render (new raw
-	// messages), so only the revision and nonce identify the document the model edited.
 	const baselineMatches = snapshot.stableDocument || parsed.baselineDigest === snapshot.baselineDigest;
 	if (
 		parsed.version !== snapshot.version ||
@@ -593,13 +571,10 @@ export function applyContextDocument(
 	const candidate: LiveContextMessage[] = [];
 	const candidateOrigins: Array<{ sourceIndex?: number; kind: ContextEditSourceKind | "added" }> = [];
 	const removedSourceIndexes = new Set<number>();
-	// Stray text above the first block keeps its written position as a leading note.
 	if (parsed.preamble) {
 		candidate.push(contextNote(bodyText(parsed.preamble, snapshot)));
 		candidateOrigins.push({ kind: "added" });
 	}
-	// Conservative mode retains source order. CLM follows the edited order;
-	// removed originals are still visited for complete provenance/protected restoration.
 	const orderedIds =
 		options.editingMode === "clm"
 			? [

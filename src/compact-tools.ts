@@ -21,11 +21,9 @@ type Args = Record<string, unknown>;
 const STATE = Symbol("midnight.compact");
 const COMMAND_TOOLS = new Set(["bash", "powershell"]);
 const EMPTY: Component = { render: () => [], invalidate() {} };
-// Keep big results from making the first expand slow.
 const MAX_FORMAT_CHARS = 256 * 1024;
 const COMMAND_RESULT_KEYS = new Set(["output", "truncated", "full_output_path", "exit_code", "wall_time_seconds"]);
 
-/** Use one timer. Clear its callbacks when the session changes. */
 class RenderClock {
 	generation = 0;
 	private readonly rows = new Map<CompactRow, () => void>();
@@ -53,7 +51,6 @@ class RenderClock {
 	}
 }
 
-/** Cleanup is safe to call more than once, including after a reload. */
 export function compactToolRenderers(enabled: () => boolean) {
 	const clock = new RenderClock();
 	const resolver = (toolName: string, next: () => ToolRenderers | undefined): ToolRenderers => {
@@ -70,13 +67,11 @@ export function compactToolRenderers(enabled: () => boolean) {
 		};
 		const renderResult: RenderResult = (result, _options, theme, context) => {
 			const component = row(context);
-			// HTML exports can ask for the result before the call.
 			const standalone = !component.matchesCall(context);
 			if (standalone) component.updateCall((context.args ?? {}) as Args, theme, context);
 			component.updateResult(result);
 			return standalone ? component : EMPTY;
 		};
-		// This row draws the call, result, and Pi's usual box when needed.
 		return { renderShell: "self", renderCall, renderResult };
 	};
 	return Object.assign(resolver, { dispose: () => clock.reset() });
@@ -132,7 +127,6 @@ class CompactRow implements Component {
 	updateResult(result: AgentToolResult<unknown>): void {
 		this.result = result;
 		if (this.expandedOutput?.source !== result.content) this.expandedOutput = undefined;
-		// Pi may create a new result object even when its content and details are the same.
 		if (!this.context.isPartial && (result.content !== this.resultContent || result.details !== this.resultDetails)) {
 			this.resultContent = result.content;
 			this.resultDetails = result.details;
@@ -174,7 +168,6 @@ class CompactRow implements Component {
 		if (this.cache?.width === width) return this.cache.lines;
 		const compact = this.compact();
 		const lines = compact ? this.summary(width) : this.renderNormal(width);
-		// Pi already wraps these lines. Only trim lines that are too wide.
 		this.cache = {
 			width,
 			lines: lines.map((line) => (!compact && visibleWidth(line) <= width ? line : truncateToWidth(line, width))),
@@ -202,7 +195,6 @@ class CompactRow implements Component {
 			: context.isError
 				? `failed${this.reason ? ` · ${this.reason}` : ""}`
 				: this.outcome;
-		// Reserve the result before clipping a long path/command, especially on failures.
 		const suffixWidth = Math.max(
 			0,
 			width - visibleWidth(label) - (this.target ? Math.min(12, visibleWidth(this.target)) + 1 : 0) - 3,
@@ -223,7 +215,6 @@ class CompactRow implements Component {
 
 	private displayResult(result: AgentToolResult<unknown>): AgentToolResult<unknown> {
 		if (this.name !== "codemode" || !this.enabled() || !this.context.expanded || this.context.isPartial) return result;
-		// Cache text without colors. Pi can change the result details without changing the text.
 		this.expandedOutput ??= { source: result.content, content: formatCodemodeOutput(result.content) };
 		return this.expandedOutput.content === result.content
 			? result
@@ -263,7 +254,6 @@ class CompactRow implements Component {
 	}
 }
 
-/** Only change the display. Keep headers, images, unknown data, and saved/model results as they are. */
 function formatCodemodeOutput(content: AgentToolResult<unknown>["content"]): AgentToolResult<unknown>["content"] {
 	let budget = MAX_FORMAT_CHARS;
 	let changed = false;
@@ -272,7 +262,6 @@ function formatCodemodeOutput(content: AgentToolResult<unknown>["content"]): Age
 		const text = part.text;
 		budget -= text.length;
 		if (budget < 0 || !text.includes('"output"') || !text.includes('"exit_code"')) return part;
-		// Codemode's text(object) gives us JSON. Leave other text, code, and paths alone.
 		const lines = text.split("\n");
 		let replaced = false;
 		for (let i = 0; i < lines.length; i++) {
@@ -298,7 +287,6 @@ function formatCommandResult(line: string): string | undefined {
 	} catch {
 		return undefined;
 	}
-	// Only format this known JSON shape so no extra fields get lost.
 	if (
 		typeof value.output !== "string" ||
 		typeof value.truncated !== "boolean" ||

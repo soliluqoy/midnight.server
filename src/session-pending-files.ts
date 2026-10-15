@@ -80,7 +80,6 @@ function reason(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-/** -z keeps tabs and newlines in file names, plus both paths for renames. */
 export function parseNumstat(output: string): Map<string, { added: number; removed: number } | undefined> {
 	const result = new Map<string, { added: number; removed: number } | undefined>();
 	if (output && !output.endsWith("\0")) throw new Error("Incomplete Git numstat output.");
@@ -114,7 +113,6 @@ function pathsFor(row: PendingFile): string[] {
 	return [...new Set([row.status?.oldPath, row.status?.path].filter((p): p is string => p !== undefined))];
 }
 
-/** Check current changes with async reads. The caller groups refreshes and shares the project Git scan. */
 export class SessionPendingFiles {
 	private generation = 0;
 	private controller: AbortController | undefined;
@@ -151,7 +149,6 @@ export class SessionPendingFiles {
 		signal?.addEventListener("abort", abort, { once: true });
 		const active = () => !this.disposed && !controller.signal.aborted && generation === this.generation;
 		const io = this.io;
-		// Recheck each file's repo on refresh. A check may have failed, or a new repo may now exist.
 		const owners = new Map<string, Promise<string | undefined>>();
 		const owner = (file: string) => {
 			const parent = path.dirname(file);
@@ -167,20 +164,15 @@ export class SessionPendingFiles {
 				this.snapshot = { generation, rows: [], changedPaths: new Set() };
 				return this.snapshot;
 			}
-			// Keep the real disk path separate from the path shown or added to the prompt.
 			let displayRoot = this.cwd;
 			try {
 				displayRoot = path.dirname(await io.identity(path.join(this.cwd, "__midnight_owner__")));
-			} catch {
-				/* Each file check below reports its own errors. */
-			}
+			} catch {}
 			let projectRoot = project?.root;
 			if (!projectRoot) {
 				try {
 					projectRoot = await owner(path.join(this.cwd, "__midnight_owner__"));
-				} catch {
-					/* Leave the project root unknown if this check fails. */
-				}
+				} catch {}
 			}
 			const repositories = new Map<string, Promise<{ status: GitSnapshot; stamp: string }>>();
 			const repository = (root: string) => {
@@ -189,7 +181,6 @@ export class SessionPendingFiles {
 					task = (async () => {
 						const status = root === projectRoot ? project : await io.status(root, controller.signal);
 						if (!status) throw new Error("Working-project Git status unavailable.");
-						// Git status already checked the repo stamp. Check it again after reading diffs.
 						const stamp = status.repositoryStamp ?? (await io.repositoryStamp(root, controller.signal));
 						return { status, stamp };
 					})();
@@ -231,7 +222,6 @@ export class SessionPendingFiles {
 							continue;
 						}
 						if (!status) {
-							// Git status can succeed even when we cannot read this file. Check before calling it clean.
 							await io.stamp(row.absolute);
 							if (rel === ".git" || rel.startsWith(".git/")) throw new Error("Git metadata — history only.");
 							row.state = "clean";
@@ -256,7 +246,6 @@ export class SessionPendingFiles {
 				}
 			};
 			await Promise.all(Array.from({ length: Math.min(4, rows.length) }, worker));
-			// Group line-count reads by repo and staged/unstaged changes. Keep commands short enough for Windows.
 			for (const root of repositories.keys()) {
 				const tracked = rows.filter(
 					(row) => row.root === root && row.state === "pending" && !row.reason && row.status?.kind !== "?",
@@ -375,7 +364,6 @@ export class SessionPendingFiles {
 		for (const row of rows) if (row.reason) row.added = row.removed = undefined;
 	}
 
-	/** Refresh first. Show current changes, never old saved content. */
 	async preview(row: PendingFile): Promise<SessionDiffSection[]> {
 		const signal = this.controller?.signal;
 		if (!signal || row.generation !== this.snapshot.generation || signal.aborted)

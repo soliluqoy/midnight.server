@@ -10,12 +10,6 @@ function safeSessionId(sessionId: string): string {
 	return safe || "session";
 }
 
-/**
- * Best-effort removal of mirror directories left behind by sessions that never reached
- * shutdown. Live sessions rewrite their mirror every turn, so a directory whose mtime
- * is older than the threshold has no owner. Failures are ignored: another process may
- * remove or own an entry concurrently.
- */
 async function sweepStaleMirrors(parentDirectory: string, keepDirectory: string, maxAgeMs: number): Promise<void> {
 	let names: string[];
 	try {
@@ -32,9 +26,7 @@ async function sweepStaleMirrors(parentDirectory: string, keepDirectory: string,
 			const info = await stat(directory);
 			if (!info.isDirectory() || info.mtimeMs >= cutoff) continue;
 			await rm(directory, { recursive: true, force: true });
-		} catch {
-			// Ignored: sweeping is opportunistic hygiene only.
-		}
+		} catch {}
 	}
 }
 

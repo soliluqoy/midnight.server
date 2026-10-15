@@ -28,7 +28,6 @@ export function browserArguments(server: string, endpoint: string): string[] {
 		"--redact-network-headers",
 	];
 }
-/** Browser access is integrated, not automatic. Never start Chrome or use a personal profile implicitly. */
 export function registerBrowser(pi: ExtensionAPI) {
 	let registered = false;
 	let pending = false;
@@ -68,7 +67,6 @@ export function registerBrowser(pi: ExtensionAPI) {
 		const epoch = generation;
 		try {
 			const url = browserEndpoint(endpoint);
-			// Resolve the installed optional dependency without executing it or downloading anything here.
 			const server = join(
 				dirname(createRequire(import.meta.url).resolve("chrome-devtools-mcp/package.json")),
 				"build",

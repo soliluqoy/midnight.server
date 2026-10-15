@@ -1,29 +1,13 @@
-/**
- * Observation cap: bound the size of each tool result in the *effective* context.
- *
- * One assistant turn can fan out into many parallel tool calls whose results land in the
- * context together, before any turn-boundary reminder can be acted on. Capping each
- * result in the effective context (not in raw history) keeps such a turn from jumping
- * straight past the budget. The full output stays in Pi's session; the marker tells the
- * model how much was cut and that it can re-read with offset/limit when it needs more.
- *
- * Capped messages are cached per source object so repeated context calls produce the
- * same object, which keeps identity-based comparisons and rendering stable.
- */
-
 import { defined } from "./defined.ts";
 import type { LiveContextMessage } from "./types.ts";
 
 export interface ObservationCapPolicy {
-	/** Maximum characters of text kept per tool result. `undefined` disables the cap. */
 	maxCharacters?: number;
-	/** Fraction of the kept text taken from the start; the rest comes from the end. */
 	headFraction: number;
 }
 
 export const DEFAULT_OBSERVATION_CAP: ObservationCapPolicy = { headFraction: 0.8 };
 
-/** `PI_CLM_OBSERVATION_CAP=10000` or `10000:0.5` (characters[:head fraction]); the paper used 5k+5k, i.e. `10000:0.5`. */
 export function observationCapFromEnv(env: NodeJS.ProcessEnv = process.env): Partial<ObservationCapPolicy> {
 	const raw = env.PI_CLM_OBSERVATION_CAP?.trim();
 	if (!raw || raw === "off" || raw === "0") return {};
@@ -76,7 +60,6 @@ export function truncationMarker(shown: number, total: number): string {
 	);
 }
 
-/** Cap one tool result. Returns the same object when nothing changes. */
 export function capToolResult(message: LiveContextMessage, policy: ObservationCapPolicy): LiveContextMessage {
 	if (policy.maxCharacters === undefined || message.role !== "toolResult") return message;
 	const content = message.content;
@@ -91,8 +74,6 @@ export function capToolResult(message: LiveContextMessage, policy: ObservationCa
 	let remaining = policy.maxCharacters;
 	const headBudget = Math.floor(policy.maxCharacters * policy.headFraction);
 	const tailBudget = policy.maxCharacters - headBudget;
-	// Gather all text, cut once across the concatenation, then rebuild a single text part
-	// (plus any non-text parts, e.g. images, preserved in order after it).
 	const text = parts
 		.filter(isTextPart)
 		.map((part) => part.text)
@@ -114,7 +95,6 @@ export function capToolResult(message: LiveContextMessage, policy: ObservationCa
 
 const cappedCache = new WeakMap<LiveContextMessage, Map<number, LiveContextMessage>>();
 
-/** Cap every tool result in `messages`; unchanged messages are returned as-is. */
 export function capObservations(messages: LiveContextMessage[], policy: ObservationCapPolicy): LiveContextMessage[] {
 	if (policy.maxCharacters === undefined) return messages;
 	let changed = false;

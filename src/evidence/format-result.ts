@@ -2,13 +2,11 @@ import { Value } from "typebox/value";
 import { AuditResultSchema } from "./audit.ts";
 import { EvidenceResultV2Schema } from "./result-v2.ts";
 
-/** Presentation only: never replay history, read sources, or mutate saved results. */
 export function formatEvidenceResult(details: unknown): string | undefined {
 	if (!details || typeof details !== "object") return undefined;
 	if (Value.Check(AuditResultSchema, details))
 		return `advisory audit · ${details.available ? `${details.total} findings` : "unavailable"}${details.nextOffset !== null ? " · more" : ""} · not verified`;
 	const data = details as Record<string, unknown>;
-	// Preserve the original saved-v1 summary contract, including partial legacy details.
 	if (data.version === 1 && data.summary && typeof data.summary === "object") {
 		const { review, gaps } = data.summary as Record<string, unknown>;
 		if (validCount(review) && validCount(gaps)) return `${review} review · ${gaps} gaps`;

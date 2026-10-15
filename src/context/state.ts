@@ -128,11 +128,6 @@ export function reconstructLiveContextHistory(entries: SessionEntryLike[]): Live
 		.filter(isLiveContextState);
 }
 
-/**
- * Persist-safe copy of the state without the checkpoint payload. Outcomes that do not
- * change the active checkpoint (rejections, on/off toggles) append this slim form so a
- * session file does not accumulate one full projected-transcript copy per outcome.
- */
 export function toOutcomeEntry(state: LiveContextState): LiveContextState {
 	const entry: LiveContextState = {
 		version: 1,
@@ -144,13 +139,6 @@ export function toOutcomeEntry(state: LiveContextState): LiveContextState {
 	return entry;
 }
 
-/**
- * The branch already encodes Pi's active tree path, so the latest valid entry wins.
- * Checkpoint-neutral entries omit the checkpoint payload; the active checkpoint is the
- * newest persisted one whose revision equals the current revision. Acceptance writes
- * both with the same revision and a reset advances the revision past it, so a revision
- * mismatch on the newest stored checkpoint means no checkpoint is active.
- */
 export function reconstructLiveContextState(entries: SessionEntryLike[]): LiveContextState {
 	let latest: LiveContextState | undefined;
 	for (let index = entries.length - 1; index >= 0; index--) {

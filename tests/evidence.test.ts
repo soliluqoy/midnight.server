@@ -207,8 +207,6 @@ test("references, supersession, malformed persistence and gap resolution are val
 	);
 });
 
-// Phase 0 characterization: recovery is deliberately not implemented by these tests.
-// Phase 1 must add recovery assertions without weakening rejection/non-mutation guarantees.
 test("v1 capacity includes inactive history and rejects corrections without partially replacing records", () => {
 	const ledger = new EvidenceLedger();
 	assert.ok(add(ledger, record("source")));

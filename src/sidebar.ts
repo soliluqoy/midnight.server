@@ -124,7 +124,6 @@ export class Sidebar implements Component {
 
 	render(width: number): string[] {
 		const ctx = this.context();
-		// message_end happens before saving. Check for saves here, then update totals outside render.
 		if (!this.disposed && this.needsRefresh(ctx) && !this.refreshQueued) {
 			this.refreshQueued = true;
 			queueMicrotask(() => {
@@ -180,7 +179,6 @@ export class Sidebar implements Component {
 				const status = this.git.changedFiles ? `${this.git.changedFiles} changed` : "clean";
 				const staged = this.git.staged ? ` · ${this.git.staged} staged` : "";
 				line(theme.fg("muted", status + staged));
-				// Conflicts get their own row so a long status can never hide them.
 				if (this.git.conflicted) line(theme.fg("error", `${this.git.conflicted} conflicted`));
 				if (this.git.ahead || this.git.behind)
 					pair(theme.fg("dim", "sync"), theme.fg("muted", `↑${this.git.ahead ?? 0} ↓${this.git.behind ?? 0}`));

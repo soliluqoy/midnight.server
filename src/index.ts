@@ -149,7 +149,6 @@ export class MidnightPanels {
 		this.tui.requestRender();
 	}
 
-	/** Check for /settings display changes when Pi draws, not on a timer. */
 	render(): string[] {
 		if (this.layoutCheckQueued || this.disposed) return [];
 		this.layoutCheckQueued = true;
@@ -195,7 +194,6 @@ export class MidnightPanels {
 		this.tui.requestRender();
 	}
 
-	/** Close previews before Pi's native question/helper dialog takes ownership of the editor. */
 	prepareQuestion(): boolean {
 		if (this.disposed || this.folderDialogOpen || this.modelDialogOpen || this.projectSwitchActive()) return false;
 		this.previewGeneration++;
@@ -205,7 +203,6 @@ export class MidnightPanels {
 		return true;
 	}
 
-	/** Browsing only changes the shown folder. Use a Pi command to switch projects. */
 	async browseFolder(input?: string): Promise<void> {
 		if (this.disposed || this.folderDialogOpen || this.projectSwitchActive() || !this.supported()) return;
 		const restoreFocus = this.explorer.focused;
@@ -243,8 +240,6 @@ export class MidnightPanels {
 		if (!input?.trim()) return;
 		if (switchProject) {
 			this.exitExplorer();
-			// Pi handles this command before sending anything to the model.
-			// Switch through the command, not from a key handler or by faking typing.
 			this.pi.sendUserMessage(`/midnight project ${resolveExplorerFolder(input, this.workspace.root)}`, {
 				expandPromptTemplates: true,
 			});
@@ -442,8 +437,6 @@ export default function midnight(pi: ExtensionAPI): void {
 	let compactTools = true;
 	const toolRenderers = compactToolRenderers(() => compactTools);
 	pi.registerToolRenderer(toolRenderers);
-	// Mount the UI before awaited service initialization. Keep those handlers awaited so
-	// startup captures still finish before Pi accepts work; do not background checkpoint safety.
 	pi.on("session_start", (_event, ctx) => {
 		starting = true;
 		projectSwitcher.dispose();
@@ -463,12 +456,10 @@ export default function midnight(pi: ExtensionAPI): void {
 				() => projectSwitcher.active,
 				() => starting || question.active || triage.active || evidence.active,
 			);
-			// Do not show the previous session's ledger or helper counters while services load.
 			panels.updateEvidence({ ...new EvidenceLedger().summary(), unavailable: "Loading evidence" });
 			return panels;
 		});
 	});
-	// Context still owns our earliest transforms; restore refreshes normal evidence and panels.
 	const suite = registerSuite(pi, async (ctx) => {
 		panels?.update(ctx, true);
 		await panels?.refreshFiles();
@@ -491,8 +482,6 @@ export default function midnight(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		starting = false;
-		// Services can append entries during initialization. Refresh analysis afterward and
-		// leave optional title requests at their original, post-initialization boundary.
 		panels?.update(ctx, true);
 		title = new SessionTitle(pi, ctx, (context) => panels?.update(context, true));
 		void title.update(ctx);
@@ -557,7 +546,6 @@ export default function midnight(pi: ExtensionAPI): void {
 			}
 			if (panel === "compact" && (mode === "on" || mode === "off")) {
 				compactTools = mode === "on";
-				// Setting the same value makes Pi redraw the tool rows.
 				ctx.ui.setToolsExpanded(ctx.ui.getToolsExpanded());
 				ctx.ui.notify(`Compact tool output ${compactTools ? "enabled" : "disabled"}.`, "info");
 				return;

@@ -7,7 +7,6 @@ export interface SessionDiffSection {
 	message?: string;
 }
 
-/** Limit how much text Pi has to compare word by word. */
 const MAX_DIFF_BYTES = 1024 * 1024;
 const MAX_DIFF_LINES = 20_000;
 
@@ -17,7 +16,6 @@ function clean(text: string): string {
 		.replace(/\p{Cc}/gu, (char) => (char === "\n" || char === "\t" ? char : ""));
 }
 
-/** Older results may only have a patch. Add line numbers for Pi's diff display. */
 export function patchToDisplayDiff(patch: string): string {
 	let oldLine = 0;
 	let newLine = 0;
@@ -43,7 +41,6 @@ export function patchToDisplayDiff(patch: string): string {
 	return lines.join("\n");
 }
 
-/** Show saved tool changes from this branch, not a diff against disk or Git. */
 export function sessionDiffSections(change: SessionFileChange): SessionDiffSection[] {
 	let bytesLeft = MAX_DIFF_BYTES;
 	let linesLeft = MAX_DIFF_LINES;

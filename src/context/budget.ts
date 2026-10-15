@@ -1,34 +1,8 @@
-/**
- * Budget and reminder policy for CLM mode.
- *
- * Two measurements are deliberately kept apart and always labelled:
- *
- * - `estimated`: the harness's provider-independent estimate of the *next* request
- *   (system prompt + effective messages + notices). Available before every call.
- * - `observed`: the provider-reported input size of the *previous* request, as Pi
- *   exposes it through `ctx.getContextUsage()`. Authoritative but one call late.
- *
- * Reminder tiers fire on whichever of the two is larger, so an underestimating
- * estimator cannot silence a reminder the provider already justified. The text always
- * states both numbers and the budget so the model has absolute length awareness rather
- * than only a percentage.
- *
- * This module never rolls back turns and never re-executes tools; it only decides when
- * to speak and what to say.
- */
-
 import { defined } from "./defined.ts";
 export interface BudgetPolicyConfig {
-	/**
-	 * Context budget in tokens the reminders are measured against. Advisory: requests are
-	 * never blocked or rolled back. Defaults to the model context window when omitted.
-	 */
 	contextBudget?: number;
-	/** Generation headroom reserved below the budget. The final reminder fires at budget - reserve. */
 	reserve: number;
-	/** Fractions of the budget at which escalating reminders fire (0 < f < 1), ascending. */
 	remindAtFractions: readonly number[];
-	/** Whether to fire the final "budget - reserve" reminder. */
 	remindAtReserve: boolean;
 }
 
@@ -39,28 +13,16 @@ export const DEFAULT_BUDGET_POLICY: BudgetPolicyConfig = {
 };
 
 export interface BudgetReading {
-	/** Effective budget in tokens (config or model window). */
 	budget: number;
 	reserve: number;
-	/** Harness estimate of the next request in tokens (system prompt, messages, notices). */
 	estimated: number;
-	/** What the estimate knowingly leaves out, named in the notice so the gap is not misread. */
 	estimateExcludes?: string;
-	/** Calibration factor applied to the raw character estimate (1 = none). */
 	calibration?: number;
-	/** Provider-reported tokens of the previous request, when known. */
 	observed?: number;
-	/**
-	 * True when a context edit was accepted after the observed request, so `observed`
-	 * describes a context that no longer exists. A stale observation is still shown but
-	 * never governs reminders, otherwise a successful compaction would trigger a reminder.
-	 */
 	observedStale?: boolean;
-	/** Where `budget` came from, for status text. */
 	source: "config" | "model-window";
 }
 
-/** A reminder threshold in absolute tokens plus a stable label for re-arming. */
 export interface BudgetTier {
 	label: string;
 	tokens: number;
@@ -84,8 +46,6 @@ export function resolveBudgetPolicy(overrides: Partial<BudgetPolicyConfig> | und
 	return { ...merged, remindAtFractions: fractions };
 }
 
-/** Read `PI_CLM_BUDGET` / `PI_CLM_RESERVE` / `PI_CLM_REMIND_AT` (comma-separated fractions). */
-/** Optional prior for the estimator calibration, e.g. 1.5 for data that tokenizes densely. */
 export function estimateFactorFromEnv(env: NodeJS.ProcessEnv = process.env): number | undefined {
 	const raw = env.PI_CLM_ESTIMATE_FACTOR?.trim();
 	if (!raw) return undefined;
@@ -143,21 +103,14 @@ export function budgetTiers(policy: BudgetPolicyConfig, budget: number, reserve:
 		tiers.push({ label: "budget-reserve", tokens: budget - reserve });
 	}
 	tiers.sort((left, right) => left.tokens - right.tokens);
-	// Drop tiers that collapse onto the same token count; keep the more urgent label.
 	return tiers.filter((tier, index) => index === tiers.length - 1 || tier.tokens !== tiers[index + 1]?.tokens);
 }
 
-/** The value reminders are judged against: the larger of the two labelled measurements. */
 export function governingTokens(reading: Pick<BudgetReading, "estimated" | "observed" | "observedStale">): number {
 	if (reading.observedStale) return reading.estimated;
 	return Math.max(reading.estimated, reading.observed ?? 0);
 }
 
-/**
- * Escalating, re-arming tier tracker over absolute token thresholds. Mirrors the
- * behaviour of the percentage-based PressureTracker but speaks in tokens against a
- * configurable budget, and re-derives tiers when the budget changes.
- */
 export class BudgetTracker {
 	private fired = new Set<string>();
 	private tierKey = "";
@@ -166,7 +119,6 @@ export class BudgetTracker {
 		this.fired.clear();
 	}
 
-	/** Returns the highest newly crossed tier, or undefined when nothing new fired. */
 	observe(reading: BudgetReading, tiers: readonly BudgetTier[]): BudgetTier | undefined {
 		const key = tiers.map((tier) => `${tier.label}:${tier.tokens}`).join("|");
 		if (key !== this.tierKey) {
@@ -192,7 +144,6 @@ function formatTokens(value: number): string {
 	return value.toLocaleString("en-US");
 }
 
-/** One line for status/footer: `budget 32,000 tok (config) · est 12,345 · obs 11,900`. */
 export function budgetSummaryLine(reading: BudgetReading): string {
 	const parts = [
 		`budget ${formatTokens(reading.budget)} tok (${reading.source === "config" ? "configured" : "model window"}, reserve ${formatTokens(reading.reserve)})`,
@@ -206,7 +157,6 @@ export function budgetSummaryLine(reading: BudgetReading): string {
 	return parts.join(" · ");
 }
 
-/** The model-facing reminder. Always states both measurements, the budget, and what happens at overflow. */
 export function budgetNoticeText(reading: BudgetReading, tier: BudgetTier, mirrorPath: string | undefined): string {
 	const governing = governingTokens(reading);
 	const remaining = Math.max(0, reading.budget - governing);
@@ -233,15 +183,6 @@ export function budgetNoticeText(reading: BudgetReading, tier: BudgetTier, mirro
 	);
 }
 
-/**
- * Runtime calibration of the character-based estimator against the provider's own counts.
- *
- * chars/4 is a poor model for many inputs (random strings, code, non-English text tokenize
- * at 2–3 chars per token). Each request we send has an estimate; when the provider reports
- * the actual size of that request, the ratio updates a factor that scales future estimates.
- * The factor never drops below 1 (we only correct undercounting) and is capped to avoid
- * runaway from a single odd sample.
- */
 export class EstimateCalibrator {
 	private pending: { estimate: number; rawCount: number } | undefined;
 	private current = 1;
@@ -268,16 +209,10 @@ export class EstimateCalibrator {
 		this.samples = 0;
 	}
 
-	/** Remember the raw (uncalibrated) estimate of the request about to be sent. */
 	record(estimate: number, rawCount: number): void {
 		if (estimate > 0) this.pending = { estimate, rawCount };
 	}
 
-	/**
-	 * Feed the newest provider-reported request size. `index` is the position of the
-	 * reporting assistant message in the raw transcript; only a message appended after the
-	 * recorded request counts as its measurement.
-	 */
 	observe(observed: { tokens: number; index: number } | undefined): number {
 		if (!observed || !this.pending || observed.index < this.pending.rawCount) return this.current;
 		const sample = observed.tokens / this.pending.estimate;

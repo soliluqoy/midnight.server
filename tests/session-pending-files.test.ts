@@ -101,7 +101,6 @@ test("staged/unstaged layers, including compensating changes and stable M codes"
 	assert.equal(row.added, 4);
 	sections = await reader.preview(row);
 	assert.match(sections[1].diff ?? "", /three/);
-	// If the file changes again, do not show a new diff with old line counts.
 	await writeFile(path.join(root, "file.txt"), "changed again\n");
 	assert.match((await reader.preview(row))[0].message ?? "", /Changed during preview/);
 });

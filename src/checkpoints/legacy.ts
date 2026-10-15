@@ -17,7 +17,6 @@ export interface LegacyCheckpoint {
 	snapshot: Checkpoint;
 }
 const text = async (root: string, args: string[]) => (await git(root, args)).toString("utf8").trim();
-/** Read the 0.5.0 commit-message format. Never execute the old reset/clean restore path. */
 export async function readLegacyCheckpoint(root: string, ref: string): Promise<LegacyCheckpoint> {
 	if (!/^refs\/pi-checkpoints\/[\w-]+$/.test(ref)) throw new Error("Invalid legacy reference.");
 	const raw = (await git(root, ["cat-file", "commit", ref])).toString("utf8");

@@ -193,7 +193,6 @@ test("fresh-session v3 is live across source checks, relationships, rollover, ar
 	}
 	const digest = projectionDigest(cold.state);
 	assert.equal(projectionDigest(replayEvidenceBranch(h.manager).state), digest);
-	// Pi flushes persistent sessions after an assistant message; these are synthetic, no provider call.
 	h.manager.appendMessage({
 		role: "assistant",
 		content: [{ type: "text", text: "Recorded" }],
@@ -223,7 +222,6 @@ test("fresh-session v3 is live across source checks, relationships, rollover, ar
 			.filter((e) => e.type === "custom")
 			.every((e) => e.customType === SEMANTIC_ENTRY_TYPE),
 	);
-	// v2 writes must not enter a v3 ancestry, even if structurally valid v2 events.
 	h.manager.appendCustomEntry("midnight-evidence-v2", {
 		version: 2,
 		action: "update",

@@ -76,9 +76,9 @@ function explorerHarness(inputBlocked: () => boolean = () => false) {
 		onPreview: (file) => previewed.push(file),
 	});
 	explorer.setSnapshot(snapshot);
-	explorer.render(32); // Choose the first non-parent row.
-	explorer.handleInput("\x1b[C"); // Expand src.
-	explorer.handleInput("\x1b[B"); // Select theme.ts.
+	explorer.render(32);
+	explorer.handleInput("\x1b[C");
+	explorer.handleInput("\x1b[B");
 	return {
 		explorer,
 		opened,

@@ -9,7 +9,6 @@ export type ServiceOwner = "pending" | "native" | "external" | "disabled" | "una
 type Command = Omit<RegisteredCommand, "name" | "sourceInfo">;
 type Handler = (...args: unknown[]) => unknown;
 
-/** Host inspection methods are unavailable during extension factory execution. */
 export function externalContextPresent(commands: readonly string[], tools: readonly string[]): boolean {
 	return (
 		commands.some((name) => name === "clm" || name === "live-context") ||
@@ -17,7 +16,6 @@ export function externalContextPresent(commands: readonly string[], tools: reado
 	);
 }
 
-/** A deliberately narrow adapter: preserve host event results and unsubscribe handles. */
 export function ownedAPI(pi: ExtensionAPI, owns: () => boolean, commands: Map<string, Command>): ExtensionAPI {
 	return new Proxy(pi, {
 		get(target, key) {
@@ -25,7 +23,6 @@ export function ownedAPI(pi: ExtensionAPI, owns: () => boolean, commands: Map<st
 				const register = target.on as unknown as (event: string, handler: Handler) => () => void;
 				return (event: string, handler: Handler) =>
 					register(event, (...args) => {
-						// Cleanup must run even if ownership was relinquished during a session switch.
 						if (event === "session_shutdown" || owns()) return handler(...args);
 						return undefined;
 					});

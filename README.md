@@ -151,7 +151,7 @@ Unverifiable paths appear under **RECORDED FILES** as history only. Their previe
 
 ### Explorer and project switching
 
-Explorer includes hidden and ignored files, loads folders only when expanded, and supports read-only previews. Binary files and files larger than 1 MiB show an explanation instead of a preview.
+Explorer includes hidden and ignored files, loads folders only when expanded, and supports read-only previews. Files larger than 1 MiB, files containing NUL bytes anywhere in the bounded preview buffer, and invalid UTF-8 show an explanation instead of a preview. This is a binary-content heuristic, not detection of every binary format; legacy non-UTF-8 text is not previewed.
 
 Use **Alt+E → Alt+G** to browse the parent, project, home, or an entered folder. The `..` row also opens the parent. Relative paths resolve from the current Explorer location; quotes, spaces, `~`, other drives, and accessible network shares are supported.
 

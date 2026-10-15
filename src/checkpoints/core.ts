@@ -1,6 +1,3 @@
-/** Git-backed snapshots derived from pi-rewind; see licenses/pi-rewind.txt.
- * Native restores are path-scoped: never reset HEAD, clean a worktree, or replace unrelated index entries.
- */
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants, type Stats } from "node:fs";
@@ -63,10 +60,8 @@ export interface CaptureOptions {
 	trigger?: Checkpoint["trigger"];
 	scope?: readonly string[];
 	previous?: StoredCheckpoint;
-	/** Reuse an unchanged ordinary snapshot before writing commits or refs; recovery backups are always fresh. */
 	deduplicate?: boolean;
 	signal?: AbortSignal;
-	/** Exact failure-journal fingerprint, supplied only after an explicit recovery preview. */
 	recovery?: string;
 }
 
@@ -198,7 +193,6 @@ async function tree(root: string, sha: string): Promise<Map<string, TreeEntry>> 
 	}
 	return entries;
 }
-/** Validate every existing parent without following a symlink outside the worktree. */
 async function filePath(root: string, path: string): Promise<string> {
 	if (!safePath(path)) throw new Error(`Unsafe checkpoint path: ${JSON.stringify(path)}`);
 	let parent = root;
@@ -424,7 +418,6 @@ async function captureUnlocked(root: string, options: CaptureOptions): Promise<S
 			JSON.stringify(previous.covered) === JSON.stringify(cp.covered) &&
 			JSON.stringify(previous.excluded) === JSON.stringify(cp.excluded)
 		) {
-			// A retained in-memory snapshot is not proof that its ref still exists.
 			const commit = await text(root, ["rev-parse", "--verify", "--quiet", previous.ref], options.signal).catch(
 				(error: unknown) => {
 					if (error instanceof CheckpointGitError && error.exitCode === 1) return null;
@@ -448,7 +441,6 @@ async function persistCheckpoint(root: string, cp: Checkpoint, signal?: AbortSig
 		GIT_COMMITTER_NAME: "Midnight",
 		GIT_COMMITTER_EMAIL: "checkpoint@midnight.local",
 	};
-	// Metadata alone is not a reachability edge: retain the staged tree as a real parent commit.
 	const indexCommit = (
 		await git(root, ["commit-tree", cp.indexTree], {
 			input: "Midnight staged snapshot",
@@ -471,7 +463,6 @@ async function persistCheckpoint(root: string, cp: Checkpoint, signal?: AbortSig
 	await git(root, ["update-ref", ref, commit], { signal: signal });
 	return { ...cp, ref, commit };
 }
-/** Explicit migration writes only native refs; source refs and the real index are untouched. */
 export async function storeImportedCheckpoint(root: string, cp: Checkpoint): Promise<StoredCheckpoint> {
 	return lock(root, () => persistCheckpoint(root, cp));
 }
@@ -509,7 +500,6 @@ function validCheckpoint(value: unknown): value is Checkpoint {
 		cp.excluded.every((e) => e && typeof e.path === "string" && typeof e.reason === "string")
 	);
 }
-/** Call-local batching only: a restore always reloads and validates its target, never trusts a listing cache. */
 export async function loadCheckpoints(
 	root: string,
 	refs: readonly string[],
@@ -522,7 +512,6 @@ export async function loadCheckpoints(
 		if (/^refs\/midnight\/checkpoints\/[a-f0-9]{24}\/[a-f0-9-]{36}$/.test(ref)) valid.push(ref);
 		else result.set(ref, new Error("Invalid checkpoint reference."));
 	}
-	// Eight maximum-size metadata records fit below git()'s 16 MiB output bound.
 	for (let start = 0; start < valid.length; start += 8) {
 		const batch = valid.slice(start, start + 8);
 		const raw = await git(root, ["cat-file", "--batch"], { input: `${batch.join("\n")}\n`, signal });
@@ -564,7 +553,6 @@ export async function loadCheckpoints(
 		}
 		if (offset !== raw.length) throw new Error("Unexpected checkpoint batch data.");
 		if (!pending.length) continue;
-		// Validate both real trees and the staged tree's reachability through the first parent.
 		const queries = pending.flatMap(({ cp, parent }) => [cp.worktreeTree, cp.indexTree, `${parent}^{tree}`]);
 		const checked = (
 			await git(root, ["cat-file", "--batch-check=%(objectname) %(objecttype)"], {
@@ -650,7 +638,6 @@ export async function prepareRestore(
 	if (paths.length > MAX_PATHS || paths.some((path) => exclusion(path))) throw new Error("Unsafe restore scope.");
 	const covered = new Set(cp.covered);
 	const excluded = cp.excluded.map((entry) => entry.path);
-	// A path absent from an earlier snapshot can only be deleted if explicitly observed in this session's scope.
 	if (paths.some((path) => excluded.some((entry) => path === entry || path.startsWith(`${entry}/`))))
 		throw new Error("Restore includes an uncaptured path; incomplete coverage cannot be treated as clean.");
 	const wt = await tree(root, cp.worktreeTree);
@@ -689,7 +676,6 @@ export interface RestoreRecovery {
 	paths: string[];
 	fingerprint: string;
 }
-/** A leftover journal is never silently discarded or executed. */
 export async function readRestoreRecovery(root: string): Promise<RestoreRecovery | null> {
 	const path = await gitPath(root, "midnight-restore.json");
 	let handle: Awaited<ReturnType<typeof open>>;
@@ -728,7 +714,6 @@ export async function readRestoreRecovery(root: string): Promise<RestoreRecovery
 	}
 }
 
-/** Requires a previously confirmed, unchanged plan. Backup and a failure journal precede every disk change. */
 export async function restoreCheckpoint(
 	root: string,
 	plan: RestorePlan,
@@ -824,7 +809,6 @@ export async function restoreCheckpoint(
 				const now = await head(root, options.signal);
 				if (now.head !== plan.target.head || now.branch !== plan.target.branch)
 					throw new Error("HEAD changed during restoration.");
-				// Re-check content as well as leaf type immediately before a known-path write/delete.
 				const present = await inspectFile(root, change.path);
 				if (JSON.stringify([present ? hash(present.data) : null, present?.mode]) !== baseline.get(change.path))
 					throw new Error("A file changed during restoration; recovery is required.");
@@ -873,7 +857,6 @@ export async function restoreCheckpoint(
 		}
 	});
 }
-/** Observe snapshot differences, not exact authorship; used for explicitly previewed session restore scope. */
 export async function changedPaths(root: string, before: StoredCheckpoint, after: StoredCheckpoint): Promise<string[]> {
 	return [
 		...new Set([

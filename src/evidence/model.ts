@@ -25,7 +25,6 @@ export const SourceSchema = Type.Union([
 		sha256: hash,
 		exitCode: Type.Union([Type.Integer(), Type.Null()]),
 		advisory: Type.Boolean(),
-		// Triage's own source provenance, never its generated summary or log text.
 		sourceHash: Type.Optional(hash),
 		selectionHash: Type.Optional(hash),
 	}),
@@ -72,7 +71,6 @@ export const SummarySchema = Type.Object({
 	invalidEvents: Type.Integer(),
 });
 export type EvidenceSummary = Static<typeof SummarySchema>;
-/** Presentation state only; never persisted as a ledger summary. */
 export type EvidenceDisplaySummary = EvidenceSummary & { unavailable?: string };
 export const ResultSchema = Type.Object({
 	version: Type.Literal(1),
@@ -83,7 +81,6 @@ export const ResultSchema = Type.Object({
 	nextOffset: Type.Union([Type.Integer(), Type.Null()]),
 });
 
-/** Append-only events are the authority; this projection never changes historical entries. */
 export class EvidenceLedger {
 	readonly records = new Map<string, EvidenceRecord>();
 	invalidEvents = 0;
@@ -151,7 +148,6 @@ export class EvidenceLedger {
 	}
 
 	private invalidateDependents(id: string, reason: string, currentOnly = false): void {
-		// References only point backwards, but use a visited set defensively.
 		const pending = [id];
 		const seen = new Set<string>();
 		while (pending.length) {
