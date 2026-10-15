@@ -4,7 +4,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { type Component, isKeyRelease, stripTerminalSequences, type TUI } from "@earendil-works/pi-tui";
 import { compactToolRenderers } from "./compact-tools.ts";
 import { registerSuite } from "./core/suite.ts";
-import type { EvidenceDisplaySummary } from "./evidence/model.ts";
+import { type EvidenceDisplaySummary, EvidenceLedger } from "./evidence/model.ts";
 import { registerEvidence } from "./evidence/register.ts";
 import { ExplorerLocation, resolveExplorerFolder } from "./explorer-location.ts";
 import { FileExplorerComponent } from "./file-explorer.ts";
@@ -436,7 +436,39 @@ export class MidnightPanels {
 
 export default function midnight(pi: ExtensionAPI): void {
 	let panels: MidnightPanels | undefined;
-	// Context owns our earliest transforms; restore refreshes the same evidence and panels as normal work.
+	let starting = true;
+	let title: SessionTitle | undefined;
+	let projectSwitcher = new ProjectSwitcher();
+	let compactTools = true;
+	const toolRenderers = compactToolRenderers(() => compactTools);
+	pi.registerToolRenderer(toolRenderers);
+	// Mount the UI before awaited service initialization. Keep those handlers awaited so
+	// startup captures still finish before Pi accepts work; do not background checkpoint safety.
+	pi.on("session_start", (_event, ctx) => {
+		starting = true;
+		projectSwitcher.dispose();
+		projectSwitcher = new ProjectSwitcher();
+		toolRenderers.dispose();
+		panels?.dispose();
+		title?.dispose();
+		panels = undefined;
+		title = undefined;
+		if (ctx.mode !== "tui") return;
+		applyDefaultTheme(pi, ctx);
+		ctx.ui.setWidget("midnight-panels", (tui) => {
+			panels = new MidnightPanels(
+				pi,
+				ctx,
+				tui,
+				() => projectSwitcher.active,
+				() => starting || question.active || triage.active || evidence.active,
+			);
+			// Do not show the previous session's ledger or helper counters while services load.
+			panels.updateEvidence({ ...new EvidenceLedger().summary(), unavailable: "Loading evidence" });
+			return panels;
+		});
+	});
+	// Context still owns our earliest transforms; restore refreshes normal evidence and panels.
 	const suite = registerSuite(pi, async (ctx) => {
 		panels?.update(ctx, true);
 		await panels?.refreshFiles();
@@ -456,34 +488,13 @@ export default function midnight(pi: ExtensionAPI): void {
 		(summary) => panels?.updateEvidence(summary),
 		() => !question.active && !triage.active && (panels?.prepareQuestion() ?? true),
 	);
-	let title: SessionTitle | undefined;
-	let projectSwitcher = new ProjectSwitcher();
-	let compactTools = true;
-	const toolRenderers = compactToolRenderers(() => compactTools);
-	pi.registerToolRenderer(toolRenderers);
 	pi.on("session_start", (_event, ctx) => {
-		projectSwitcher.dispose();
-		projectSwitcher = new ProjectSwitcher();
-		toolRenderers.dispose();
-		panels?.dispose();
-		title?.dispose();
-		panels = undefined;
-		title = undefined;
 		if (ctx.mode !== "tui") return;
-		applyDefaultTheme(pi, ctx);
+		starting = false;
+		// Services can append entries during initialization. Refresh analysis afterward and
+		// leave optional title requests at their original, post-initialization boundary.
+		panels?.update(ctx, true);
 		title = new SessionTitle(pi, ctx, (context) => panels?.update(context, true));
-		ctx.ui.setWidget("midnight-panels", (tui) => {
-			panels = new MidnightPanels(
-				pi,
-				ctx,
-				tui,
-				() => projectSwitcher.active,
-				() => question.active || triage.active || evidence.active,
-			);
-			panels.updateTriage(triage.sidebarStatus());
-			panels.updateEvidence(evidence.summary());
-			return panels;
-		});
 		void title.update(ctx);
 	});
 	pi.on("session_shutdown", () => {

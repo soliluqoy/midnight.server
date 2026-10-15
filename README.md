@@ -354,6 +354,7 @@ Navigation also follows Pi's `tui.select.*` bindings. An empty array disables a 
 
 ## Performance and compatibility
 
+- Startup, `/reload`, and `/new` mount the panels before awaited native-service initialization. File/Git data fills in asynchronously and evidence shows a loading state until ready. Panel input stays inactive during initialization; startup checkpoints still finish before Pi accepts work. This improves display ordering, not the cost of checkpoint validation or snapshot reads.
 - Filesystem/Git work is asynchronous and outside rendering. Reads are bounded and cached, requests coalesce, directories load lazily, and session analysis updates incrementally. There is no filesystem polling, recursive watching, or model call for ordinary UI updates.
 - Reload, session replacement, and shutdown cancel pending work, discard late results, close previews, and restore Pi's layout. Project switching uses Pi's session APIs, not `process.chdir()`.
 - Midnight preserves the transcript, editor, widgets, and custom footers. Panels are disabled in RPC, JSON, and print modes. Extensions that replace the whole fullscreen layout may conflict.

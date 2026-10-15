@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
 	type AgentSession,
+	type ExtensionAPI,
+	type ExtensionContext,
 	FooterComponent,
 	type ReadonlyFooterDataProvider,
 	SessionManager,
@@ -13,12 +16,17 @@ import {
 	ProcessTerminal,
 	stripTerminalSequences,
 	Text,
+	type TUI,
 	TuiAltScreen,
 	TuiMainScreen,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { createChatViewport } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/chat-viewport.js";
-import { initTheme } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
+import {
+	initTheme,
+	loadThemeFromPath,
+} from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
+import midnight, { MidnightPanels } from "../src/index.ts";
 import { focusedComponent, SidebarLayout } from "../src/layout.ts";
 import { SessionAnalysis, sessionEntryCount } from "../src/session-analysis.ts";
 
@@ -169,4 +177,107 @@ test("supported Pi exposes guarded entry counts and session analysis avoids repe
 	assert.equal(sessionEntryCount(manager), manager.getEntryCount());
 	Reflect.set(manager, "getEntryCount", undefined);
 	assert.equal(sessionEntryCount(manager), undefined);
+});
+
+test("startup, reload and new mount panels before services without reusing old counters; headless stays untouched", async (t) => {
+	// Reuse the installed TUI without starting a terminal or doing panel filesystem/Git I/O.
+	t.mock.method(MidnightPanels.prototype, "refreshFiles", async () => {});
+	const handlers = new Map<string, ((event: unknown, ctx: ExtensionContext) => unknown)[]>();
+	const commands = new Set<string>();
+	const widgets = new Container();
+	const root = new Container();
+	root.addChild(new Text("editor draft"));
+	root.addChild(widgets);
+	const tui = new TuiAltScreen(terminal());
+	tui.setLayoutRoot(root);
+	let mounted: MidnightPanels | undefined;
+	let subscribed = 0;
+	let terminalInput: Parameters<ExtensionContext["ui"]["onTerminalInput"]>[0] | undefined;
+	let manager = SessionManager.inMemory();
+	let activeTools: string[] = [];
+	const theme = loadThemeFromPath(fileURLToPath(new URL("../themes/midnight.json", import.meta.url)), "truecolor");
+	const pi = {
+		on: (event: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => {
+			handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+		},
+		registerTool: () => {},
+		registerFlag: () => {},
+		registerToolRenderer: () => {},
+		registerCommand: (name: string) => commands.add(name),
+		getCommands: () => {
+			if (context.mode === "tui") assert.ok(mounted, "panels must precede even service ownership inspection");
+			return [...commands].map((name) => ({ name }));
+		},
+		getAllTools: () => [],
+		getSettings: () => ({ theme: "midnight" }),
+		getFlag: () => false,
+		getThinkingLevel: () => "off",
+		getActiveTools: () => activeTools,
+		setActiveTools: (tools: string[]) => {
+			activeTools = tools;
+		},
+		appendEntry: (type: string, data: unknown) => manager.appendCustomEntry(type, data),
+	} as unknown as ExtensionAPI;
+	const context = {
+		cwd: manager.getCwd(),
+		mode: "tui",
+		hasUI: true,
+		get sessionManager() {
+			return manager;
+		},
+		getContextUsage: () => undefined,
+		ui: {
+			theme,
+			notify: () => {},
+			setStatus: () => {},
+			onTerminalInput: (handler: NonNullable<typeof terminalInput>) => {
+				subscribed++;
+				terminalInput = handler;
+				return () => {
+					subscribed--;
+					terminalInput = undefined;
+				};
+			},
+			setWidget: (_key: string, factory: (tui: TUI) => MidnightPanels) => {
+				widgets.clear();
+				mounted = factory(tui);
+				widgets.addChild(mounted);
+			},
+		},
+	} as unknown as ExtensionContext;
+	const emit = async (name: string, reason: string) => {
+		for (const handler of handlers.get(name) ?? []) await handler({ type: name, reason }, context);
+	};
+	midnight(pi);
+	t.after(() => emit("session_shutdown", "exit"));
+	for (const reason of ["startup", "reload", "new"]) {
+		manager = SessionManager.inMemory(context.cwd);
+		// Service algorithms have their own real Git/context tests. This checks composition/order.
+		manager.appendCustomEntry("midnight-suite-settings", { version: 1, context: false, checkpoints: false });
+		const previous = mounted;
+		const startup = handlers.get("session_start") ?? [];
+		assert.ok(startup.length > 1);
+		assert.equal(startup[0]({ type: "session_start", reason }, context), undefined, "mount must not await I/O");
+		assert.ok(mounted);
+		assert.notEqual(mounted, previous);
+		assert.equal(subscribed, 1, "session replacement disposes old panel input subscriptions");
+		assert.equal(terminalInput?.("\x1bs"), undefined, "early panels must not intercept input during initialization");
+		const loading = plain(tui.render(160));
+		assert.match(loading, /MIDNIGHT/);
+		assert.match(loading, /Loading evidence/);
+		assert.doesNotMatch(loading, /99 req/);
+		for (const handler of startup.slice(1)) await handler({ type: "session_start", reason }, context);
+		assert.doesNotMatch(plain(tui.render(160)), /Loading evidence/);
+		assert.deepEqual(terminalInput?.("\x1bs"), { consume: true }, "panel input enables after initialization");
+		mounted.updateTriage({ enabled: true, requests: 99, tokens: 0, incomplete: false, localCalls: 0, cacheHits: 0 });
+	}
+	await emit("session_shutdown", "reload");
+	assert.equal(subscribed, 0);
+	assert.equal(Reflect.get(tui, "layoutRoot"), root, "shutdown restores Pi's original layout");
+	mounted = undefined;
+	context.mode = "json";
+	await emit("session_start", "new");
+	assert.equal(mounted, undefined);
+	assert.equal(subscribed, 0);
+	assert.equal(Reflect.get(tui, "layoutRoot"), root);
 });
