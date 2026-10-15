@@ -1,3 +1,4 @@
 node_modules/
 *.tgz
 .artifacts/
+/EVIDENCE_BUILD_PLAN.md
