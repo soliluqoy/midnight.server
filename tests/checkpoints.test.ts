@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import childProcess, { type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { readdirSync, statSync, writeFileSync } from "node:fs";
+import fsPromises, { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,6 +14,9 @@ import {
 	listCheckpoints,
 	loadCheckpoint,
 	loadCheckpoints,
+	MAX_CAPTURE_BYTES,
+	MAX_FILE_BYTES,
+	MAX_PATHS,
 	prepareRestore,
 	pruneCheckpoints,
 	readRestoreRecovery,
@@ -22,10 +28,10 @@ import { registerCheckpoints } from "../src/checkpoints/index.ts";
 
 import { importLegacyCheckpoint, readLegacyCheckpoint } from "../src/checkpoints/legacy.ts";
 
-async function fixture(t: test.TestContext, commit = true) {
-	const root = await mkdtemp(join(tmpdir(), "midnight-checkpoint-test-"));
+async function fixture(t: test.TestContext, commit = true, objectFormat = "sha1") {
+	const root = await mkdtemp(join(tmpdir(), "midnight checkpoint λ-test-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
-	await git(root, ["init", "-q", "--initial-branch=main"]);
+	await git(root, ["init", "-q", "--initial-branch=main", `--object-format=${objectFormat}`]);
 	await git(root, ["config", "user.name", "Test"]);
 	await git(root, ["config", "user.email", "test@local.invalid"]);
 	await git(root, ["config", "core.autocrlf", "false"]);
@@ -61,6 +67,204 @@ async function traceGit<T>(root: string, operation: () => Promise<T>) {
 		.map((event) => event.argv ?? []);
 	return { value, commands };
 }
+
+function interceptBlobWrites(t: test.TestContext, inspect: (proc: ChildProcess) => void) {
+	const spawn = childProcess.spawn;
+	t.mock.method(childProcess, "spawn", (...args: Parameters<typeof spawn>) => {
+		const proc = spawn(...args);
+		if (Array.isArray(args[1]) && args[1].includes("--stdin-paths")) inspect(proc);
+		return proc;
+	});
+	syncBuiltinESMExports();
+	t.after(() => {
+		t.mock.restoreAll();
+		syncBuiltinESMExports();
+	});
+}
+
+async function captureTempRoot(t: test.TestContext) {
+	const path = await mkdtemp(join(tmpdir(), "midnight spool λ space-"));
+	const unusual = join(path, process.platform === "win32" ? "日本語 space" : '日本語 "quote" \\ slash\nline');
+	await mkdir(unusual);
+	const previous = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP };
+	for (const key of Object.keys(previous)) process.env[key] = unusual;
+	t.after(async () => {
+		for (const [key, value] of Object.entries(previous)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		await rm(path, { recursive: true, force: true });
+	});
+	return unusual;
+}
+
+test("capture batches verified raw blobs once, cleans unusual spool paths and reuses unchanged objects", async (t) => {
+	const root = await fixture(t);
+	const temporary = await captureTempRoot(t);
+	const files = new Map([
+		["space 'quote' λ.txt", Buffer.from([0, 255, 128, 13, 10, 1])],
+		["-option.txt", Buffer.from("raw\r\nbytes\r\n")],
+		[process.platform === "win32" ? "日本語.txt" : '日本語 "quote"\nline.txt', Buffer.from("third\n")],
+	]);
+	for (const [path, data] of files) await writeFile(join(root, path), data);
+	const index = await readFile(join(root, ".git", "index"));
+	interceptBlobWrites(t, () => {
+		const [directory] = readdirSync(temporary);
+		const spools = readdirSync(join(temporary, directory)).filter((path) => path.startsWith("blob-"));
+		assert.equal(spools.length, files.size);
+		for (const path of spools) {
+			if (process.platform !== "win32") assert.equal(statSync(join(temporary, directory, path)).mode & 0o777, 0o600);
+		}
+		for (const path of files.keys()) writeFileSync(join(root, path), "mutable worktree changed after inspection");
+	});
+	const { value: first, commands } = await traceGit(root, () => captureCheckpoint(root, options));
+	assert.deepEqual(
+		commands.filter((args) => args.includes("hash-object")),
+		[["git", "--no-optional-locks", "hash-object", "-w", "--no-filters", "--stdin-paths"]],
+	);
+	for (const [path, data] of files) {
+		assert.deepEqual(await git(root, ["show", `${first.worktreeTree}:${path}`]), data);
+		await writeFile(join(root, path), data);
+	}
+	assert.deepEqual(await readdir(temporary), []);
+	assert.deepEqual(await readFile(join(root, ".git", "index")), index);
+	const { value: reused, commands: reuseCommands } = await traceGit(root, () =>
+		captureCheckpoint(root, { ...options, previous: first, deduplicate: true }),
+	);
+	assert.equal(reused.ref, first.ref);
+	assert.equal(
+		reuseCommands.some((args) => args.includes("hash-object")),
+		false,
+	);
+	assert.deepEqual(await readdir(temporary), []);
+});
+
+test("blob batches verify repository-specific SHA-256 object IDs", async (t) => {
+	const root = await fixture(t, true, "sha256");
+	const data = Buffer.from([0, 128, 255, 13, 10]);
+	await writeFile(join(root, "file.txt"), data);
+	const { value: cp, commands } = await traceGit(root, () => captureCheckpoint(root, options));
+	assert.equal(cp.worktreeTree.length, 64);
+	assert.equal(commands.filter((args) => args.includes("--stdin-paths")).length, 1);
+	assert.deepEqual(await git(root, ["show", `${cp.worktreeTree}:file.txt`]), data);
+});
+
+test("capture rejects malformed, missing, extra, wrong-width or reordered blob output before index mutation", async (t) => {
+	const root = await fixture(t);
+	const temporary = await captureTempRoot(t);
+	await writeFile(join(root, "file.txt"), "changed\n");
+	await writeFile(join(root, "keep.txt"), "different\n");
+	const index = await readFile(join(root, ".git", "index"));
+	let corrupt = (chunk: Buffer) => chunk;
+	interceptBlobWrites(t, (proc) => {
+		assert.ok(proc.stdout);
+		const emit = proc.stdout.emit.bind(proc.stdout);
+		const chunks: Buffer[] = [];
+		t.mock.method(proc.stdout, "emit", (event: string, ...args: unknown[]) => {
+			if (event === "data") {
+				chunks.push(args[0] as Buffer);
+				return true;
+			}
+			if (event === "end") emit("data", corrupt(Buffer.concat(chunks)));
+			return emit(event, ...args);
+		});
+	});
+	for (const change of [
+		() => Buffer.from("not-an-oid\n"),
+		() => Buffer.alloc(0),
+		(chunk: Buffer) => Buffer.concat([chunk, Buffer.from(`${"0".repeat(40)}\n`)]),
+		() => Buffer.from(`${"0".repeat(64)}\n${"0".repeat(64)}\n`),
+		() => Buffer.from(`${"0".repeat(40)}\n${"0".repeat(40)}\n`),
+		(chunk: Buffer) => Buffer.from(`${chunk.toString("utf8").trim().split("\n").reverse().join("\n")}\n`),
+	]) {
+		corrupt = change;
+		const { commands } = await traceGit(root, () =>
+			assert.rejects(captureCheckpoint(root, options), /blob batch output/),
+		);
+		assert.equal(
+			commands.some((args) => args.includes("update-index") || args.includes("update-ref")),
+			false,
+		);
+		assert.deepEqual(await readdir(temporary), []);
+		assert.deepEqual(await readFile(join(root, ".git", "index")), index);
+		assert.equal((await listCheckpoints(root, options.sessionId)).length, 0);
+		await assert.rejects(stat(join(root, ".git", "midnight-checkpoints.lock")), { code: "ENOENT" });
+	}
+});
+
+test("cancellation during blob writing rejects capture and removes its spool and lock", async (t) => {
+	const root = await fixture(t);
+	const temporary = await captureTempRoot(t);
+	await writeFile(join(root, "file.txt"), "changed\n");
+	const abort = new AbortController();
+	interceptBlobWrites(t, (proc) => proc.once("spawn", () => abort.abort()));
+	const { commands } = await traceGit(root, () =>
+		assert.rejects(captureCheckpoint(root, { ...options, signal: abort.signal }), { name: "AbortError" }),
+	);
+	assert.equal(
+		commands.some((args) => args.includes("update-index") || args.includes("update-ref")),
+		false,
+	);
+	assert.deepEqual(await readdir(temporary), []);
+	await assert.rejects(stat(join(root, ".git", "midnight-checkpoints.lock")), { code: "ENOENT" });
+	assert.equal((await listCheckpoints(root, options.sessionId)).length, 0);
+});
+
+test("spool write failure rejects capture without publishing and cleans partial files", async (t) => {
+	const root = await fixture(t);
+	const temporary = await captureTempRoot(t);
+	await writeFile(join(root, "file.txt"), "changed\n");
+	const originalOpen = fsPromises.open;
+	t.mock.method(fsPromises, "open", async (...args: Parameters<typeof originalOpen>) => {
+		const handle = await originalOpen(...args);
+		if (String(args[0]).endsWith("blob-0"))
+			t.mock.method(handle, "writeFile", async () => {
+				throw new Error("injected spool write failure");
+			});
+		return handle;
+	});
+	syncBuiltinESMExports();
+	t.after(() => {
+		t.mock.restoreAll();
+		syncBuiltinESMExports();
+	});
+	await assert.rejects(captureCheckpoint(root, options), /injected spool write failure/);
+	assert.deepEqual(await readdir(temporary), []);
+	assert.equal((await listCheckpoints(root, options.sessionId)).length, 0);
+	await assert.rejects(stat(join(root, ".git", "midnight-checkpoints.lock")), { code: "ENOENT" });
+});
+
+test("spool bytes stay within the cumulative read budget, including inspected over-budget files", async (t) => {
+	const root = await fixture(t, false);
+	const temporary = await captureTempRoot(t);
+	const data = Buffer.alloc(MAX_FILE_BYTES, 1);
+	for (let index = 0; index < 7; index++) await writeFile(join(root, `large-${index}`), data);
+	await writeFile(join(root, "z-small"), "also excluded after over-budget inspection");
+	interceptBlobWrites(t, () => {
+		const [directory] = readdirSync(temporary);
+		const spools = readdirSync(join(temporary, directory)).filter((path) => path.startsWith("blob-"));
+		assert.equal(spools.length, 6);
+		const bytes = spools.reduce((sum, path) => sum + statSync(join(temporary, directory, path)).size, 0);
+		assert.equal(bytes, 6 * MAX_FILE_BYTES);
+		assert.ok(bytes <= MAX_CAPTURE_BYTES);
+	});
+	const cp = await captureCheckpoint(root, options);
+	assert.equal(cp.covered.length, 6);
+	assert.deepEqual(cp.excluded, [
+		{ path: "large-6", reason: "snapshot exceeds 64 MiB read budget" },
+		{ path: "z-small", reason: "snapshot exceeds 64 MiB read budget" },
+	]);
+	assert.ok(6 * MAX_FILE_BYTES <= MAX_CAPTURE_BYTES);
+	assert.deepEqual(await readdir(temporary), []);
+	await assert.rejects(
+		captureCheckpoint(root, {
+			...options,
+			scope: Array.from({ length: MAX_PATHS + 1 }, (_, index) => `missing-${index}`),
+		}),
+		/candidate paths/,
+	);
+	assert.deepEqual(await readdir(temporary), []);
+});
 
 test("history loads in bounded batches, preserving metadata without a cross-call cache", async (t) => {
 	const root = await fixture(t);
@@ -145,7 +349,9 @@ test("unchanged captures deduplicate before commit/ref writes but retain coverag
 		false,
 	);
 	assert.equal(
-		commands.some((argv) => argv.includes("diff-tree") || argv.includes("update-index")),
+		commands.some(
+			(argv) => argv.includes("diff-tree") || argv.includes("update-index") || argv.includes("hash-object"),
+		),
 		false,
 	);
 	await writeFile(join(root, ".env"), "TEST=fixture-not-a-secret\n");

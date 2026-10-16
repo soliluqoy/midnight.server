@@ -129,8 +129,8 @@ export function estimateContextCharacters(messages: LiveContextMessage[]): numbe
 	return messages.reduce((total, message) => total + renderMessage(message).length, 0);
 }
 
-function blockId(message: LiveContextMessage, index: number): string {
-	const digest = createHash("sha256").update(canonicalMessage(message)).digest("hex").slice(0, 12);
+function blockId(canonical: string, index: number): string {
+	const digest = createHash("sha256").update(canonical).digest("hex").slice(0, 12);
 	return `${index + 1}-${digest}`;
 }
 
@@ -166,11 +166,19 @@ export function renderContextDocument(
 ): ContextDocumentSnapshot {
 	const revision = options.revision ?? 0;
 	const protectedIndexes = options.protectedIndexes ?? selectProtectedMessageIndexes(messages);
-	const baselineDigest = digestMessages(messages);
+	const baseline = createHash("sha256");
+	const blockIds: string[] = [];
+	for (const [index, message] of messages.entries()) {
+		const canonical = canonicalMessage(message);
+		baseline.update(canonical);
+		baseline.update("\n");
+		blockIds.push(blockId(canonical, index));
+	}
+	const baselineDigest = baseline.digest("hex");
 	const stable = options.documentSeed !== undefined;
 	const currentDocumentId = documentId(stable ? `seed:${options.documentSeed}` : baselineDigest, revision);
 	const blocks: DocumentBlock[] = messages.map((source, index) => {
-		const id = blockId(source, index);
+		const id = blockIds[index];
 		const authoredRole = (source.details as { contextRole?: unknown } | undefined)?.contextRole;
 		const role =
 			source.role === "custom" &&

@@ -47,6 +47,7 @@ interface TreeEntry {
 	mode: string;
 	sha: string;
 }
+type SpoolBlob = Readonly<{ path: string; expectedOid: string }>;
 export interface RestorePlan {
 	target: StoredCheckpoint;
 	paths: string[];
@@ -263,6 +264,33 @@ async function lock<T>(root: string, operation: () => Promise<T>): Promise<T> {
 		await unlink(path);
 	}
 }
+async function writeSpoolBlobs(root: string, blobs: readonly SpoolBlob[], signal?: AbortSignal): Promise<void> {
+	signal?.throwIfAborted();
+	if (!blobs.length) return;
+	// Git stdin-paths uses C-quoted UTF-8 filenames, not shell quoting or NUL records.
+	const paths = blobs.map((blob) => {
+		const path = process.platform === "win32" ? blob.path.replaceAll("\\", "/") : blob.path;
+		let quoted = '"';
+		for (const byte of Buffer.from(path, "utf8")) {
+			quoted +=
+				byte >= 32 && byte <= 126 && byte !== 34 && byte !== 92
+					? String.fromCharCode(byte)
+					: `\\${byte.toString(8).padStart(3, "0")}`;
+		}
+		return `${quoted}"\n`;
+	});
+	const output = await git(root, ["hash-object", "-w", "--no-filters", "--stdin-paths"], {
+		input: paths.join(""),
+		signal,
+	});
+	const oids = output.toString("utf8").split(/\r?\n/);
+	if (oids.at(-1) === "") oids.pop();
+	if (
+		oids.length !== blobs.length ||
+		oids.some((oid, index) => !/^[a-f0-9]+$/.test(oid) || oid !== blobs[index].expectedOid)
+	)
+		throw new Error("Checkpoint blob batch output does not match the verified file hashes.");
+}
 async function captureUnlocked(root: string, options: CaptureOptions): Promise<StoredCheckpoint> {
 	options.signal?.throwIfAborted();
 	const before = await head(root, options.signal);
@@ -298,6 +326,7 @@ async function captureUnlocked(root: string, options: CaptureOptions): Promise<S
 		const covered: string[] = [];
 		const excluded: Checkpoint["excluded"] = [];
 		const records: string[] = [];
+		const blobs: SpoolBlob[] = [];
 		for (const path of candidates) {
 			options.signal?.throwIfAborted();
 			let reason = exclusion(path);
@@ -336,21 +365,22 @@ async function captureUnlocked(root: string, options: CaptureOptions): Promise<S
 				.update(file.data)
 				.digest("hex");
 			const known = [staged.get(path)?.sha, committed.get(path)?.sha, previousTree.get(path)?.sha].includes(digest);
-			const oid = known
-				? digest
-				: (
-						await git(root, ["hash-object", "-w", "--no-filters", "--stdin"], {
-							input: file.data,
-							signal: options.signal,
-						})
-					)
-						.toString("utf8")
-						.trim();
+			if (!known) {
+				const spoolPath = join(temp.dir, `blob-${blobs.length}`);
+				const spool = await open(spoolPath, "wx", 0o600);
+				try {
+					await spool.writeFile(file.data);
+				} finally {
+					await spool.close();
+				}
+				blobs.push({ path: spoolPath, expectedOid: digest });
+			}
 			const fileMode =
 				process.platform === "win32" ? (staged.get(path)?.mode ?? committed.get(path)?.mode ?? file.mode) : file.mode;
-			if (staged.get(path)?.sha !== oid || staged.get(path)?.mode !== fileMode)
-				records.push(indexRecord(path, { mode: fileMode, sha: oid }));
+			if (staged.get(path)?.sha !== digest || staged.get(path)?.mode !== fileMode)
+				records.push(indexRecord(path, { mode: fileMode, sha: digest }));
 		}
+		await writeSpoolBlobs(root, blobs, options.signal);
 		if (records.length)
 			await git(root, ["update-index", "-z", "--index-info"], {
 				env: temp.env,
