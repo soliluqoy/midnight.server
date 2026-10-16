@@ -87,6 +87,7 @@ Load only the local package, not another installed Midnight copy. Use `pi list` 
 
 ## Task focus
 
+- For nontrivial work, identify the smallest observable acceptance criteria and how to verify them before editing. Ask one focused question if ambiguity would change public behavior, compatibility, privacy, cost, or an irreversible action; otherwise follow existing patterns and proceed. At completion, distinguish what changed and was actually verified from assumptions or outstanding release gates.
 - Stay focused on the user's actual task and approved scope. Do not drift into unrelated research, refactors, tooling changes, or speculative features.
 - Read only documentation and files needed to implement or verify the task. Defer optional follow-ups instead of expanding the task silently.
 - Build the smallest coherent change that meets the approved acceptance criteria. Reuse existing modules and public APIs; do not add abstractions, infrastructure, dependencies, or speculative optimizations without a demonstrated task requirement.
