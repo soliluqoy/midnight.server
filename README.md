@@ -30,13 +30,13 @@ Restart Pi or run `/reload`, then select fullscreen TUI mode in `/settings`. Ins
 | --- | --- |
 | Toggle the session sidebar / Explorer | Alt+S / Alt+E |
 | Open the Explorer folder menu | Alt+G while Explorer is focused |
-| Navigate / preview / insert a file reference | Arrows and PageUp/PageDown / Space / Enter |
+| Navigate / edit / preview / insert a file reference | Arrows and PageUp/PageDown / Space / Right or Alt+P / Enter |
 | Expand tool output | Ctrl+O or click its row |
 | Inspect the suite and native-service ownership | `/midnight status` or `/midnight doctor` |
 | View context / open checkpoint picker | `/midnight context` / `/midnight rewind` |
 | Refresh Git and file state | `/midnight refresh` |
 
-Explorer also supports Left/Right to collapse/expand, Alt+Up for the parent, Alt+Home for the project, and Escape to close a preview. Click to select and double-click to insert a file; typing outside navigation returns to the prompt. Sidebar and Explorer start in `auto` mode (visible at 110 and 150 columns respectively) and hide when too narrow. Click the sidebar model name to select a model. The bundled **midnight** dark theme is chosen only when Pi has no explicit theme preference; change it in `/settings` → **Theme**. Other selected themes keep their own colors.
+Explorer also supports Left/Right to collapse/expand, Alt+Up for the parent, Alt+Home for the project, and Escape to close a preview. Space now opens the selected file in bundled Micro (it previously opened preview); Right on a file or Alt+P previews without editing. In Micro, Ctrl+S saves and Ctrl+Q quits; Micro handles unsaved-change prompts. Click to select and double-click to insert a file; typing outside navigation returns to the prompt. Sidebar and Explorer start in `auto` mode (visible at 110 and 150 columns respectively) and hide when too narrow. Click the sidebar model name to select a model. The bundled **midnight** dark theme is chosen only when Pi has no explicit theme preference; change it in `/settings` → **Theme**. Other selected themes keep their own colors.
 
 ## Native context and checkpoints
 
@@ -56,7 +56,7 @@ The **sidebar** shows the session title, Git state, context pressure, tokens/cos
 
 **SESSION FILES** shows current pending Git changes for paths touched by successful `edit`/`write` calls on the active conversation branch. It is **not** a session-authored diff: pre-existing or external edits may be included; shell-only paths not touched by those tools are not listed. Staged and unstaged changes remain separate. Conflicts, binary/unreadable states and historical **RECORDED FILES** do not receive invented clean counts. Click a row for a bounded read-only diff. Refreshes do not poll external changes; use `/midnight refresh` when needed.
 
-Explorer browses hidden and ignored files lazily. Its read-only preview rejects files over 1 MiB, invalid UTF-8 and detected NUL content. **Browsing does not change the agent's working project.** Use Alt+G or `/midnight project <path>` to request an explicit switch: confirmation creates a fresh persistent session and carries only an unsent draft, not conversation history. Switching is blocked while work/compaction/queued messages remain and unavailable with `--no-session`.
+Explorer browses hidden and ignored files lazily. Its read-only preview rejects files over 1 MiB, invalid UTF-8 and detected NUL content. Editing also requires a regular, writable UTF-8 file of at most 1 MiB; symlinks and unsupported files are refused without changing them. Micro edits the selected file directly, including when browsing outside the project: confirm the path before pressing Space. In Windows Terminal, Space requests a separate Micro window while Pi remains usable in its original window; after saving, return to Pi and run `/midnight refresh` to update Explorer/Git state. The new window uses Windows Terminal's own size and placement settings; automatic focus return is not guaranteed. On macOS, Linux, or Windows outside Windows Terminal, Micro still temporarily takes over Pi's terminal, then redraws and returns focus to Explorer. External changes may conflict with edits made in Micro; Micro owns saving and unsaved-change prompts. Manual Micro edits update Git state on return but are not attributed as successful agent `edit`/`write` calls in SESSION FILES. The six bundled executables cover Windows, macOS and Linux on x64/ARM64; other targets receive an unavailable message. No runtime download or separate Micro installation is required. **Browsing does not change the agent's working project.** Use Alt+G or `/midnight project <path>` to request an explicit switch: confirmation creates a fresh persistent session and carries only an unsent draft, not conversation history. Switching is blocked while work/compaction/queued messages remain and unavailable with `--no-session`.
 
 Compact tool rows are display-only; Ctrl+O expands Pi's original output. `/midnight compact off` restores ordinary tool rendering (and visible inline workflow text), without changing saved or model-facing tool results. Automatic titles preserve manual `/name` titles; `/midnight title off` disables requests, which **may incur provider charges**. The footer's tokens/sec, response duration and time-to-first-token measurements make no extra requests.
 
@@ -129,6 +129,7 @@ Panel modes reset on reload/session replacement. Keybindings can be customized i
 ```powershell
 npm ci --ignore-scripts
 npm run check
+npm test
 ```
 
-`check` runs Biome and TypeScript. This checkout has no `npm test` script or `tests/` directory; do not treat the check as a test suite. For manual UI testing, load **only** the local package with `pi --extension . --tui-mode fullscreen` and check keyboard, mouse, resize, reload, and an isolated installation before release. The check does not establish those gates. See [NOTICE](NOTICE), [native source provenance](docs/native-suite-provenance.json), [upstream licenses](licenses), and [LICENSE](LICENSE).
+`check` runs Biome and TypeScript; `npm test` runs the focused Micro integration tests. Neither replaces a fullscreen keyboard/focus test or cross-platform binary launch verification. For manual UI testing, load **only** the local package with `pi --extension . --tui-mode fullscreen` and check keyboard, mouse, resize, reload, and an isolated installation before release. The check does not establish those gates. See [NOTICE](NOTICE), [native source provenance](docs/native-suite-provenance.json), [upstream licenses](licenses), and [LICENSE](LICENSE).

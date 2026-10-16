@@ -41,3 +41,10 @@ model.go incorporates Go math code under vendor/trim-1/LICENSE-go (BSD-3-Clause)
 The bundled WebAssembly module and src/trim/wasm_exec.cjs include Go 1.27.2
 runtime code, Copyright The Go Authors, under licenses/go.txt (BSD-3-Clause).
 See docs/trim-1.md for model hash, build instructions and distribution details.
+
+Micro 2.0.15 executables are redistributed unchanged from zyedidia/micro (MIT),
+Copyright (c) 2016-2020 Zachary Yedidia et al.
+Source: https://github.com/zyedidia/micro/releases/tag/v2.0.15
+The upstream license and third-party notices are retained in vendor/micro/LICENSE
+and vendor/micro/LICENSE-THIRD-PARTY. See docs/micro.md for archive and binary
+hashes, supported targets and validation limits.

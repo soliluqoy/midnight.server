@@ -30,6 +30,7 @@ export interface FileExplorerOptions {
 	getHeight: () => number;
 	onOpen: (path: string) => void;
 	onPreview: (path: string) => void;
+	onEdit: (path: string) => void;
 	onFolder: () => void;
 	onParent: () => void;
 	onProject: () => void;
@@ -134,8 +135,9 @@ export class FileExplorerComponent implements Component, Focusable {
 		};
 		if (!this.focused) return [`${key("app.explorer.toggle")} browse`];
 		return [
-			`${key("tui.select.confirm")} @file · ${key("app.explorer.preview")} preview`,
-			`${key("app.explorer.folder")} locations · ${key("tui.select.cancel")} prompt`,
+			`${key("app.explorer.edit")} edit · ${key("app.explorer.expand")} preview`,
+			`${key("tui.select.confirm")} @file · ${key("tui.select.cancel")} prompt`,
+			`${key("app.explorer.folder")} locations`,
 			...(this.options.isProjectRoot() ? [] : [`${key("app.explorer.project")} project`]),
 		];
 	}
@@ -187,6 +189,11 @@ export class FileExplorerComponent implements Component, Focusable {
 			if (row.parent) this.options.onParent();
 			else if (row.entry.directory) this.toggleDirectory(row.entry.path);
 			else this.options.onOpen(row.entry.path);
+		} else if (kb.matches(data, "app.explorer.edit")) {
+			if (!row) return;
+			if (row.parent) this.options.onParent();
+			else if (row.entry.directory) this.toggleDirectory(row.entry.path);
+			else this.options.onEdit(row.entry.path);
 		} else if (kb.matches(data, "app.explorer.preview")) {
 			if (!row) return;
 			if (row.parent) this.options.onParent();

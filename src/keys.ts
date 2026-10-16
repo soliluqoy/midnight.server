@@ -7,6 +7,7 @@ declare module "@earendil-works/pi-tui" {
 		"app.explorer.expand": true;
 		"app.explorer.collapse": true;
 		"app.explorer.preview": true;
+		"app.explorer.edit": true;
 		"app.explorer.folder": true;
 		"app.explorer.parent": true;
 		"app.explorer.project": true;
@@ -18,7 +19,8 @@ export const DEFAULT_APP_KEYBINDINGS = {
 	"app.explorer.toggle": { defaultKeys: "alt+e", description: "Focus or hide Midnight explorer" },
 	"app.explorer.expand": { defaultKeys: "right", description: "Expand directory or preview file" },
 	"app.explorer.collapse": { defaultKeys: "left", description: "Collapse directory or select parent" },
-	"app.explorer.preview": { defaultKeys: "space", description: "Preview selected file" },
+	"app.explorer.preview": { defaultKeys: "alt+p", description: "Preview selected file" },
+	"app.explorer.edit": { defaultKeys: "space", description: "Edit selected file in bundled Micro" },
 	"app.explorer.folder": { defaultKeys: "alt+g", description: "Open Explorer locations menu" },
 	"app.explorer.parent": { defaultKeys: "alt+up", description: "Browse parent folder" },
 	"app.explorer.project": { defaultKeys: "alt+home", description: "Return explorer to project" },

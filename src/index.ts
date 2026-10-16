@@ -11,6 +11,7 @@ import { FileExplorerComponent } from "./file-explorer.ts";
 import { FilePreviewComponent, type FilePreviewContent, loadFilePreview } from "./file-preview.ts";
 import { createKeybindings } from "./keys.ts";
 import { focusedComponent, type PanelMode, SidebarLayout } from "./layout.ts";
+import { bundledMicro, editableFileError, openMicroWindow, readyMicroBinary, runMicro } from "./micro-editor.ts";
 import { OPEN_PROJECT, ProjectSwitcher, SWITCH_PROJECT } from "./project-switch.ts";
 import { registerQuestion } from "./question.ts";
 import { sessionDiffSections } from "./session-diff.ts";
@@ -45,6 +46,7 @@ export class MidnightPanels {
 	private explorerVisible = false;
 	private folderDialogOpen = false;
 	private modelDialogOpen = false;
+	private editingActive = false;
 	private readonly projectSwitchActive: () => boolean;
 	private readonly questionActive: () => boolean;
 
@@ -81,7 +83,7 @@ export class MidnightPanels {
 		this.explorer = new FileExplorerComponent({
 			theme: () => this.ctx.ui.theme,
 			keybindings: this.keys,
-			inputBlocked: () => this.questionActive(),
+			inputBlocked: () => this.questionActive() || this.editingActive,
 			isProjectRoot: () => relative(this.workspace.projectRoot, this.workspace.root) === "",
 			rootPath: () => this.workspace.root,
 			sessionChanges: () => this.workspace.sessionChanges(this.sidebar.changedPaths),
@@ -89,6 +91,7 @@ export class MidnightPanels {
 			onExpand: (path) => void this.workspace.load(path).catch((error) => this.folderError(error)),
 			onOpen: (path) => this.insert(this.workspace.reference(path)),
 			onPreview: (path) => void this.preview(this.workspace.reference(path)),
+			onEdit: (path) => void this.editFile(resolve(this.workspace.root, path)),
 			onFolder: () => void this.browseFolder(),
 			onParent: () => void this.browseFolder(dirname(this.workspace.root)),
 			onProject: () => void this.browseFolder(this.workspace.projectRoot),
@@ -110,6 +113,7 @@ export class MidnightPanels {
 	private handleTerminalInput(data: string) {
 		if (
 			this.disposed ||
+			this.editingActive ||
 			this.folderDialogOpen ||
 			this.questionActive() ||
 			this.projectSwitchActive() ||
@@ -202,7 +206,14 @@ export class MidnightPanels {
 	}
 
 	prepareQuestion(): boolean {
-		if (this.disposed || this.folderDialogOpen || this.modelDialogOpen || this.projectSwitchActive()) return false;
+		if (
+			this.disposed ||
+			this.editingActive ||
+			this.folderDialogOpen ||
+			this.modelDialogOpen ||
+			this.projectSwitchActive()
+		)
+			return false;
 		this.previewGeneration++;
 		this.sessionPreviewRequest++;
 		this.closePreview?.();
@@ -303,6 +314,49 @@ export class MidnightPanels {
 		const reference = /\s|["\\]/.test(path) ? `@${JSON.stringify(path)}` : `@${path}`;
 		this.ctx.ui.pasteToEditor(`${reference} `);
 		this.exitExplorer();
+	}
+
+	private async editFile(path: string): Promise<void> {
+		if (this.disposed || this.editingActive || this.questionActive()) return;
+		this.editingActive = true;
+		try {
+			const binary = bundledMicro();
+			if (!binary) throw new Error("Bundled Micro is unavailable for this OS/CPU.");
+			const problem = await editableFileError(path);
+			if (this.disposed) return;
+			if (problem) throw new Error(problem);
+			const executable = await readyMicroBinary(binary);
+			try {
+				if (process.platform === "win32" && process.env.WT_SESSION) {
+					await openMicroWindow(executable.path, path, this.ctx.cwd);
+					if (!this.disposed)
+						this.ctx.ui.notify(
+							"Micro requested in a new Windows Terminal window. Use /midnight refresh after saving.",
+							"info",
+						);
+				} else {
+					const exitCode = await runMicro(this.tui, executable.path, path, this.ctx.cwd);
+					if (this.disposed) return;
+					if (exitCode !== 0)
+						this.ctx.ui.notify(
+							`Micro exited ${exitCode === null ? "without a status" : `with status ${exitCode}`}.`,
+							"warning",
+						);
+					await this.refreshFiles();
+				}
+			} finally {
+				await executable.cleanup();
+			}
+		} catch (error) {
+			if (!this.disposed)
+				this.ctx.ui.notify(stripTerminalSequences(error instanceof Error ? error.message : String(error)), "warning");
+		} finally {
+			this.editingActive = false;
+			if (!this.disposed && this.layout.visibility().explorer && !this.tui.hasOverlay()) {
+				this.tui.setFocus(this.explorer);
+				this.tui.requestRender();
+			}
+		}
 	}
 
 	private async previewPending(previous: PendingFile): Promise<void> {
