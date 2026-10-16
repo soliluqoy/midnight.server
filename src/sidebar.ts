@@ -141,6 +141,7 @@ export class Sidebar implements Component {
 		const height = this.height();
 		if (this.cache?.width === width && this.cache.height === height) return this.cache.lines;
 		const theme = ctx.ui.theme;
+		const midnight = theme.name === "midnight";
 		const contentWidth = Math.max(1, width - 3);
 		const lines: string[] = [];
 		this.clicks.clear();
@@ -150,9 +151,13 @@ export class Sidebar implements Component {
 		};
 		const pair = (left: string, right: string, action?: () => void) =>
 			line(alignColumns(left, right, contentWidth), action);
-		const heading = (text: string, value = "") => {
+		const heading = (
+			text: string,
+			value = "",
+			color: "muted" | "accent" | "mdLink" | "syntaxKeyword" | "warning" = "muted",
+		) => {
 			line();
-			const label = theme.bold(theme.fg("muted", text));
+			const label = theme.bold(theme.fg(midnight ? color : "muted", text));
 			if (value) pair(label, value);
 			else line(label);
 		};
@@ -173,12 +178,17 @@ export class Sidebar implements Component {
 			);
 		}
 		if (this.branch) {
-			heading("GIT");
+			heading("GIT", "", "mdLink");
 			line(theme.fg("text", stripTerminalSequences(this.branch).replace(/\p{Cc}/gu, " ")));
 			if (this.git) {
 				const status = this.git.changedFiles ? `${this.git.changedFiles} changed` : "clean";
 				const staged = this.git.staged ? ` · ${this.git.staged} staged` : "";
-				line(theme.fg("muted", status + staged));
+				line(
+					theme.fg(
+						midnight ? (this.git.changedFiles || this.git.staged ? "warning" : "success") : "muted",
+						status + staged,
+					),
+				);
 				if (this.git.conflicted) line(theme.fg("error", `${this.git.conflicted} conflicted`));
 				if (this.git.ahead || this.git.behind)
 					pair(theme.fg("dim", "sync"), theme.fg("muted", `↑${this.git.ahead ?? 0} ↓${this.git.behind ?? 0}`));
@@ -191,6 +201,7 @@ export class Sidebar implements Component {
 		heading(
 			this.autoCompact ? "CONTEXT (auto)" : "CONTEXT",
 			percent === undefined ? "" : theme.fg(usageColor, `${percent.toFixed(1)}%`),
+			"accent",
 		);
 		if (percent !== undefined) {
 			const barWidth = contentWidth;
@@ -213,15 +224,20 @@ export class Sidebar implements Component {
 			theme.fg("dim", "cost"),
 			theme.fg("text", `$${this.analysis.totals.cost.toFixed(3)}${subscription ? " (sub)" : ""}`),
 		);
-		heading("MODEL");
+		heading("MODEL", "", "syntaxKeyword");
 		line(theme.fg("text", stripTerminalSequences(ctx.model?.id ?? "no model")), this.selectModel);
 		line(
-			theme.fg("muted", [ctx.model?.provider, this.pi.getThinkingLevel()].filter(Boolean).join(" · ")),
+			[
+				ctx.model?.provider && theme.fg("muted", ctx.model.provider),
+				theme.fg(midnight ? "syntaxKeyword" : "muted", this.pi.getThinkingLevel()),
+			]
+				.filter(Boolean)
+				.join(theme.fg("dim", " · ")),
 			this.selectModel,
 		);
 		if (this.triage) {
 			const { enabled, requests, tokens: totalTokens, incomplete, localCalls, cacheHits, lastCall } = this.triage;
-			heading("TRIAGE", theme.fg(enabled ? "success" : "dim", enabled ? "on" : "off"));
+			heading("TRIAGE", theme.fg(enabled ? "success" : "dim", enabled ? "on" : "off"), "mdLink");
 			line(theme.fg("muted", `${requests} req · ${tokens(totalTokens)} tokens${incomplete ? "*" : ""}`));
 			line(theme.fg("dim", `${localCalls} local · ${cacheHits} cache`));
 			line(
@@ -247,7 +263,7 @@ export class Sidebar implements Component {
 				this.evidence.invalidEvents)
 		) {
 			const { evidence, claims, review, gaps, capacityReached, invalidEvents } = this.evidence;
-			heading("EVIDENCE", theme.fg("dim", "local"));
+			heading("EVIDENCE", theme.fg("dim", "local"), "mdLink");
 			if (this.evidence.unavailable) line(theme.fg("warning", this.evidence.unavailable));
 			else {
 				line(theme.fg("muted", `${evidence} sources · ${claims} claims`));
@@ -262,6 +278,7 @@ export class Sidebar implements Component {
 			heading(
 				pending.length ? `SESSION FILES (${pending.length})` : "SESSION FILES",
 				this.updating ? theme.fg("warning", "updating") : "",
+				pending.length ? "warning" : "muted",
 			);
 			if (this.updating) line(theme.fg("warning", "Previous snapshot may be stale"));
 			if (pending.length) line(theme.fg("dim", "staged + unstaged / untracked"));

@@ -239,7 +239,9 @@ export class FileExplorerComponent implements Component, Focusable {
 			: row.parent || ignored || mark === "D"
 				? "dim"
 				: entry.directory
-					? "muted"
+					? theme.name === "midnight"
+						? "mdLink"
+						: "muted"
 					: "text";
 		const bodyWidth = Math.max(0, width - 2);
 		const nameWidth = Math.max(0, bodyWidth - suffixWidth - (suffixWidth > 0 ? 1 : 0));
