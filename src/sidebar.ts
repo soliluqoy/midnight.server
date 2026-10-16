@@ -155,14 +155,16 @@ export class Sidebar implements Component {
 			text: string,
 			value = "",
 			color: "muted" | "accent" | "mdLink" | "syntaxKeyword" | "warning" = "muted",
+			inline = false,
 		) => {
 			line();
 			const label = theme.bold(theme.fg(midnight ? color : "muted", text));
-			if (value) pair(label, value);
-			else line(label);
+			if (!value) line(label);
+			else if (inline) line(label + theme.fg("dim", " · ") + value);
+			else pair(label, value);
 		};
 		const tokens = (value: number) => (value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value));
-		line(theme.bold(theme.fg("accent", "MIDNIGHT")) + theme.fg("dim", " / SESSION"));
+		line(theme.bold(theme.fg("accent", "MIDNIGHT")) + theme.fg("dim", ".SERVER"));
 		const title =
 			stripTerminalSequences(ctx.sessionManager.getSessionName() || "")
 				.replace(/\p{Cc}/gu, " ")
@@ -224,11 +226,15 @@ export class Sidebar implements Component {
 			theme.fg("dim", "cost"),
 			theme.fg("text", `$${this.analysis.totals.cost.toFixed(3)}${subscription ? " (sub)" : ""}`),
 		);
-		heading("MODEL", "", "syntaxKeyword");
-		line(theme.fg("text", stripTerminalSequences(ctx.model?.id ?? "no model")), this.selectModel);
+		heading(
+			"MODEL",
+			ctx.model?.provider ? theme.fg("muted", stripTerminalSequences(ctx.model.provider)) : "",
+			"syntaxKeyword",
+			true,
+		);
 		line(
 			[
-				ctx.model?.provider && theme.fg("muted", ctx.model.provider),
+				theme.fg("text", stripTerminalSequences(ctx.model?.id ?? "no model")),
 				theme.fg(midnight ? "syntaxKeyword" : "muted", this.pi.getThinkingLevel()),
 			]
 				.filter(Boolean)
@@ -237,7 +243,7 @@ export class Sidebar implements Component {
 		);
 		if (this.triage) {
 			const { enabled, requests, tokens: totalTokens, incomplete, localCalls, cacheHits, lastCall } = this.triage;
-			heading("TRIAGE", theme.fg(enabled ? "success" : "dim", enabled ? "on" : "off"), "mdLink");
+			heading("TRIAGE", theme.fg(enabled ? "success" : "dim", enabled ? "on" : "off"), "mdLink", true);
 			line(theme.fg("muted", `${requests} req · ${tokens(totalTokens)} tokens${incomplete ? "*" : ""}`));
 			line(theme.fg("dim", `${localCalls} local · ${cacheHits} cache`));
 			line(
@@ -263,7 +269,7 @@ export class Sidebar implements Component {
 				this.evidence.invalidEvents)
 		) {
 			const { evidence, claims, review, gaps, capacityReached, invalidEvents } = this.evidence;
-			heading("EVIDENCE", theme.fg("dim", "local"), "mdLink");
+			heading("EVIDENCE", theme.fg("dim", "local"), "mdLink", true);
 			if (this.evidence.unavailable) line(theme.fg("warning", this.evidence.unavailable));
 			else {
 				line(theme.fg("muted", `${evidence} sources · ${claims} claims`));
