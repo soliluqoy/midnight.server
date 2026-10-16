@@ -413,14 +413,6 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		};
 	}
 
-	function clmFooterText(ctx: ExtensionContext): string {
-		if (!state.enabled) return `clm off · r${state.revision}`;
-		const { next, observed, budget } = sizeFigures(ctx);
-		const shown = next ?? observed;
-		const size = shown === undefined ? "" : ` ${formatTokens(shown)}${budget ? ` / ${formatTokens(budget)}` : ""}`;
-		return `clm${size} · r${state.revision}`;
-	}
-
 	function settingsSummary(ctx: ExtensionContext): string {
 		const changed = changedSettings(baseSettings, settings);
 		if (changed.length === 0) return "settings: defaults";
@@ -585,7 +577,7 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 	function updateStatus(ctx: ExtensionContext): void {
 		ctx.ui.setStatus(
 			STATUS_KEY,
-			editingMode === "clm" ? clmFooterText(ctx) : outcomeText(state, observedUsage, currentContextView),
+			editingMode === "clm" ? undefined : outcomeText(state, observedUsage, currentContextView),
 		);
 	}
 
