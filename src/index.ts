@@ -20,6 +20,7 @@ import { Sidebar } from "./sidebar.ts";
 import { applyDefaultTheme } from "./theme.ts";
 import { registerTokenSpeed } from "./token-speed.ts";
 import { registerTriage, type TriageStatus } from "./triage/index.ts";
+import { compactWorkflowMarkdown } from "./workflow-markdown.ts";
 
 export class MidnightPanels {
 	private ctx: ExtensionContext;
@@ -146,6 +147,12 @@ export class MidnightPanels {
 		if (this.disposed) return;
 		this.sidebar.evidence = summary;
 		this.sidebar.invalidate();
+		this.tui.requestRender();
+	}
+
+	refreshTranscriptRendering(): void {
+		if (this.disposed) return;
+		this.tui.invalidate();
 		this.tui.requestRender();
 	}
 
@@ -437,6 +444,7 @@ export default function midnight(pi: ExtensionAPI): void {
 	let compactTools = true;
 	const toolRenderers = compactToolRenderers(() => compactTools);
 	pi.registerToolRenderer(toolRenderers);
+	pi.registerMarkdownTransformer(compactWorkflowMarkdown(() => compactTools));
 	pi.on("session_start", (_event, ctx) => {
 		starting = true;
 		projectSwitcher.dispose();
@@ -539,7 +547,7 @@ export default function midnight(pi: ExtensionAPI): void {
 			}
 			if (panel === "compact" && (mode === "on" || mode === "off")) {
 				compactTools = mode === "on";
-				ctx.ui.setToolsExpanded(ctx.ui.getToolsExpanded());
+				panels?.refreshTranscriptRendering();
 				ctx.ui.notify(`Compact tool output ${compactTools ? "enabled" : "disabled"}.`, "info");
 				return;
 			}

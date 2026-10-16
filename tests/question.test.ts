@@ -95,6 +95,7 @@ test("question is a model-only sequential tool with material-decision guidance, 
 		registerTool: (tool: ToolDefinition) => tools.push(tool.name),
 		registerFlag() {},
 		registerToolRenderer() {},
+		registerMarkdownTransformer() {},
 		registerCommand() {},
 	} as unknown as ExtensionAPI);
 	assert.ok(tools.includes("midnight_question"));

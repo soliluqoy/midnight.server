@@ -8,11 +8,13 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 	FooterComponent,
+	type MarkdownTransformer,
 	type ReadonlyFooterDataProvider,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import {
 	Container,
+	Markdown,
 	ProcessTerminal,
 	stripTerminalSequences,
 	Text,
@@ -23,6 +25,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { createChatViewport } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/chat-viewport.js";
 import {
+	getMarkdownTheme,
 	initTheme,
 	loadThemeFromPath,
 } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
@@ -180,10 +183,17 @@ test("supported Pi exposes guarded entry counts and session analysis avoids repe
 test("startup, reload and new mount panels before services without reusing old counters; headless stays untouched", async (t) => {
 	t.mock.method(MidnightPanels.prototype, "refreshFiles", async () => {});
 	const handlers = new Map<string, ((event: unknown, ctx: ExtensionContext) => unknown)[]>();
-	const commands = new Set<string>();
+	const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
+	let workflowTransform: MarkdownTransformer | undefined;
 	const widgets = new Container();
 	const root = new Container();
 	root.addChild(new Text("editor draft"));
+	root.addChild(
+		new Markdown("```js workflow\nconst tasks = await runs.all([]);\n```", 0, 0, getMarkdownTheme(), undefined, {
+			transform: (source, availableWidth) =>
+				workflowTransform?.(source, { messageType: "assistant", isStreaming: false, availableWidth }) ?? source,
+		}),
+	);
 	root.addChild(widgets);
 	const tui = new TuiAltScreen(terminal());
 	tui.setLayoutRoot(root);
@@ -200,10 +210,15 @@ test("startup, reload and new mount panels before services without reusing old c
 		registerTool: () => {},
 		registerFlag: () => {},
 		registerToolRenderer: () => {},
-		registerCommand: (name: string) => commands.add(name),
+		registerMarkdownTransformer: (transformer: MarkdownTransformer) => {
+			workflowTransform = transformer;
+		},
+		registerCommand: (name: string, command: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
+			commands.set(name, command.handler);
+		},
 		getCommands: () => {
 			if (context.mode === "tui") assert.ok(mounted, "panels must precede even service ownership inspection");
-			return [...commands].map((name) => ({ name }));
+			return [...commands.keys()].map((name) => ({ name }));
 		},
 		getAllTools: () => [],
 		getSettings: () => ({ theme: "midnight" }),
@@ -264,6 +279,15 @@ test("startup, reload and new mount panels before services without reusing old c
 		assert.doesNotMatch(loading, /99 req/);
 		for (const handler of startup.slice(1)) await handler({ type: "session_start", reason }, context);
 		assert.doesNotMatch(plain(tui.render(160)), /Loading evidence/);
+		if (reason === "startup") {
+			const compact = commands.get("midnight");
+			assert.ok(compact);
+			assert.match(plain(tui.render(160)), /Subagent workflow · 1 line · script hidden/);
+			await compact("compact off", context);
+			assert.match(plain(tui.render(160)), /const tasks = await runs\.all/);
+			await compact("compact on", context);
+			assert.match(plain(tui.render(160)), /Subagent workflow · 1 line · script hidden/);
+		}
 		assert.deepEqual(terminalInput?.("\x1bs"), { consume: true }, "panel input enables after initialization");
 		mounted.updateTriage({ enabled: true, requests: 99, tokens: 0, incomplete: false, localCalls: 0, cacheHits: 0 });
 	}
