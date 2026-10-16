@@ -7,7 +7,7 @@ export function applyDefaultTheme(pi: ExtensionAPI, ctx: ExtensionContext): void
 	const result = ctx.ui.setTheme(MIDNIGHT_THEME);
 	if (!result.success) {
 		ctx.ui.notify(
-			`Cannot apply Midnight's blue theme: ${result.error ?? "theme unavailable"}. Load the package directory with pi -e /path/to/midnight.server, not just src/index.ts.`,
+			`Cannot apply Midnight's theme: ${result.error ?? "theme unavailable"}. Load the package directory with pi -e /path/to/midnight.server, not just src/index.ts.`,
 			"warning",
 		);
 	}
