@@ -1,9 +1,12 @@
 import { relative } from "node:path";
 import { FooterComponent, type ReadonlyFooterDataProvider } from "@earendil-works/pi-coding-agent";
-import { type Component, Container, HStack, isViewportTUI, type TUI } from "@earendil-works/pi-tui";
+import { type Component, Container, HStack, isViewportTUI, Spacer, type TUI } from "@earendil-works/pi-tui";
 import { renderWithoutSidebarStats, renderWithoutWorkingDirectory } from "./footer-usage.ts";
 
 export type PanelMode = "auto" | "always" | "hidden";
+
+/** Left gutter for the main pane when Explorer is closed. */
+const MAIN_PANE_GUTTER = 4;
 
 export function panelVisibility(
 	width: number,
@@ -56,6 +59,7 @@ export class SidebarLayout {
 	private readonly sidebar: Component;
 	private readonly explorer: Component;
 	private readonly explorerPath: () => string | undefined;
+	private readonly gutter = new Spacer(1);
 	private original: Component | undefined;
 	private mounted: HStack | undefined;
 	private readonly footers = new Map<
@@ -96,6 +100,12 @@ export class SidebarLayout {
 				basis: 32,
 				shrink: 0,
 				visible: ({ width }) => panelVisibility(width, this.sidebarMode, this.explorerMode).explorer,
+			},
+			{
+				component: this.gutter,
+				basis: MAIN_PANE_GUTTER,
+				shrink: 0,
+				visible: ({ width }) => !panelVisibility(width, this.sidebarMode, this.explorerMode).explorer,
 			},
 			{ component: root, basis: 0, grow: 1, shrink: 1, minSize: 1 },
 			{

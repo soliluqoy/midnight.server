@@ -1,9 +1,10 @@
 import type { ExtensionAPI, ExtensionContext, SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { Value } from "typebox/value";
 import { formatEvidenceResult } from "./format-result.ts";
 import { TOOL_NAME } from "./index.ts";
 import { type EvidenceDisplaySummary, EvidenceLedger } from "./model.ts";
-import { PublicEvidenceParams } from "./public-params.ts";
+import { PublicEvidenceParams, StrictPublicEvidenceParams } from "./public-params.ts";
 import { type EvidenceLiveResultV2, PublicEvidenceResultSchema } from "./result-v2.ts";
 import { EvidenceRuntimeV2 } from "./runtime-v2.ts";
 
@@ -131,6 +132,7 @@ export function registerEvidence(
 		annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 		async execute(_id, params, signal, _update, ctx) {
 			if (!valid(ctx)) throw new Error("Evidence session changed.");
+			if (!Value.Check(StrictPublicEvidenceParams, params)) throw new Error("Invalid evidence request for action.");
 			const epoch = generation;
 			const result =
 				params.action === "audit"

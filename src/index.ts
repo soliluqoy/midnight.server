@@ -19,6 +19,7 @@ import { type PendingFile, SessionPendingFiles } from "./session-pending-files.t
 import { SessionTitle } from "./session-title.ts";
 import { Sidebar } from "./sidebar.ts";
 import { applyDefaultTheme } from "./theme.ts";
+import { collapseThinkingMarkdown } from "./thinking-markdown.ts";
 import { registerTokenSpeed } from "./token-speed.ts";
 import { registerTriage, type TriageStatus } from "./triage/index.ts";
 import { compactWorkflowMarkdown } from "./workflow-markdown.ts";
@@ -496,10 +497,16 @@ export default function midnight(pi: ExtensionAPI): void {
 	let title: SessionTitle | undefined;
 	let projectSwitcher = new ProjectSwitcher();
 	let compactTools = true;
+	let thinkingCollapsed = true;
+	let activeModel: ExtensionContext["model"];
 	const toolRenderers = compactToolRenderers(() => compactTools);
 	pi.registerToolRenderer(toolRenderers);
 	pi.registerMarkdownTransformer(compactWorkflowMarkdown(() => compactTools));
+	pi.registerMarkdownTransformer(
+		collapseThinkingMarkdown({ collapsed: () => thinkingCollapsed, model: () => activeModel }),
+	);
 	pi.on("session_start", (_event, ctx) => {
+		activeModel = ctx.model;
 		starting = true;
 		projectSwitcher.dispose();
 		projectSwitcher = new ProjectSwitcher();
@@ -569,7 +576,10 @@ export default function midnight(pi: ExtensionAPI): void {
 		title?.nameChanged(ctx);
 		panels?.update(ctx, false);
 	});
-	pi.on("model_select", update);
+	pi.on("model_select", (_event, ctx) => {
+		activeModel = ctx.model;
+		panels?.update(ctx, false);
+	});
 	const refreshTitle = (event: unknown, ctx: ExtensionContext) => {
 		refresh(event, ctx);
 		void title?.update(ctx);
@@ -579,7 +589,7 @@ export default function midnight(pi: ExtensionAPI): void {
 	pi.on("session_compact", refreshTitle);
 	pi.registerCommand("midnight", {
 		description:
-			"Midnight: status|doctor|config|context|rewind|checkpoints|browser; sidebar|explorer, project, compact, title, triage, evidence, refresh",
+			"Midnight: status|doctor|config|context|rewind|checkpoints|browser; sidebar|explorer, project, compact, title, thinking, triage, evidence, refresh",
 		handler: async (args, ctx) => {
 			if (question.active || triage.active || evidence.active) {
 				ctx.ui.notify("Finish or cancel the Midnight dialog before using /midnight commands.", "info");
@@ -603,6 +613,17 @@ export default function midnight(pi: ExtensionAPI): void {
 				compactTools = mode === "on";
 				panels?.refreshTranscriptRendering();
 				ctx.ui.notify(`Compact tool output ${compactTools ? "enabled" : "disabled"}.`, "info");
+				return;
+			}
+			if (panel === "thinking" && (mode === "show" || mode === "hide")) {
+				thinkingCollapsed = mode === "hide";
+				panels?.refreshTranscriptRendering();
+				ctx.ui.notify(
+					thinkingCollapsed
+						? "Thinking blocks collapsed to one line for DeepSeek models."
+						: "Thinking blocks shown in full.",
+					"info",
+				);
 				return;
 			}
 			if (!panels) {
@@ -631,7 +652,7 @@ export default function midnight(pi: ExtensionAPI): void {
 			else if (panel === "explorer" && !mode) panels.toggleExplorer();
 			else
 				ctx.ui.notify(
-					"/midnight status|doctor|config|context|rewind|checkpoints|browser; sidebar|explorer [auto|always|hidden], explorer go [path]|parent|project, project [path], compact on|off, title auto|off, triage model [provider/id]|models|on|off|status, evidence status|check|show [id], or refresh",
+					"/midnight status|doctor|config|context|rewind|checkpoints|browser; sidebar|explorer [auto|always|hidden], explorer go [path]|parent|project, project [path], compact on|off, thinking show|hide, title auto|off, triage model [provider/id]|models|on|off|status, evidence status|check|show [id], or refresh",
 					"info",
 				);
 		},

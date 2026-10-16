@@ -52,7 +52,9 @@ Checkpoint coverage is not an authorship claim or a full backup: pre-existing/ex
 
 ## Panels and everyday tools
 
-The **sidebar** shows the session title, Git state, context pressure, tokens/cost, model/thinking level, pending session files, and triage/evidence status. With the sidebar visible, duplicate session/model/usage footer fields are hidden; cache stats and other extension statuses remain. Midnight's redundant CLM size/revision footer status is hidden in all interactive layouts. Context details remain in the sidebar and `/midnight context`; hiding the sidebar restores Pi's normal footer. Explorer hides the footer path only when it repeats the working directory.
+The **sidebar** shows the session title, Git state, context pressure, tokens/cost, model/thinking level, pending session files, and triage/evidence status. With the sidebar visible, duplicate session/model/usage footer fields are hidden; cache stats and other extension statuses remain. Midnight's redundant CLM size/revision footer status is hidden in all interactive layouts. Context details remain in the sidebar and `/midnight context`; hiding the sidebar restores Pi's normal footer. When Explorer is closed, the main pane keeps a four-column left gutter, even if the sidebar remains open. Explorer hides the footer path only when it repeats the working directory.
+
+**DeepSeek thinking collapses to one line by default.** While the active model is DeepSeek (provider or model ID), thinking blocks render as `Thinking hidden · N lines · /midnight thinking show`; `/midnight thinking hide` collapses them again. This is display-only: the full reasoning text still streams to the model, stays in saved history, and is unaffected in exports or other models. Pi's own Ctrl+T still toggles the thinking-block label, but only `/midnight thinking show` reveals the collapsed text.
 
 **SESSION FILES** shows current pending Git changes for paths touched by successful `edit`/`write` calls on the active conversation branch. It is **not** a session-authored diff: pre-existing or external edits may be included; shell-only paths not touched by those tools are not listed. Staged and unstaged changes remain separate. Conflicts, binary/unreadable states and historical **RECORDED FILES** do not receive invented clean counts. Click a row for a bounded read-only diff. Refreshes do not poll external changes; use `/midnight refresh` when needed.
 
@@ -64,7 +66,7 @@ The `midnight_question` tool asks one focused question with alternatives or text
 
 ## Local evidence ledger (development)
 
-`midnight_evidence` records branch-aware **evidence** (source observations), **claims** (interpretations with supporting evidence IDs), and **gaps** (unanswered questions). It is local bookkeeping, **not independent verification**. Passive receipts for structured shell exit codes and log-triage results are observations, not claim support by themselves; no command text or log body is copied into a receipt. The ledger does not inject prompts, invoke helper uploads, or create conclusions automatically.
+`midnight_evidence` records branch-aware **evidence** (source observations), **claims** (interpretations with supporting evidence IDs), and **gaps** (unanswered questions). It is local bookkeeping, **not independent verification**. Its model-facing input schema has an object root for providers that reject top-level unions (including DeepSeek); action-specific requirements are still enforced locally. Passive receipts for structured shell exit codes and log-triage results are observations, not claim support by themselves; no command text or log body is copied into a receipt. The ledger does not inject prompts, invoke helper uploads, or create conclusions automatically.
 
 For substantial investigations, invoke the explicit-only `/skill:midnight-evidence <question>`; routine edits need no ledger workflow. For example:
 
@@ -117,7 +119,7 @@ Bundled workflow skills are **midnight-context**, **midnight-checkpoints**, and 
 | `/midnight rewind`; `/midnight checkpoints [status\|capture\|redo\|recover\|legacy\|import]` | Picker, snapshots, restore and migration |
 | `/midnight sidebar\|explorer [auto\|always\|hidden]`; `/midnight explorer go [path]\|parent\|project` | Panels and browsing |
 | `/midnight project [path]`; `/midnight refresh` | Confirmed project switch; refresh file/Git state |
-| `/midnight compact on\|off`; `/midnight title auto\|off` | Display and automatic title controls |
+| `/midnight compact on\|off`; `/midnight thinking show\|hide`; `/midnight title auto\|off` | Display, DeepSeek thinking and automatic title controls |
 | `/midnight evidence status\|check\|show [id]`; `preview <ids...>\|--empty`; `commit <token>`; `recover` | Ledger inspection and user-confirmed recovery |
 | `/midnight triage model [provider/model-id]`; `models\|on\|off\|status` | Helper selection, consent and usage |
 | `/midnight browser status\|disconnect\|connect <url>` | Optional browser registration |
