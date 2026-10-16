@@ -267,7 +267,6 @@ async function lock<T>(root: string, operation: () => Promise<T>): Promise<T> {
 async function writeSpoolBlobs(root: string, blobs: readonly SpoolBlob[], signal?: AbortSignal): Promise<void> {
 	signal?.throwIfAborted();
 	if (!blobs.length) return;
-	// Git stdin-paths uses C-quoted UTF-8 filenames, not shell quoting or NUL records.
 	const paths = blobs.map((blob) => {
 		const path = process.platform === "win32" ? blob.path.replaceAll("\\", "/") : blob.path;
 		let quoted = '"';

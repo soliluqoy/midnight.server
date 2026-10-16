@@ -1,6 +1,5 @@
 //go:build js && wasm
 
-// Midnight's js/wasm bridge. Upstream model and feature extraction are unmodified.
 package main
 
 import (

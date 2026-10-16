@@ -9,9 +9,6 @@ import (
 	"unicode/utf8"
 )
 
-// FeatureNames lists the per-line features in the order LineFeatures writes
-// them. The embedded model was trained on exactly this order; training and
-// inference both call LineFeatures, so there is one code path.
 var FeatureNames = []string{
 	"bm25", "bm25_norm", "bm25_rank", "bm25_win_sum", "cover_win_sum", "bm25_tail_norm",
 	"cover", "cover_idf", "cover_n", "cover_maxidf", "cover_rank", "cover_tail",
@@ -29,7 +26,6 @@ var FeatureNames = []string{
 	"para_cover_max", "sec_cover", "prf_cover", "prf_compound",
 }
 
-// Feature indexes, in FeatureNames order.
 const (
 	fBm25 = iota
 	fBm25Norm
@@ -107,10 +103,6 @@ const (
 	maxCompounds  = 64
 )
 
-// LineFeatures splits context at "\n" and returns its lines with one feature
-// row per line, nFeatures wide. Only the query's last maxQueryBytes count.
-// The result depends only on the inputs: map lookups never decide an order and
-// every float sum runs in line order.
 func LineFeatures(context, query string) ([]string, [][]float32) {
 	if cut := len(query) - maxQueryBytes; cut > 0 {
 		for cut < len(query) && !utf8.RuneStart(query[cut]) {
@@ -134,8 +126,6 @@ func LineFeatures(context, query string) ([]string, [][]float32) {
 	}
 	bmMax, tailMax := maxOf(bm), maxOf(bmTail)
 
-	// Term index over the lines: each line's distinct terms (words plus their
-	// camelCase, snake_case and digit parts) and how many lines hold each.
 	ids := map[string]int32{}
 	var df []int32
 	lineTerms := make([][]int32, n)
@@ -302,9 +292,6 @@ func LineFeatures(context, query string) ([]string, [][]float32) {
 		r[fCtxBm25Max] = f(bmMax)
 	}
 
-	// Paragraphs (runs of non-blank lines), the nearest earlier heading, and
-	// feedback terms: rare terms of the three lines that cover the query best,
-	// which name the next hop (an entity, a callee, a file) the query does not.
 	paraMax := make([]float64, n)
 	for i := 0; i < n; {
 		j := i
@@ -336,8 +323,7 @@ func LineFeatures(context, query string) ([]string, [][]float32) {
 			}
 		}
 	}
-	// Structured identifiers (paths, dotted names, ids like pg-cart-98) the
-	// best lines name and the query does not: the next hop, verbatim.
+
 	inCompounds := map[string]bool{}
 	for _, c := range compounds {
 		inCompounds[c] = true
@@ -457,7 +443,6 @@ func maxOf(v []float64) float64 {
 	return m
 }
 
-// rankFrac gives each value the share of values strictly greater than it.
 func rankFrac(v []float64) []float64 {
 	order := make([]int, len(v))
 	for i := range order {
@@ -475,8 +460,6 @@ func rankFrac(v []float64) []float64 {
 	return out
 }
 
-// queryTail is the query's last three non-empty lines: in an agent turn the
-// intent and the tool call that the context answers.
 func queryTail(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	var tail []string
@@ -489,7 +472,6 @@ func queryTail(s string) string {
 	return strings.Join(tail, "\n")
 }
 
-// stopwords matches the engine's BM25 stop list.
 var stopwords = map[string]bool{
 	"a": true, "an": true, "and": true, "are": true, "as": true, "at": true,
 	"be": true, "by": true, "for": true, "from": true, "how": true, "in": true,
@@ -498,9 +480,6 @@ var stopwords = map[string]bool{
 	"where": true, "which": true, "who": true, "why": true, "with": true,
 }
 
-// tokenize returns the lowercased words of s (runs of letters, digits and
-// underscores, two or more characters, stop words dropped) in order, and the
-// words together with their camelCase, snake_case and letter/digit parts.
 func tokenize(s string) (words, terms []string) {
 	start := -1
 	flush := func(end int) {
@@ -539,8 +518,6 @@ func tokenize(s string) (words, terms []string) {
 	return words, terms
 }
 
-// mayHaveParts is false only for words splitIdent leaves whole: all ASCII
-// with no underscore, no capital and no letter/digit change.
 func mayHaveParts(w string) bool {
 	digits, others := false, false
 	for i := 0; i < len(w); i++ {
@@ -557,9 +534,6 @@ func mayHaveParts(w string) bool {
 	return digits && others
 }
 
-// splitIdent cuts an identifier at underscores, lower-to-upper case changes,
-// the last capital of a capital run before a lowercase letter, and
-// letter/digit changes, and lowercases the parts.
 func splitIdent(w []rune) []string {
 	var parts []string
 	start := 0
@@ -615,8 +589,6 @@ func ngrams(words []string) (bi, tri map[string]bool) {
 	return bi, tri
 }
 
-// compoundTerms returns the query's identifiers that carry structure (dotted
-// names, paths, snake_case, camelCase, flags), lowercased, first 64 distinct.
 func compoundTerms(query string) []string {
 	fields := strings.FieldsFunc(query, func(r rune) bool {
 		return unicode.IsSpace(r) || strings.ContainsRune("\"'`()[]{}<>,;=|", r)
@@ -644,8 +616,6 @@ func compoundTerms(query string) []string {
 	return out
 }
 
-// template masks digit runs and long hex runs so repeated log lines that
-// differ only in numbers, ids or timestamps share one key.
 func template(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -720,8 +690,6 @@ func nonBlankNeighbours(blank []bool) (prev, next []int) {
 	return prev, next
 }
 
-// blockHeaders gives each non-blank line the nearest earlier non-blank line
-// with a smaller indent (its enclosing block's header), or -1.
 func blockHeaders(indent []int, blank []bool) []int {
 	out := make([]int, len(indent))
 	var stack []int
@@ -767,7 +735,6 @@ var (
 	sigWords     = []string{"def ", "async def ", "class ", "func ", "function ", "fn ", "pub ", "struct ", "interface ", "type ", "impl ", "public ", "private ", "protected ", "static ", "export ", "module ", "package ", "import ", "from ", "#include", "const ", "var ", "let ", "@"}
 )
 
-// lineKinds returns the k_* flags, fKError through fKBullet.
 func lineKinds(trimmed, lower string) [fKBullet - fKError + 1]float32 {
 	var k [fKBullet - fKError + 1]float32
 	set := func(i int, ok bool) {
@@ -797,8 +764,6 @@ func lineKinds(trimmed, lower string) [fKBullet - fKError + 1]float32 {
 	return k
 }
 
-// stripLineNumber drops a leading "123 ", "123:" or "123|" line-number prefix
-// as tools print it.
 func stripLineNumber(s string) string {
 	i := 0
 	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
@@ -842,8 +807,6 @@ func hasPath(s string) bool {
 	return false
 }
 
-// hasPathLine finds "name.ext:123", the way compilers, tests and grep cite a
-// line.
 func hasPathLine(s string) bool {
 	for i := 1; i+1 < len(s); i++ {
 		if s[i] != ':' || s[i+1] < '0' || s[i+1] > '9' {

@@ -13,9 +13,6 @@ const (
 	bm25B  = 0.75
 )
 
-// bm25 scores each doc against the query. The scores are unnormalized and
-// comparable only within the slice. The model was trained on exactly this
-// implementation, so its tokenization, stopwords and term order are fixed.
 func bm25(query string, docs []string) []float64 {
 	queryTerms := bm25TermFreq(query)
 	out := make([]float64, len(docs))
@@ -41,8 +38,7 @@ func bm25(query string, docs []string) []float64 {
 	if totalLen > 0 {
 		avgdl = float64(totalLen) / float64(len(docs))
 	}
-	// A fixed term order: float addition is not associative, and callers break
-	// score ties with exact equality, so map order must not move a score.
+
 	terms := slices.Sorted(maps.Keys(queryTerms))
 	for i := range docs {
 		for _, term := range terms {
