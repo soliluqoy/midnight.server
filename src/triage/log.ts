@@ -63,6 +63,35 @@ function allowedName(path: string): boolean {
 	return !path.split(/[\\/]/).some((part) => SECRET_PATH.test(part));
 }
 
+export interface SnapshotStore {
+	track(directory: string): void;
+	dispose(): Promise<void>;
+}
+
+export function createSnapshotStore(
+	remove: (directory: string) => Promise<void> = (directory) => rm(directory, { recursive: true, force: true }),
+): SnapshotStore {
+	const directories = new Set<string>();
+	return {
+		track(directory) {
+			directories.add(directory);
+		},
+		async dispose() {
+			const pending = [...directories];
+			directories.clear();
+			await Promise.all(
+				pending.map(async (directory) => {
+					try {
+						await remove(directory);
+					} catch {
+						// Snapshot cleanup must never break shutdown or mask another error.
+					}
+				}),
+			);
+		},
+	};
+}
+
 export async function prepareLog(
 	cwd: string,
 	selection: LogSelection,

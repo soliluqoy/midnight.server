@@ -94,11 +94,11 @@ export function analyzeLog(lines: string[], startLine?: number, maxLines = MAX_L
 	const end = startLine === undefined ? lines.length : Math.min(lines.length, start + maxLines);
 	const groups = new Map<string, Diagnostic>();
 	const repeats = new Set<number>();
-	let unrecognized = false;
+	let sawRecognizedDiagnostic = false;
 	for (let index = start; index < end; index++) {
 		const match = matchDiagnostic(lines[index]);
 		if (!match) continue;
-		unrecognized ||= !match.recognized;
+		sawRecognizedDiagnostic ||= match.recognized;
 		const signature = lines[index].trim();
 		const previous = groups.get(signature);
 		if (previous) {
@@ -194,7 +194,7 @@ export function analyzeLog(lines: string[], startLine?: number, maxLines = MAX_L
 		selected.size === end - start && text.length <= 3000 && Buffer.byteLength(text) <= 4096 && selected.size <= 24;
 	const recognized =
 		groups.size > 0 &&
-		!unrecognized &&
+		sawRecognizedDiagnostic &&
 		groups.size === diagnostics.length &&
 		diagnostics.every((item) => !item.messageTruncated && evidenceIndexes.has(item.firstLine - 1));
 	const tail = [...evidenceIndexes]
@@ -218,7 +218,7 @@ export function analyzeLog(lines: string[], startLine?: number, maxLines = MAX_L
 				: null;
 	const categories = new Set(diagnostics.map((item) => item.category));
 	const localCategory =
-		groups.size === diagnostics.length && !unrecognized && categories.size
+		groups.size === diagnostics.length && sawRecognizedDiagnostic && categories.size
 			? categories.size === 1
 				? diagnostics[0].category
 				: "mixed"

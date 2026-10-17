@@ -66,7 +66,7 @@ export function renderTriage(data: TriageData): string {
 				]
 			: []),
 		`Source: ${data.source}`,
-		`Local full snapshot (may contain secrets; do not upload): ${data.snapshot}\nSnapshot SHA-256: ${data.sha256}`,
+		`Local full snapshot (valid until this session is reloaded or ends; may contain secrets; do not upload): ${data.snapshot}\nSnapshot SHA-256: ${data.sha256}`,
 		`Locally scanned lines ${formatRanges([data.scannedRange])} of ${data.totalLines}. Selected evidence/upload lines: ${formatRanges(data.selectedRanges)}. Omitted from selection: ${formatRanges(data.omittedRanges)}. Only selected lines reach the provider; a local scan is not exhaustive diagnosis. Exit code is unknown unless independently recorded.`,
 		`Credential redaction: ${data.redacted ? "applied" : "no common patterns detected"}; not a guarantee that the text is secret-free.`,
 		data.category

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-import { formatTokens } from "./settings.ts";
+import { formatTokens } from "./tokens.ts";
 
 export const DEFAULT_COMPACT_PROMPT = `Compact your live context now.
 

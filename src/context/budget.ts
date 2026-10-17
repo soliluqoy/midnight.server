@@ -1,4 +1,6 @@
 import { defined } from "./defined.ts";
+import { parseReminders, parseTokenCount } from "./tokens.ts";
+
 export interface BudgetPolicyConfig {
 	contextBudget?: number;
 	reserve: number;
@@ -58,17 +60,15 @@ export function estimateFactorFromEnv(env: NodeJS.ProcessEnv = process.env): num
 export function budgetPolicyFromEnv(env: NodeJS.ProcessEnv = process.env): Partial<BudgetPolicyConfig> {
 	const overrides: Partial<BudgetPolicyConfig> = {};
 	const budget = env.PI_CLM_BUDGET?.trim();
-	if (budget) overrides.contextBudget = Number(budget);
+	if (budget) overrides.contextBudget = parseTokenCount(budget);
 	const reserve = env.PI_CLM_RESERVE?.trim();
-	if (reserve) overrides.reserve = Number(reserve);
+	if (reserve) overrides.reserve = parseTokenCount(reserve);
 	const remind = env.PI_CLM_REMIND_AT?.trim();
 	if (remind !== undefined && remind !== "") {
-		if (remind === "off" || remind === "none") {
-			overrides.remindAtFractions = [];
-			overrides.remindAtReserve = false;
-		} else {
-			overrides.remindAtFractions = remind.split(",").map((part) => Number(part.trim()));
-		}
+		const fractions = parseReminders(remind);
+		overrides.remindAtFractions = fractions;
+		// `parseReminders` treats "off"/"none" case-insensitively; disabling reminders must also drop the reserve one.
+		if (fractions.length === 0) overrides.remindAtReserve = false;
 	}
 	return overrides;
 }

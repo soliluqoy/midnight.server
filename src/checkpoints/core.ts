@@ -30,6 +30,12 @@ export interface Checkpoint {
 	entryId: string | null;
 	contextRevision: number | null;
 	trigger: "resume" | "turn" | "before-restore" | "manual";
+	/**
+	 * Set only for snapshots imported from legacy pi-rewind metadata. An import is appended to the branch after
+	 * the checkpoints it predates, so its position is not chronological and its own `scope` is the pending state
+	 * it recorded. Captured snapshots leave this undefined.
+	 */
+	provenance?: "legacy-import";
 	timestamp: number;
 	branch: string;
 	head: string | null;
@@ -53,6 +59,20 @@ export interface RestorePlan {
 	paths: string[];
 	fingerprint: string;
 	changes: { path: string; worktree: boolean; index: boolean; deletion: boolean }[];
+	/** Present when commits were made since the checkpoint: the restore moves the branch back to the checkpoint's commit. */
+	head?: HeadMove;
+	/** Paths changed by the moved-over commits that the snapshot did not capture; they stay as uncommitted changes. */
+	kept: string[];
+}
+export interface HeadMove {
+	/** The full branch ref (`refs/heads/…`), or `HEAD` for a detached checkout. */
+	ref: string;
+	from: string;
+	to: string;
+	/** Number of commits reachable from `from` but not from `to`; they leave the branch (still in the reflog). */
+	leaving: number;
+	/** `<short sha> <subject>` for up to 20 of those commits, newest first. */
+	commits: string[];
 }
 export interface CaptureOptions {
 	sessionId: string;
@@ -513,6 +533,7 @@ function validCheckpoint(value: unknown): value is Checkpoint {
 		(cp.entryId === null || typeof cp.entryId === "string") &&
 		(cp.contextRevision === null || (Number.isSafeInteger(cp.contextRevision) && Number(cp.contextRevision) >= 0)) &&
 		["resume", "turn", "before-restore", "manual"].includes(cp.trigger ?? "") &&
+		(cp.provenance === undefined || cp.provenance === "legacy-import") &&
 		Number.isFinite(cp.timestamp) &&
 		typeof cp.branch === "string" &&
 		cp.branch.length < 1024 &&
@@ -661,24 +682,60 @@ export async function prepareRestore(
 	const cp = await loadCheckpoint(root, target.ref);
 	if (cp.commit !== target.commit) throw new Error("Checkpoint reference changed.");
 	const now = await head(root);
-	if (now.branch !== cp.branch || now.head !== cp.head)
-		throw new Error("Branch or HEAD changed. Restore is refused; Midnight never rewinds Git history.");
-	const paths = [...new Set(scope)].sort();
-	if (paths.length > MAX_PATHS || paths.some((path) => exclusion(path))) throw new Error("Unsafe restore scope.");
+	if (now.branch !== cp.branch)
+		throw new Error(
+			`The checkpoint was taken on ${cp.branch.replace(/^refs\/heads\//, "")}, not the current ${now.branch.replace(/^refs\/heads\//, "")}. Switch back first; restore is refused.`,
+		);
+	const requested = [...new Set(scope)];
+	if (requested.length > MAX_PATHS || requested.some((path) => exclusion(path)))
+		throw new Error("Unsafe restore scope.");
 	const covered = new Set(cp.covered);
 	const excluded = cp.excluded.map((entry) => entry.path);
-	if (paths.some((path) => excluded.some((entry) => path === entry || path.startsWith(`${entry}/`))))
+	const uncaptured = (path: string) => excluded.some((entry) => path === entry || path.startsWith(`${entry}/`));
+	if (requested.some(uncaptured))
 		throw new Error("Restore includes an uncaptured path; incomplete coverage cannot be treated as clean.");
 	const wt = await tree(root, cp.worktreeTree);
 	const idx = await tree(root, cp.indexTree);
-	if (paths.some((path) => !covered.has(path) && (wt.has(path) || idx.has(path))))
+	if (requested.some((path) => !covered.has(path) && (wt.has(path) || idx.has(path))))
 		throw new Error("Restore coverage does not match the snapshot.");
 	const temp = await temporaryIndex(root);
 	try {
-		const currentIndex = await tree(root, await indexTree(root, temp.env));
+		const currentIndexTree = await indexTree(root, temp.env);
+		const currentIndex = await tree(root, currentIndexTree);
+		const kept: string[] = [];
+		let move: HeadMove | undefined;
+		const paths = new Set(requested);
+		if (now.head !== cp.head) {
+			// Commits were made since the checkpoint. Like pi-rewind, the restore moves the branch back to the checkpoint's
+			// commit, so every path those commits or the staged index changed has to be reconciled with the snapshot too.
+			if (!now.head || !cp.head)
+				throw new Error("The checkpoint predates the branch's first commit; restore is refused.");
+			const known = await git(root, ["cat-file", "-t", cp.head]).catch(() => Buffer.from(""));
+			if (known.toString("utf8").trim() !== "commit")
+				throw new Error("The checkpoint's commit is no longer available; restore is refused.");
+			move = {
+				ref: cp.branch === "detached" ? "HEAD" : cp.branch,
+				from: now.head,
+				to: cp.head,
+				...(await leaving(root, cp.head, now.head)),
+			};
+			for (const [from, to] of [
+				[cp.head, now.head],
+				[cp.indexTree, currentIndexTree],
+			]) {
+				for (const path of nul(await git(root, ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", from, to]))) {
+					if (paths.has(path)) continue;
+					if (exclusion(path) || uncaptured(path) || (!covered.has(path) && (wt.has(path) || idx.has(path))))
+						kept.push(path);
+					else paths.add(path);
+				}
+			}
+		}
 		const changes: RestorePlan["changes"] = [];
 		let readBytes = 0;
-		for (const path of paths) {
+		const sorted = [...paths].sort();
+		if (sorted.length > MAX_PATHS) throw new Error("Unsafe restore scope.");
+		for (const path of sorted) {
 			const file = await inspectFile(root, path);
 			const desired = wt.get(path);
 			if (desired && !["100644", "100755"].includes(desired.mode))
@@ -694,10 +751,33 @@ export async function prepareRestore(
 			const index = JSON.stringify(idx.get(path)) !== JSON.stringify(currentIndex.get(path));
 			if (worktree || index) changes.push({ path, worktree, index, deletion: !desired && file !== null });
 		}
-		return { target: cp, paths, changes, fingerprint: await currentFingerprint(root, paths, currentIndex) };
+		return {
+			target: cp,
+			paths: sorted,
+			changes,
+			...(move ? { head: move } : {}),
+			kept: kept.sort(),
+			fingerprint: await currentFingerprint(root, sorted, currentIndex),
+		};
 	} finally {
 		await rm(temp.dir, { recursive: true, force: true });
 	}
+}
+async function leaving(root: string, to: string, from: string): Promise<Pick<HeadMove, "leaving" | "commits">> {
+	const count = Number(await text(root, ["rev-list", "--count", from, `^${to}`]));
+	const log = await text(root, ["log", "--no-color", "--format=%h %s", "-n", "20", from, `^${to}`]);
+	return { leaving: Number.isSafeInteger(count) ? count : 0, commits: log ? log.split("\n") : [] };
+}
+async function moveHead(root: string, move: HeadMove, signal?: AbortSignal): Promise<void> {
+	// Compare-and-swap against the previewed commit, logged in the reflog so the old tip stays findable.
+	const message = `midnight: rewind to checkpoint commit ${move.to.slice(0, 12)}`;
+	await git(
+		root,
+		move.ref === "HEAD"
+			? ["update-ref", "--no-deref", "-m", message, "HEAD", move.to, move.from]
+			: ["update-ref", "-m", message, move.ref, move.to, move.from],
+		{ signal },
+	);
 }
 export interface RestoreRecovery {
 	backup: StoredCheckpoint;
@@ -755,7 +835,8 @@ export async function restoreCheckpoint(
 			pending
 				? pending.fingerprint !== options.recovery ||
 					plan.target.ref !== pending.backup.ref ||
-					JSON.stringify([...plan.paths].sort()) !== JSON.stringify([...pending.paths].sort())
+					// A plan that moves HEAD back adds the moved-over commit paths, so it may cover more than the journal.
+					pending.paths.some((path) => !plan.paths.includes(path))
 				: options.recovery !== undefined
 		)
 			throw new Error(
@@ -832,6 +913,7 @@ export async function restoreCheckpoint(
 			}
 			const late = await prepareRestore(root, plan.target, plan.paths);
 			if (late.fingerprint !== plan.fingerprint) throw new Error("Files changed before restore writes began.");
+			if (plan.head) await moveHead(root, plan.head, options.signal);
 			for (const change of plan.changes.filter((change) => change.worktree)) {
 				options.signal?.throwIfAborted();
 				const target = await filePath(root, change.path);

@@ -1,7 +1,7 @@
 # EVIDENCE Phase 0 — baseline and lifecycle design
 
 > Phase 0 deliverable: characterization tests and an implementation proposal, not shipped recovery behavior.
-> Resume work through [`EVIDENCE_BUILD_PLAN.md`](../EVIDENCE_BUILD_PLAN.md).
+> Resume work through [`docs/releases/unreleased.md`](releases/unreleased.md): the `EVIDENCE_BUILD_PLAN.md` handoff ledger was deleted (and is gitignored), so the surviving notes are there.
 > At the Phase 0 checkpoint, production files, persisted schemas, commands, defaults, and dependency pins were unchanged. Section 10 records subsequent internal-model work; live behavior still remains v1.
 
 ## 1. Scope and decision boundary

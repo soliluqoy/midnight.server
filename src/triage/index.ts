@@ -1,9 +1,10 @@
+import { dirname } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { TrimRuntime, trimEnabled } from "../trim/runtime.ts";
 import { addUsage, emptyUsage, HELPER_REVISION, resolveHelper, TriageClient } from "./client.ts";
-import { MAX_LINES, prepareLog, redact } from "./log.ts";
+import { createSnapshotStore, MAX_LINES, prepareLog, redact } from "./log.ts";
 import { renderTriage, type TriageData, TriageSchema } from "./result.ts";
 
 export const TOOL_NAME = "midnight_log_triage";
@@ -77,6 +78,7 @@ export function registerTriage(pi: ExtensionAPI, dependencies: TriageDependencie
 	const client = dependencies.client ?? new TriageClient();
 	const env = dependencies.env ?? process.env;
 	const trim = new TrimRuntime(trimEnabled(env));
+	const snapshots = createSnapshotStore();
 	const prepare =
 		dependencies.prepare ?? ((cwd, selection, key, signal) => prepareLog(cwd, selection, key, signal, undefined, trim));
 	const now = dependencies.now ?? (() => performance.now());
@@ -182,6 +184,7 @@ export function registerTriage(pi: ExtensionAPI, dependencies: TriageDependencie
 			const current = state;
 			const combined = AbortSignal.any([current.controller.signal, ...(signal ? [signal] : [])]);
 			const log = await prepare(ctx.cwd, args, "", combined);
+			snapshots.track(dirname(log.snapshot));
 			combined.throwIfAborted();
 			if (current !== state) throw new Error("Triage session changed; no result delivered.");
 			const helperReady = current.enabled && Boolean(current.model);
@@ -340,11 +343,12 @@ export function registerTriage(pi: ExtensionAPI, dependencies: TriageDependencie
 		state.controller = new AbortController();
 		state.cache.clear();
 	});
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		cancelDialogs();
 		trim.reset();
 		state.controller.abort();
 		state = freshState();
+		await snapshots.dispose();
 		initialProject ??= ctx.cwd;
 		state.model = env.MIDNIGHT_TRIAGE_MODEL?.trim() ?? "";
 		state.enabled =
@@ -353,11 +357,12 @@ export function registerTriage(pi: ExtensionAPI, dependencies: TriageDependencie
 		setActive();
 		update(ctx);
 	});
-	pi.on("session_shutdown", (_event, ctx) => {
+	pi.on("session_shutdown", async (_event, ctx) => {
 		cancelDialogs();
 		trim.reset();
 		state.controller.abort();
 		state = freshState();
+		await snapshots.dispose();
 		update(ctx);
 	});
 

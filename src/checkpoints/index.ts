@@ -2,6 +2,7 @@ import { relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	captureCheckpoint,
+	changedPaths,
 	loadCheckpoints,
 	prepareRestore,
 	pruneCheckpoints,
@@ -14,7 +15,7 @@ import {
 } from "./core.ts";
 
 import { importLegacyCheckpoint, legacyCheckpoints } from "./legacy.ts";
-import { reviewRestore } from "./preview.ts";
+import { branchName, headSummary, reviewRestore } from "./preview.ts";
 
 const ENTRY = "midnight-checkpoint";
 const REDO = "midnight-checkpoint-redo";
@@ -40,6 +41,93 @@ function contextRevision(ctx: ExtensionContext): number | null {
 	}
 	return null;
 }
+export interface CheckpointStep {
+	ref: string;
+	/** Paths this checkpoint changed relative to the checkpoint before it; empty for the first step. */
+	changed: readonly string[];
+}
+/**
+ * Paths a rewind to `targetRef` has to reconcile: the changed-path deltas of the checkpoint steps after it.
+ * Paths last touched before the target already match its snapshot, while a path that only exists after the
+ * target stays in the set so the restore reports it as a deletion instead of silently skipping it.
+ */
+export function restoreScope(steps: readonly CheckpointStep[], targetRef: string): string[] {
+	const target = steps.findIndex((step) => step.ref === targetRef);
+	if (target < 0) throw new Error("Restore target is not part of the current checkpoint branch.");
+	const paths = new Set<string>();
+	for (const step of steps.slice(target + 1)) {
+		for (const path of step.changed) paths.add(path);
+	}
+	return [...paths].sort();
+}
+export interface RecordedRestoreEffect {
+	/** Capture time of the backup that preceded the restore; a restore only diverges targets captured before it. */
+	at: number;
+	/** Paths the confirmed restore actually changed, not every candidate the preview listed. */
+	paths: readonly string[];
+}
+/** A redo step as held in the session: its pre-restore backup, the candidate scope, and the paths it changed. */
+export interface RedoStep {
+	checkpoint: StoredCheckpoint;
+	paths: readonly string[];
+	/** Absent on records written before exact effects were tracked; those are skipped rather than widened. */
+	changed?: readonly string[];
+}
+/**
+ * Midnight's own confirmed restores, recovered from the persisted redo history. Each redo step pairs the mandatory
+ * before-restore backup with the `changed` paths that restore wrote; the backup is written before the files change,
+ * so without this the restore's own effect on the worktree is invisible to later deltas. Steps that predate exact
+ * effect tracking carry no `changed` list and are skipped: their candidate scope can include paths the restore
+ * never touched, and treating that as a known write would reconcile unrelated later edits.
+ */
+export function restoreEffects(steps: readonly RedoStep[]): RecordedRestoreEffect[] {
+	const effects: RecordedRestoreEffect[] = [];
+	for (const step of steps) {
+		if (!step.changed) continue;
+		effects.push({ at: step.checkpoint.timestamp, paths: step.changed });
+	}
+	return effects;
+}
+/**
+ * Paths an ordinary rewind to `target` reconciles: the recorded deltas of the steps after it plus the paths of
+ * Midnight's own restores that happened after it. A legacy-imported target also uses the pending paths recorded
+ * inside its own snapshot, because the import is appended after the checkpoints it predates.
+ */
+export function restorePaths(
+	steps: readonly CheckpointStep[],
+	effects: readonly RecordedRestoreEffect[],
+	target: StoredCheckpoint,
+): string[] {
+	const paths = new Set(restoreScope(steps, target.ref));
+	for (const effect of effects) {
+		if (effect.at <= target.timestamp) continue;
+		for (const path of effect.paths) paths.add(path);
+	}
+	if (target.provenance === "legacy-import") for (const path of target.scope) paths.add(path);
+	return [...paths].sort();
+}
+export async function checkpointSteps(
+	project: string,
+	checkpoints: readonly StoredCheckpoint[],
+): Promise<CheckpointStep[]> {
+	const steps: CheckpointStep[] = [];
+	// A legacy import is appended after the checkpoints it predates, so its array position is not chronological and
+	// a diff against it would be a whole-tree comparison, not a recorded delta. An import contributes no delta and
+	// never becomes the baseline for a later captured step.
+	let previousCaptured: StoredCheckpoint | undefined;
+	for (const checkpoint of checkpoints) {
+		if (checkpoint.provenance === "legacy-import") {
+			steps.push({ ref: checkpoint.ref, changed: [] });
+			continue;
+		}
+		steps.push({
+			ref: checkpoint.ref,
+			changed: previousCaptured ? await changedPaths(project, previousCaptured, checkpoint) : [],
+		});
+		previousCaptured = checkpoint;
+	}
+	return steps;
+}
 export interface CheckpointController {
 	command(args: string, ctx: ExtensionCommandContext): Promise<void>;
 	status(): string;
@@ -60,10 +148,17 @@ export function registerCheckpoints(
 	let warning: string | undefined;
 	let scope = new Set<string>();
 	let recovery: RestoreRecovery | null = null;
-	const redo: { checkpoint: StoredCheckpoint; paths: string[] }[] = [];
+	const redo: RedoStep[] = [];
 	const record = (cp: StoredCheckpoint) => pi.appendEntry(ENTRY, { version: 1, ref: cp.ref });
 	const recordRedo = () =>
-		pi.appendEntry(REDO, { version: 1, steps: redo.map((step) => ({ ref: step.checkpoint.ref, paths: step.paths })) });
+		pi.appendEntry(REDO, {
+			version: 1,
+			steps: redo.map((step) => ({
+				ref: step.checkpoint.ref,
+				paths: step.paths,
+				...(step.changed ? { changed: step.changed } : {}),
+			})),
+		});
 	async function loadRedo(project: string, ctx: ExtensionContext, signal: AbortSignal) {
 		const entry = [...ctx.sessionManager.getEntries()]
 			.reverse()
@@ -71,10 +166,10 @@ export function registerCheckpoints(
 		if (!entry || entry.type !== "custom" || !entry.data || typeof entry.data !== "object") return [];
 		const data = entry.data as { version?: unknown; steps?: unknown };
 		if (data.version !== 1 || !Array.isArray(data.steps) || data.steps.length > 50) return [];
-		const steps: { ref: string; paths: string[] }[] = [];
+		const steps: { ref: string; paths: string[]; changed?: string[] }[] = [];
 		for (const step of data.steps) {
 			if (!step || typeof step !== "object") throw new Error("Invalid saved redo state.");
-			const value = step as { ref?: unknown; paths?: unknown };
+			const value = step as { ref?: unknown; paths?: unknown; changed?: unknown };
 			if (
 				typeof value.ref !== "string" ||
 				!Array.isArray(value.paths) ||
@@ -82,7 +177,14 @@ export function registerCheckpoints(
 				!value.paths.every((p) => typeof p === "string" && safePath(p))
 			)
 				throw new Error("Invalid saved redo paths.");
-			steps.push({ ref: value.ref, paths: value.paths });
+			if (
+				value.changed !== undefined &&
+				(!Array.isArray(value.changed) ||
+					value.changed.length > 10000 ||
+					!value.changed.every((p) => typeof p === "string" && safePath(p)))
+			)
+				throw new Error("Invalid saved redo effect paths.");
+			steps.push({ ref: value.ref, paths: value.paths, ...(value.changed ? { changed: value.changed } : {}) });
 		}
 		const loaded = await loadCheckpoints(
 			project,
@@ -92,7 +194,7 @@ export function registerCheckpoints(
 		return steps.map((step) => {
 			const checkpoint = loaded.get(step.ref);
 			if (!checkpoint || checkpoint instanceof Error) throw checkpoint ?? new Error("Saved redo is unavailable.");
-			return { checkpoint, paths: step.paths };
+			return { checkpoint, paths: step.paths, ...(step.changed ? { changed: step.changed } : {}) };
 		});
 	}
 	function cancel() {
@@ -309,46 +411,78 @@ export function registerCheckpoints(
 				(!target.entryId || !ctx.sessionManager.getEntries().some((entry) => entry.id === target.entryId))
 			)
 				throw new Error("The checkpoint's conversation entry is unavailable. Choose files only.");
+			let fileOutcome: "restored" | "skipped" | "not-requested" = "not-requested";
+			let completed = "Restore completed. Git HEAD was not changed.";
 			if (choice !== "Conversation only") {
 				const paths =
-					action === "recover" ? (recovery?.paths ?? []) : action === "redo" ? (redo.at(-1)?.paths ?? []) : [...scope];
+					action === "recover"
+						? (recovery?.paths ?? [])
+						: action === "redo"
+							? (redo.at(-1)?.paths ?? [])
+							: restorePaths(await checkpointSteps(project, checkpoints), restoreEffects(redo), target);
+				// The plan also reports commits made since the checkpoint, so it is needed even when no recorded path changed.
 				const plan = await prepareRestore(project, target, paths);
-				if (!(await reviewRestore(ctx, plan)) || epoch !== generation) return;
-				const confirmed = await ctx.ui.confirm(
-					"Confirm scoped file restore",
-					`${plan.changes.length} reviewed paths change; ${target.excluded.length} snapshot paths excluded. HEAD stays unchanged.\n\nA recovery checkpoint is mandatory. Other paths are preserved.`,
-				);
-				if (!confirmed || epoch !== generation || !ctx.isIdle() || ctx.hasPendingMessages()) return;
-				const backup = await restoreCheckpoint(project, plan, {
-					sessionId: ctx.sessionManager.getSessionId(),
-					entryId: ctx.sessionManager.getLeafId(),
-					contextRevision: contextRevision(ctx),
-					scope: paths,
-					signal: controller.signal,
-					recovery: action === "recover" ? recovery?.fingerprint : undefined,
-				});
-				if (epoch !== generation) return;
-				record(backup);
-				if (action === "redo") redo.pop();
-				else {
-					redo.push({ checkpoint: backup, paths });
-					if (redo.length > 50) redo.shift();
+				if (action === "" && plan.changes.length === 0 && !plan.head) {
+					// Nothing on disk or in Git differs from the target here, so skip the preview, backup, journal and redo
+					// step. Any requested conversation navigation below still runs.
+					fileOutcome = "skipped";
+					ctx.ui.notify(
+						paths.length === 0
+							? "Nothing to restore: no recorded change after this checkpoint."
+							: "Nothing to restore: these paths already match this checkpoint.",
+						"info",
+					);
+				} else {
+					if (!(await reviewRestore(ctx, plan)) || epoch !== generation) return;
+					const deletions = plan.changes.filter((change) => change.deletion).length;
+					const confirmed = await ctx.ui.confirm(
+						"Confirm file restore",
+						`${plan.changes.length} reviewed paths change: ${plan.changes.length - deletions} restored, ${deletions} deleted (they exist only after this checkpoint); ${target.excluded.length} snapshot paths excluded. ${headSummary(plan.head)}\n\nA recovery checkpoint is mandatory. Other paths are preserved.`,
+					);
+					if (!confirmed || epoch !== generation || !ctx.isIdle() || ctx.hasPendingMessages()) return;
+					const backup = await restoreCheckpoint(project, plan, {
+						sessionId: ctx.sessionManager.getSessionId(),
+						entryId: ctx.sessionManager.getLeafId(),
+						contextRevision: contextRevision(ctx),
+						scope: plan.paths,
+						signal: controller.signal,
+						recovery: action === "recover" ? recovery?.fingerprint : undefined,
+					});
+					if (epoch !== generation) return;
+					record(backup);
+					if (action === "redo") redo.pop();
+					else {
+						// Record the paths this restore actually changed, so a later rewind cannot treat a candidate it
+						// left alone as a Midnight write and overwrite unrelated later edits to that path.
+						redo.push({ checkpoint: backup, paths: plan.paths, changed: plan.changes.map((change) => change.path) });
+						if (redo.length > 50) redo.shift();
+					}
+					recovery = null;
+					recordRedo();
+					await onRestore(ctx);
+					fileOutcome = "restored";
+					if (plan.head)
+						completed = `Restore completed. ${branchName(plan.head.ref)} now points to ${plan.head.to.slice(0, 7)}; ${plan.head.leaving} commit(s) left the branch (old tip ${plan.head.from.slice(0, 7)} is in the reflog and the recovery checkpoint; /midnight checkpoints redo brings it back).`;
 				}
-				recovery = null;
-				recordRedo();
-				await onRestore(ctx);
 			}
 			if (choice !== "Files only" && target.entryId) {
 				const result = await ctx.navigateTree(target.entryId, { summarize: false });
 				if (result.cancelled) {
 					ctx.ui.notify(
-						"Conversation navigation was cancelled. Any confirmed file restore already completed; use the recovery checkpoint if needed.",
+						fileOutcome === "restored"
+							? "Conversation navigation was cancelled. Any confirmed file restore already completed; use the recovery checkpoint if needed."
+							: "Conversation navigation was cancelled. No files were changed.",
 						"warning",
 					);
 					return;
 				}
+				ctx.ui.notify(
+					fileOutcome === "skipped" ? "Conversation navigation completed; no files were restored." : completed,
+					"info",
+				);
+				return;
 			}
-			ctx.ui.notify("Restore completed. Git HEAD was not changed.", "info");
+			if (fileOutcome === "restored") ctx.ui.notify(completed, "info");
 		} catch (error) {
 			ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 		} finally {

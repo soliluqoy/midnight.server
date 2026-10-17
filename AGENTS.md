@@ -5,7 +5,7 @@
 `midnight.server` is a TypeScript ESM package extending Pi with a session sidebar, file explorer, theme, compact tool rendering, automatic session titles, token-speed statistics, and local-first log triage with an optional Pi chat-model helper. It is a Pi-only extension, not a standalone server or a Claude Code/Codex CLI integration.
 
 - Requires Node.js **22.19+** and Git on PATH.
-- Pi coding-agent and TUI peer dependencies are pinned to **1.2.0**, matching the active managed Pi installation. Do not upgrade them or bypass peer checks without an explicit compatibility task.
+- Pi coding-agent and TUI peer dependencies are pinned to **1.2.0**. The active managed Pi installation is **1.3.0**. A dependency-level diff of 1.2.0 against 1.3.0 found the extension API surface and the private touchpoints this repo uses unchanged, but that does not prove compatibility: manual fullscreen/reload validation against 1.3.0 remains an open release gate. Do not upgrade the pins or bypass peer checks without an explicit compatibility task.
 - Pi loads TypeScript directly; there is no build step or emitted JavaScript.
 - Read `README.md` for supported behavior, controls, configuration, and privacy guarantees.
 
@@ -20,8 +20,9 @@ npm test
 ```
 
 - `npm run check` runs Biome with warnings treated as errors, then TypeScript with `--noEmit`.
-- `npm test` uses Node's built-in test runner and type stripping. It includes mocked provider responses and real Git operations in temporary repositories; it makes no provider calls.
-- Run a focused test with, for example, `node --experimental-strip-types --test tests/panels.test.ts`.
+- `npm test` runs the focused test files listed in `package.json` (Micro editing, evidence schema, layout, thinking Markdown, the question dialog, context token/budget parsing, log triage, and checkpoint restore scope) with Node's built-in test runner and type stripping; the checkpoint tests use real Git in temporary repositories, and the suite makes no provider calls.
+- The bulk of the suite was removed in `cb95438` and only these files have been restored; the removed registration, runtime, panels, triage and trim coverage has not been reinstated.
+- Run a focused test with, for example, `node --experimental-strip-types --test tests/micro-editor.test.ts`.
 - Keep validation proportionate: run only relevant focused tests while developing, then run `npm run check` and `npm test` once for the final code changes. Repeat only when a failure or subsequent relevant change warrants it; report failures or checks you could not run.
 - Do not run unnecessary tests, benchmarks, live/provider checks, packaging/install checks, or manual UI checks for unrelated changes. Do not reinstall dependencies unless needed for the task.
 - Use mocked Pi responses for routine development tests. Additional live/provider validation and paid benchmarks require explicit approval, including retries unless already covered by that approval. This is separate from ordinary authorized triage use; report actual attempts and any incomplete usage/cost for approved live checks.
@@ -45,7 +46,14 @@ Load only the local package, not another installed Midnight copy. Use `pi list` 
 - `src/compact-tools.ts`, `src/session-title.ts`, `src/token-speed.ts`, `src/footer-usage.ts`: tool presentation, naming, timing, and footer telemetry.
 - `src/theme.ts`, `themes/midnight.json`, `src/keys.ts`: theme defaults, bundled palette, and keybindings.
 - `src/triage/`: no-key local extraction, optional single-request Pi chat helper, bounded log selection, consent, cancellation, and usage accounting.
-- `tests/*.test.ts`: Node tests using injected I/O, component harnesses, and temporary Git repositories.
+- `src/context/`: native context management — mirror and projection, budget reminders, overflow guard, observation cap, steering, token parsing, compaction prompt, and the viewer.
+- `src/evidence/`: local evidence ledger — records, session store, v2 runtime, saved-result rendering, and the read-only selected-claim audit.
+- `src/checkpoints/`: Git checkpoint capture, restore scope and preview, redo/recovery, and legacy pi-rewind import.
+- `src/core/`: extension ownership arbitration and native-suite composition.
+- `src/trim/`: bundled Trim-1 line-ranker runtime and WebAssembly assets.
+- `src/browser.ts`, `src/micro-editor.ts`, `src/question.ts`: optional browser registration, bundled Micro launch, and the `midnight_question` dialog.
+- `src/thinking-markdown.ts`, `src/workflow-markdown.ts`: thinking-block and workflow Markdown rendering helpers.
+- `tests/*.test.ts`: the focused Node tests currently restored (see the test command above).
 
 ## Coding conventions
 
@@ -96,9 +104,9 @@ Load only the local package, not another installed Midnight copy. Use `pi list` 
 
 ### Evidence milestone execution
 
-- Use `EVIDENCE_BUILD_PLAN.md` as the task checklist and handoff record. Its historical handoffs are not fresh verification; distinguish implementation completion from release readiness.
-- Capacity-recovery development controls are implemented through Handoff 010. Preserve user-confirmed command-only commit/recovery, bounded carry/archive behavior, and old-writer restrictions. Do not expand this infrastructure unless a concrete defect or the next approved contract requires it.
-- Structured review reasons and minimum support/concern/resolution semantics are live for explicitly new sessions through Handoff 013. Preserve versioned initialization, persistence, replay/results and carry-forward. Handoff 014 adds the explicit-only `midnight-evidence` skill and read-only selected-claim `audit`. The selected milestone's development implementation is complete; do not expand it into optional features. Audit bypasses lifecycle writes, reports limitations and never claims truth verification. Remaining manual release gates and unmeasured workflow benefit must stay explicit. Retain uncertain legacy meaning rather than inventing precise reasons or relationships. The user selected new-session-only semantics: existing v1/v2 sessions must keep their replay behavior and hashes; no upgrade path is currently authorized. An empty evidence ledger alone does not establish a fresh session.
+- Use the surviving notes in `docs/evidence-phase-0.md` and `docs/releases/unreleased.md`. The root-level `EVIDENCE_BUILD_PLAN.md` handoff ledger was deleted and is gitignored; those historical handoffs are not fresh verification. Distinguish implementation completion from release readiness.
+- Capacity-recovery development controls are implemented in the queued v2 runtime. Preserve user-confirmed command-only commit/recovery, bounded carry/archive behavior, and old-writer restrictions. Do not expand this infrastructure unless a concrete defect or the next approved contract requires it.
+- Structured review reasons and minimum support/concern/resolution semantics are live for explicitly new sessions (v3). Preserve versioned initialization, persistence, replay/results and carry-forward. The explicit-only `midnight-evidence` skill and read-only selected-claim `audit` are in place. The selected milestone's development implementation is complete; do not expand it into optional features. Audit bypasses lifecycle writes, reports limitations and never claims truth verification. Remaining manual release gates and unmeasured workflow benefit must stay explicit. Retain uncertain legacy meaning rather than inventing precise reasons or relationships. The user selected new-session-only semantics: existing v1/v2 sessions must keep their replay behavior and hashes; no upgrade path is currently authorized. An empty evidence ledger alone does not establish a fresh session.
 - Keep manual fullscreen/reload compatibility explicitly release-blocking until validated with authorization. This does not require unrelated infrastructure work or silently block independent implementation of the remaining approved milestone.
 - Defer claim-maturity UI, dedicated test-evidence types, rich relationship browsing, excerpt-aware freshness, strict mode, and live model evaluation. Do not silently add them to this milestone.
 - Stop implementation when the selected milestone's behavior, targeted regressions, compatibility handling, and documentation meet their gates. If manual/runtime checks remain, report implementation readiness with explicit release blockers—not release completion. Do not claim measured reasoning or cost benefits without evidence.

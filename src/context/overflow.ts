@@ -153,3 +153,15 @@ export function overflowNoticeText(result: OverflowGuardResult, limit: number): 
 		"Free space in your context (see Editable context) and re-read only what you need, e.g. with offset/limit."
 	);
 }
+
+export function shouldReportUnavailable(result: OverflowGuardResult, limit: number): boolean {
+	return result.withheld.length === 0 && result.estimated > limit;
+}
+
+export function overflowUnavailableNotice(estimated: number, limit: number): string {
+	return (
+		`[CLM BUDGET] Overflow guard: the request exceeds the limit of ${limit.toLocaleString("en-US")} tokens (estimated ${estimated.toLocaleString("en-US")}) ` +
+		"and the guard found no eligible tool result to withhold. The full request will be sent as-is. " +
+		"Free space in your context now (see Editable context) and re-read only what you need, e.g. with offset/limit."
+	);
+}

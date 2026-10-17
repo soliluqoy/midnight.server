@@ -115,6 +115,7 @@ export async function readLegacyCheckpoint(root: string, ref: string): Promise<L
 			entryId: null,
 			contextRevision: null,
 			trigger: "manual",
+			provenance: "legacy-import",
 			timestamp,
 			branch,
 			head,

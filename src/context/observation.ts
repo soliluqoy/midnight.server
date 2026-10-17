@@ -1,4 +1,5 @@
 import { defined } from "./defined.ts";
+import { parseTokenCount } from "./tokens.ts";
 import type { LiveContextMessage } from "./types.ts";
 
 export interface ObservationCapPolicy {
@@ -12,8 +13,13 @@ export function observationCapFromEnv(env: NodeJS.ProcessEnv = process.env): Par
 	const raw = env.PI_CLM_OBSERVATION_CAP?.trim();
 	if (!raw || raw === "off" || raw === "0") return {};
 	const [charsPart, headPart] = raw.split(":");
-	const value = Number(charsPart);
-	if (!Number.isFinite(value) || value <= 0) {
+	let value: number;
+	try {
+		value = parseTokenCount(charsPart ?? "");
+	} catch {
+		value = Number.NaN;
+	}
+	if (!(value > 0)) {
 		throw new Error(
 			`PI_CLM_OBSERVATION_CAP must be a positive number of characters[:head fraction] or "off", got ${raw}`,
 		);

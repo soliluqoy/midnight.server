@@ -55,7 +55,9 @@ import {
 	type OverflowGuardPolicy,
 	overflowGuardLimit,
 	overflowNoticeText,
+	overflowUnavailableNotice,
 	resolveOverflowGuard,
+	shouldReportUnavailable,
 } from "./overflow.ts";
 import { PressureTracker, selectContextVisibleMessages } from "./policy.ts";
 import {
@@ -84,7 +86,6 @@ import {
 	type ClmSettingsOverrides,
 	changedSettings,
 	defaultClmSettings,
-	formatTokens,
 	isClmSettingsEntry,
 	sanitizeOverrides,
 	settingDescriptor,
@@ -98,6 +99,7 @@ import {
 	toOutcomeEntry,
 } from "./state.ts";
 import { loadSteeringDocument, type SteeringDocument, steeringPromptSection } from "./steering.ts";
+import { formatTokens } from "./tokens.ts";
 import { ContextTrimmer } from "./trim.ts";
 import type { LiveContextMessage, TurnBaseline } from "./types.ts";
 import {
@@ -224,6 +226,7 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 	let observationCap = resolveObservationCap(options.observationCap);
 	let overflowGuard = resolveOverflowGuard(options.overflow);
 	let pendingOverflowNotice: string | undefined;
+	let overflowUnavailableReported = false;
 	const calibrator = new EstimateCalibrator({ initial: options.estimateFactor });
 	let oneToolPerTurn = editingMode === "clm" && options.oneToolPerTurn === true;
 	let sizeTrailer = editingMode === "clm" && options.sizeTrailer === true;
@@ -292,6 +295,7 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 			next.budget !== settings.budget ||
 			next.reserve !== settings.reserve ||
 			next.reminders.join(",") !== settings.reminders.join(",");
+		const guardChanged = next.guard !== settings.guard;
 		budgetPolicy = staged.budgetPolicy;
 		observationCap = staged.observationCap;
 		overflowGuard = resolveOverflowGuard({ mode: next.guard });
@@ -306,6 +310,8 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 			budgetTracker.reset();
 			lastBudgetReading = undefined;
 		}
+		// A changed budget or guard starts a new over-limit episode, so an unavailable guard reports again.
+		if (budgetChanged || guardChanged) overflowUnavailableReported = false;
 	}
 
 	function persistSettings(overrides: ClmSettingsOverrides): void {
@@ -563,6 +569,8 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 
 	function setEnabled(enabled: boolean, ctx: ExtensionContext): void {
 		if (enabled === state.enabled) return;
+		// Disabling and re-enabling starts a new over-limit episode, so an unavailable guard reports again.
+		overflowUnavailableReported = false;
 		if (enabled) {
 			persistOutcome({ ...state, enabled: true, event: { kind: "enabled", at: new Date().toISOString() } });
 		} else {
@@ -650,6 +658,7 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		lastBudgetReading = undefined;
 		projectionReplaced = false;
 		calibrator.reset();
+		overflowUnavailableReported = false;
 		updateStatus(ctx);
 	}
 
@@ -1337,6 +1346,15 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 				if (guarded.withheld.length > 0) {
 					effectiveMessages = guarded.messages;
 					pendingOverflowNotice = overflowNoticeText(guarded, limit);
+					overflowUnavailableReported = false;
+				} else if (shouldReportUnavailable(guarded, limit)) {
+					// Report the unavailable guard once per over-limit episode; the condition persists across requests.
+					if (!overflowUnavailableReported) {
+						pendingOverflowNotice = overflowUnavailableNotice(guarded.estimated, limit);
+						overflowUnavailableReported = true;
+					}
+				} else {
+					overflowUnavailableReported = false;
 				}
 			}
 		}
@@ -1662,6 +1680,7 @@ export default function liveContextExtension(pi: ExtensionAPI, options: LiveCont
 		currentContextView = undefined;
 		lastBudgetReading = undefined;
 		projectionReplaced = true;
+		overflowUnavailableReported = false;
 		queueOutcomeNotice("Native Pi compaction became the new raw context baseline.");
 		updateStatus(ctx);
 	});

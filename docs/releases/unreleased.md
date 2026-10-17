@@ -10,13 +10,17 @@ The 512 retained-record cap blocks supersession at capacity, and retraction does
 
 Confirmation dialogs coordinate with question/triage dialogs and panel preview input ownership. Manual fullscreen, reload and lifecycle compatibility remain unverified release blockers; these development controls are not a release certification. The old v1 runtime remains in source for characterization tests/shared request and receipt definitions, not live registration.
 
+## Checkpoint rewind across commits
+
+A rewind no longer refuses a checkpoint because HEAD moved. On the same branch, the restore plan now moves the branch back to the checkpoint’s commit (a compare-and-swap `update-ref`, recorded in the reflog), after the mandatory recovery checkpoint and journal, then restores the worktree and staged index for the recorded deltas plus every path the moved-over commits or the staged index changed. Paths the snapshot did not capture (excluded, oversized, sensitive) are listed as kept and left as uncommitted changes. The preview and confirmation name the commits leaving the branch; redo and recover move the branch forward to the recovery checkpoint’s commit. A changed branch, an unborn branch or a missing checkpoint commit still refuses. This reverses the v0.5.0-beta.1 guarantee that restores never reset HEAD. Covered by real-Git tests; manual fullscreen validation remains a release blocker.
+
 ## Fresh-session structured semantics (Phase 1B/1C)
 
 The live queued runtime now initializes v3 only on Pi's explicit `new` session event without existing conversation entries (`/new`). Startup, reload, resume, fork and an empty ledger do not authorize an upgrade. Existing v1/v2 schemas, replay and hashes remain unchanged; rollover preserves the current semantics. Persisted v3 initialization survives reload and fork.
 
 V3 results expose up to eight structured review causes plus sticky overflow. Source checks distinguish changed from unavailable, retain restored-source review, and avoid duplicate reason appends. Dependency, worktree, reload and navigation reasons remain explicit. Gap `concerns` and `resolvedBy` are separate; `refs` is their bounded dependency union. Claim refs remain support. New tool fields are accepted only in v3 sessions; old refs remain aliases for add-gap/resolve inputs, not combined with explicit fields. Resolution never clears review, and rollover/archive preserve relationships and reasons.
 
-Initialization uses the same verified append/uncertainty boundary. Failed initialization cannot silently fall back to legacy writes or retry within the runtime; if no initialization was recorded, start a new session. Confirmed recovery can validate an initialization already visible after failure but never retries it. Older v1/v2-only writers must not write v3 branches. No legacy upgrade is provided. Automated registration tests exercise disk reopen/fork and carry/archive behavior; manual fullscreen/reload validation remains release-blocking.
+Initialization uses the same verified append/uncertainty boundary. Failed initialization cannot silently fall back to legacy writes or retry within the runtime; if no initialization was recorded, start a new session. Confirmed recovery can validate an initialization already visible after failure but never retries it. Older v1/v2-only writers must not write v3 branches. No legacy upgrade is provided. The automated registration tests that exercised disk reopen/fork and carry/archive behavior were removed with the bulk of the test suite (`cb95438`) and have not been restored; manual fullscreen/reload validation remains release-blocking.
 
 ## Opt-in investigation skill and selected-claim audit
 
